@@ -5,6 +5,7 @@ members = [
     "crates/statevec-macros",
     "crates/statevec-api",
     "demo/bank",
+    "demo/flight-booking",
 ]
 resolver = "3"
 
@@ -12,7 +13,7 @@ resolver = "3"
 license = "Apache-2.0"
 repository = "https://github.com/jumpex-io/statevec-rs"
 readme = "README.md"
-keywords = ["statevec", "schema", "runtime", "deterministic"]
+keywords = ["statevec", "schema", "runtime", "deterministic", "state-machine"]
 categories = ["data-structures", "development-tools"]
 
 [workspace.dependencies]

@@ -15,7 +15,7 @@ Download the runtime binaries from
 Create a local env file from the checked-in example:
 
 ```bash
-cp demo/bank/deploy-eval/.env.eval.example demo/bank/deploy-eval/.env.eval
+cp demo/bank/deploy/.env.eval.example demo/bank/deploy/.env.eval
 ```
 
 `.env.eval` defines the runtime binary paths explicitly. Download the runtime
@@ -29,6 +29,15 @@ BANK_EVAL_STATEVEC_CLI_BIN=/absolute/path/to/statevec-cli
 
 The scripts fail fast if any configured runtime binary path is missing or not
 executable.
+
+GNU/Linux runtime binaries and demo plugin `.so` files are expected to run on
+glibc `>= 2.30`. Ubuntu 20.04+ and Debian 11+ satisfy this baseline. Build
+custom `*-unknown-linux-gnu` plugins on a system with a compatible glibc
+baseline, and use matching architecture/runtime binaries.
+
+On Windows, run this deploy profile from WSL2 rather than PowerShell or cmd.exe.
+Use a WSL2 Linux distro with Docker access and the matching GNU/Linux runtime
+binaries.
 
 The single-host evaluation memory limit is configured in MiB:
 
@@ -50,9 +59,9 @@ Set `BANK_EVAL_BANK_PLUGIN_DYLIB` if you want to load a prebuilt plugin.
 ## Start
 
 ```bash
-demo/bank/deploy-eval/start_infra.sh
-demo/bank/deploy-eval/start_eval.sh
-demo/bank/deploy-eval/status.sh
+demo/bank/deploy/start_infra.sh
+demo/bank/deploy/start_eval.sh
+demo/bank/deploy/status.sh
 ```
 
 `start_eval.sh` starts the Docker infra automatically unless
@@ -89,10 +98,10 @@ The bank plugin supports these command kinds:
 `run_replayer.sh` is wired as the deploy entrypoint for `statevec-replay`:
 
 ```bash
-demo/bank/deploy-eval/stop_eval.sh
-demo/bank/deploy-eval/run_replayer.sh
-demo/bank/deploy-eval/run_replayer.sh --to-tx-seq 1000
-demo/bank/deploy-eval/run_replayer.sh --emit-state-deltas --emit-events
+demo/bank/deploy/stop_eval.sh
+demo/bank/deploy/run_replayer.sh
+demo/bank/deploy/run_replayer.sh --to-tx-seq 1000
+demo/bank/deploy/run_replayer.sh --emit-state-deltas --emit-events
 ```
 
 The script refuses to read the eval data directory while `statevec-eval` is
@@ -101,9 +110,9 @@ still running.
 ## Stop / Reset
 
 ```bash
-demo/bank/deploy-eval/stop_eval.sh
-demo/bank/deploy-eval/stop_infra.sh
-demo/bank/deploy-eval/reset_eval_env.sh
+demo/bank/deploy/stop_eval.sh
+demo/bank/deploy/stop_infra.sh
+demo/bank/deploy/reset_eval_env.sh
 ```
 
 ## Files

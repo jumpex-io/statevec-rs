@@ -14,7 +14,6 @@ categories.workspace = true
 statevec_model.workspace = true
 
 [dev-dependencies]
-statevec_macros.workspace = true
 smallvec.workspace = true
 
 [features]

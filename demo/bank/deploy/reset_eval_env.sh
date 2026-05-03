@@ -4,7 +4,7 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 log "stopping statevec-eval"
-"$DEPLOY_EVAL_DIR/stop_eval.sh" || true
+"$DEPLOY_DIR/stop_eval.sh" || true
 
 log "stopping evaluation docker compose dependencies"
 compose down -v --remove-orphans >/dev/null 2>&1 || true

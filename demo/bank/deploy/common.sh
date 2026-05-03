@@ -2,10 +2,10 @@
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 DEMO_DIR="$ROOT_DIR/demo/bank"
-DEPLOY_EVAL_DIR="$DEMO_DIR/deploy-eval"
-COMPOSE_FILE="$DEPLOY_EVAL_DIR/docker-compose.yml"
-ENV_FILE="${BANK_EVAL_ENV_FILE:-$DEPLOY_EVAL_DIR/.env.eval}"
-ENV_EXAMPLE_FILE="$DEPLOY_EVAL_DIR/.env.eval.example"
+DEPLOY_DIR="$DEMO_DIR/deploy"
+COMPOSE_FILE="$DEPLOY_DIR/docker-compose.yml"
+ENV_FILE="${BANK_EVAL_ENV_FILE:-$DEPLOY_DIR/.env.eval}"
+ENV_EXAMPLE_FILE="$DEPLOY_DIR/.env.eval.example"
 
 load_env_file_preserving_overrides() {
   local line key value
@@ -104,13 +104,34 @@ statevec_cli_bin_path() {
   resolve_path "$BANK_EVAL_STATEVEC_CLI_BIN"
 }
 
+cargo_target_dir() {
+  local metadata target_dir
+  if metadata="$(cargo metadata --format-version 1 --no-deps 2>/dev/null)"; then
+    target_dir="$(printf '%s\n' "$metadata" | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p' | head -n 1)"
+    if [[ -n "$target_dir" ]]; then
+      printf '%s\n' "$target_dir"
+      return 0
+    fi
+  fi
+
+  if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+    resolve_path "$CARGO_TARGET_DIR"
+  else
+    printf '%s\n' "$ROOT_DIR/target"
+  fi
+}
+
+cargo_release_dir() {
+  printf '%s\n' "$(cargo_target_dir)/release"
+}
+
 default_bank_plugin_path() {
   local dylib_ext
   case "$(uname -s)" in
     Darwin) dylib_ext="dylib" ;;
     *) dylib_ext="so" ;;
   esac
-  printf '%s\n' "$ROOT_DIR/target/release/libbank.${dylib_ext}"
+  printf '%s\n' "$(cargo_release_dir)/libbank.${dylib_ext}"
 }
 
 bank_plugin_path() {
@@ -184,6 +205,43 @@ ensure_runtime_binaries() {
   require_executable "$(statevec_cli_bin_path)" "statevec-cli"
 }
 
+runtime_binary_is_static() {
+  local bin="$1"
+  local ldd_out
+  command -v ldd >/dev/null 2>&1 || return 1
+  ldd_out="$(ldd "$bin" 2>&1 || true)"
+  printf '%s\n' "$ldd_out" | grep -qi 'not a dynamic executable'
+}
+
+plugin_needs_glibc() {
+  local plugin_bin="$1"
+  if command -v readelf >/dev/null 2>&1; then
+    readelf -d "$plugin_bin" 2>/dev/null | grep -q 'Shared library: \[libc\.so\.6\]'
+    return
+  fi
+
+  command -v ldd >/dev/null 2>&1 || return 1
+  ldd "$plugin_bin" 2>/dev/null | grep -q 'libc\.so\.6'
+}
+
+ensure_runtime_can_load_plugin() {
+  local runtime_bin="$1"
+  local plugin_bin="$2"
+
+  case "$(uname -s)" in
+    Linux) ;;
+    *) return 0 ;;
+  esac
+
+  if plugin_needs_glibc "$plugin_bin" \
+    && { [[ "$runtime_bin" == *-unknown-linux-musl ]] || runtime_binary_is_static "$runtime_bin"; }; then
+    log "statevec-eval cannot dlopen the default Linux glibc plugin: $plugin_bin" >&2
+    log "configured statevec-eval appears to be a static/musl binary: $runtime_bin" >&2
+    log "set BANK_EVAL_STATEVEC_EVAL_BIN to a dynamic glibc/GNU Linux statevec-eval binary, and use matching statevec-replay/statevec-cli binaries" >&2
+    return 1
+  fi
+}
+
 ensure_bank_plugin_release_build() {
   local plugin_bin
   plugin_bin="$(bank_plugin_path)"
@@ -208,6 +266,11 @@ ensure_bank_plugin_release_build() {
 
   log "building bank plugin"
   cargo build --release -p bank --lib
+
+  if [[ ! -f "$plugin_bin" ]]; then
+    log "bank plugin build finished, but dylib was not found at expected Cargo target path: $plugin_bin" >&2
+    return 1
+  fi
 }
 
 wait_for_redpanda() {
@@ -280,8 +343,8 @@ ensure_topic() {
 
 render_eval_config() {
   local output_path="$1"
-  local template_path="$DEPLOY_EVAL_DIR/config_eval.toml"
-  local plugin_config_path="$DEPLOY_EVAL_DIR/plugin_eval.toml"
+  local template_path="$DEPLOY_DIR/config_eval.toml"
+  local plugin_config_path="$DEPLOY_DIR/plugin_eval.toml"
   sed \
     -e "s|__STATE_MEMORY_LIMIT_MB__|$(escape_sed_replacement "$BANK_EVAL_STATE_MEMORY_LIMIT_MB")|g" \
     -e "s|__STATEVEC_DATA_DIR__|$(escape_sed_replacement "$(eval_data_dir)")|g" \

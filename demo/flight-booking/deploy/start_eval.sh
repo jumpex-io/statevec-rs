@@ -30,6 +30,7 @@ if [[ -n "$RUNNING_PID_BY_CONFIG" ]]; then
 fi
 
 ensure_flight_plugin_release_build
+ensure_runtime_can_load_plugin "$STATEVEC_EVAL_BIN" "$(flight_plugin_path)"
 render_eval_config "$RENDERED_CONFIG_PATH"
 
 "$STATEVEC_EVAL_BIN" --config "$RENDERED_CONFIG_PATH" --check-config

@@ -34,7 +34,7 @@ running StateVec domains:
   definitions.
 - `statevec-api`: typed runtime host APIs and the stable runtime plugin ABI.
 - `demo/bank`: a small bank domain plugin with deposit, withdraw, and transfer
-  commands. See [`demo/bank/deploy-eval/README.md`](demo/bank/deploy-eval/README.md)
+  commands. See [`demo/bank/deploy/README.md`](demo/bank/deploy/README.md)
   for the Docker-based single-host evaluation setup.
 
 The current scope is the domain model, generated accessors, runtime plugin
@@ -152,7 +152,7 @@ The `demo/bank` plugin can be run locally against the single-host evaluation
 runtime with Docker-based Redpanda dependencies. The deploy guide covers runtime
 binary paths, plugin preparation, startup, status checks, replay, and cleanup:
 
-[`demo/bank/deploy-eval/README.md`](demo/bank/deploy-eval/README.md)
+[`demo/bank/deploy/README.md`](demo/bank/deploy/README.md)
 
 Runtime binaries are distributed separately and should be downloaded from
 [`jumpex-io/statevec-runtime`](https://github.com/jumpex-io/statevec-runtime).
@@ -168,7 +168,7 @@ Runtime binaries are distributed separately and should be downloaded from
 |   `-- statevec-model/
 |-- demo/
 |   `-- bank/
-|       `-- deploy-eval/
+|       `-- deploy/
 |-- Cargo.toml
 `-- LICENSE
 ```
