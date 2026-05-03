@@ -1,0 +1,15 @@
+error: EnumU8 discriminant must fit in u8
+  --> tests/compile_fail/enum/enum_discriminant_overflow.rs:10:9
+   |
+10 |     B = 256,
+   |         ^^^
+
+error[E0081]: discriminant value `0` assigned more than once
+  --> tests/compile_fail/enum/enum_discriminant_overflow.rs:8:1
+   |
+ 8 | pub enum Bad {
+   | ^^^^^^^^^^^^
+ 9 |     A = 0,
+   |         - `0` assigned here
+10 |     B = 256,
+   |         --- `0` (overflowed from `256`) assigned here

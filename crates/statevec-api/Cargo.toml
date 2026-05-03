@@ -1,0 +1,21 @@
+[package]
+name = "statevec-api"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+description = "Runtime host APIs and plugin ABI types for StateVec domain plugins."
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+statevec_model.workspace = true
+
+[dev-dependencies]
+statevec_macros.workspace = true
+smallvec.workspace = true
+
+[features]
+throughput-probe = []

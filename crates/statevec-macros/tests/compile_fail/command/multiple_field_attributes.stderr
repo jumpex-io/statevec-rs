@@ -1,0 +1,5 @@
+error: multiple #[field(...)] attributes are not allowed
+ --> tests/compile_fail/command/multiple_field_attributes.rs:9:5
+  |
+9 |     #[field(index = 2)]
+  |     ^

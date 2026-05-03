@@ -1,0 +1,18 @@
+[package]
+name = "bank"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+description = "Bank domain demo plugin for StateVec."
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+statevec.workspace = true

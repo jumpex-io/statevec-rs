@@ -1,0 +1,19 @@
+[package]
+name = "statevec"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+description = "Facade crate for building schema-first deterministic StateVec domain plugins."
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+statevec_api.workspace = true
+statevec_macros.workspace = true
+statevec_model.workspace = true
+
+[features]
+throughput-probe = ["statevec_api/throughput-probe"]

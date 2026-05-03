@@ -1,0 +1,13 @@
+error: record_len 64 is smaller than computed layout 90 (16 header + 74 fields)
+ --> tests/compile_fail/pk/pk_field_too_long.rs:8:12
+  |
+8 | pub struct Bad {
+  |            ^^^
+
+warning: unused import: `statevec_model::FixedBytes`
+ --> tests/compile_fail/pk/pk_field_too_long.rs:5:5
+  |
+5 | use statevec_model::FixedBytes;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

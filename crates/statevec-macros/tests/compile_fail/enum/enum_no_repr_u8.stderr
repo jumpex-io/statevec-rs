@@ -1,0 +1,5 @@
+error: EnumU8 requires #[repr(u8)]
+ --> tests/compile_fail/enum/enum_no_repr_u8.rs:7:1
+  |
+7 | pub enum Bad {
+  | ^^^

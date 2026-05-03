@@ -1,0 +1,5 @@
+error: record_len must be 64*N where N is a power of 2 (64, 128, 256, …); got 100
+ --> tests/compile_fail/record/invalid_record_len.rs:7:12
+  |
+7 | pub struct Bad {
+  |            ^^^

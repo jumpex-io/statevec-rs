@@ -1,0 +1,5 @@
+error: pk field 'a' must be declared #[field(immutable)]
+ --> tests/compile_fail/pk/pk_field_not_immutable.rs:6:50
+  |
+6 | #[record(kind = 1, record_len = 64, pk(fields = [a]))]
+  |                                                  ^

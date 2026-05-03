@@ -1,0 +1,5 @@
+error: field indexes must be contiguous starting at 1; expected 2
+  --> tests/compile_fail/record/non_contiguous_index.rs:12:9
+   |
+12 |     pub b: u64,
+   |         ^

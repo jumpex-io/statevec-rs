@@ -1,0 +1,5 @@
+error: record_len 128 is smaller than computed layout 141 (16 header + 125 fields)
+  --> tests/compile_fail/record/wrong_record_size.rs:10:12
+   |
+10 | pub struct WrongSize {
+   |            ^^^^^^^^^

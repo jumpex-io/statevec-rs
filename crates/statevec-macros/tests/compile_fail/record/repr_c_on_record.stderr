@@ -1,0 +1,5 @@
+error: #[record] declaration struct must not use #[repr(...)]
+ --> tests/compile_fail/record/repr_c_on_record.rs:6:1
+  |
+6 | #[repr(C)]
+  | ^
