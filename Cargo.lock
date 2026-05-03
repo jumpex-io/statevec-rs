@@ -146,7 +146,6 @@ name = "statevec-api"
 version = "0.1.0"
 dependencies = [
  "smallvec",
- "statevec-macros",
  "statevec-model",
 ]
 

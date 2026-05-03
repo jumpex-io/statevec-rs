@@ -12,31 +12,212 @@ use statevec_api::{
     runtime_plugin_on_unload_v1, runtime_plugin_run_tx_v1,
     runtime_plugin_validate_biz_invariants_v1,
 };
-use statevec_macros::{event, record, schema_module};
 use statevec_model::event::GeneratedEventAccess;
 use statevec_model::record::PkCodec;
-use statevec_model::{EventSchema, RecordSchema};
+use statevec_model::{
+    EventDefinition, EventSchema, FieldDefinition, FieldType, GeneratedRecordAccess, PkBytes,
+    RecordDefinition, RecordSchema, SchemaRegistry, Version,
+};
 
-#[schema_module(version = "1.0")]
-mod v1_0 {
-    use super::*;
+pub struct Asset;
 
-    #[record(kind = 1, record_len = 64, pk(fields = [asset_id]))]
-    pub struct Asset {
-        #[field(index = 1, immutable = true)]
-        pub asset_id: u64,
-        #[field(index = 2)]
-        pub precision: u8,
-    }
+pub struct AssetAccess<'a> {
+    data: &'a [u8],
+}
 
-    #[event(kind = 1)]
-    pub struct AssetCreated {
-        #[field(index = 1)]
-        pub asset_id: u64,
+pub struct NewAssetBuilder<'a> {
+    data: &'a mut [u8],
+}
+
+pub struct UpdateAssetBuilder<'a> {
+    data: &'a mut [u8],
+}
+
+impl Asset {
+    fn pk(asset_id: u64) -> PkBytes {
+        let mut pk = PkBytes::new();
+        pk.extend_from_slice(&asset_id.to_be_bytes());
+        pk
     }
 }
 
-use v1_0::*;
+impl AssetAccess<'_> {
+    const LEN: usize = 64;
+
+    fn new(data: &[u8]) -> AssetAccess<'_> {
+        AssetAccess { data }
+    }
+
+    fn precision(&self) -> u8 {
+        self.data[8]
+    }
+}
+
+impl NewAssetBuilder<'_> {
+    fn init_asset_id(&mut self, asset_id: u64) -> &mut Self {
+        self.data[0..8].copy_from_slice(&asset_id.to_le_bytes());
+        self
+    }
+
+    fn set_precision(&mut self, precision: u8) -> &mut Self {
+        self.data[8] = precision;
+        self
+    }
+}
+
+impl UpdateAssetBuilder<'_> {
+    fn set_precision(&mut self, precision: u8) -> &mut Self {
+        self.data[8] = precision;
+        self
+    }
+}
+
+impl RecordSchema for Asset {
+    const KIND: u8 = 1;
+    const RECORD_LEN: usize = 64;
+    const FIELD_COUNT: usize = 2;
+
+    fn definition() -> &'static RecordDefinition {
+        static FIELDS: [FieldDefinition; 2] = [
+            FieldDefinition {
+                name: "asset_id",
+                field_index: 1,
+                offset: 0,
+                ty: FieldType::U64,
+                len: 8,
+                rust_type_name: "u64",
+                enum_type_name: None,
+                immutable: true,
+            },
+            FieldDefinition {
+                name: "precision",
+                field_index: 2,
+                offset: 8,
+                ty: FieldType::U8,
+                len: 1,
+                rust_type_name: "u8",
+                enum_type_name: None,
+                immutable: false,
+            },
+        ];
+        static PK_FIELDS: [&str; 1] = ["asset_id"];
+        static DEF: RecordDefinition = RecordDefinition {
+            kind: Asset::KIND,
+            name: "Asset",
+            is_pk_idx: true,
+            support_range_scan: false,
+            data_size: 64,
+            version: 1,
+            pk_encode: Some(Asset::encode_pk_from_bytes),
+            fields: &FIELDS,
+            reserved_fields: &[],
+            pk_fields: &PK_FIELDS,
+        };
+        &DEF
+    }
+}
+
+impl PkCodec for Asset {
+    fn encode_pk_from_bytes(data: &[u8]) -> PkBytes {
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&data[0..8]);
+        Asset::pk(u64::from_le_bytes(bytes))
+    }
+}
+
+impl GeneratedRecordAccess for Asset {
+    const DATA_LEN: usize = 64;
+    type Access<'a> = AssetAccess<'a>;
+    type NewBuilder<'a> = NewAssetBuilder<'a>;
+    type UpdateBuilder<'a> = UpdateAssetBuilder<'a>;
+
+    fn wrap<'a>(buf: &'a [u8]) -> Self::Access<'a> {
+        AssetAccess::new(buf)
+    }
+
+    fn wrap_new<'a>(buf: &'a mut [u8]) -> Self::NewBuilder<'a> {
+        NewAssetBuilder { data: buf }
+    }
+
+    fn wrap_update<'a>(buf: &'a mut [u8]) -> Self::UpdateBuilder<'a> {
+        UpdateAssetBuilder { data: buf }
+    }
+}
+
+pub struct AssetCreated;
+
+pub mod event {
+    pub struct AssetCreatedAccess<'a> {
+        data: &'a [u8],
+    }
+
+    impl<'a> AssetCreatedAccess<'a> {
+        pub fn new(data: &'a [u8]) -> Self {
+            Self { data }
+        }
+
+        pub fn asset_id(&self) -> u64 {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&self.data[0..8]);
+            u64::from_le_bytes(bytes)
+        }
+    }
+}
+
+pub struct AssetCreatedBuilder {
+    asset_id: Option<u64>,
+}
+
+impl AssetCreatedBuilder {
+    fn set_asset_id(mut self, asset_id: u64) -> Self {
+        self.asset_id = Some(asset_id);
+        self
+    }
+
+    fn build(self) -> Vec<u8> {
+        self.asset_id
+            .expect("asset_id must be set")
+            .to_le_bytes()
+            .to_vec()
+    }
+}
+
+impl EventSchema for AssetCreated {
+    const KIND: u8 = 1;
+
+    fn definition() -> &'static EventDefinition {
+        static DEF: EventDefinition = EventDefinition {
+            kind: AssetCreated::KIND,
+            name: "AssetCreated",
+            version: 1,
+            fields: &[],
+        };
+        &DEF
+    }
+}
+
+impl GeneratedEventAccess for AssetCreated {
+    type Access<'a> = event::AssetCreatedAccess<'a>;
+    type Builder = AssetCreatedBuilder;
+
+    fn wrap(data: &[u8]) -> Self::Access<'_> {
+        event::AssetCreatedAccess::new(data)
+    }
+
+    fn builder() -> Self::Builder {
+        AssetCreatedBuilder { asset_id: None }
+    }
+}
+
+fn registry() -> SchemaRegistry {
+    SchemaRegistry::new(
+        Version::new(1, 0),
+        &[*Asset::definition()],
+        &[],
+        &[*AssetCreated::definition()],
+        &[],
+    )
+}
 
 #[derive(Default)]
 struct MockRuntimeHostContext {
