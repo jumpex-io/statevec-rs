@@ -1,5 +1,5 @@
 [package]
-name = "flight_booking"
+name = "flight-booking"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.91"
@@ -13,6 +13,10 @@ publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "flight-booking-command"
+path = "src/bin/flight_booking_command.rs"
 
 [dependencies]
 statevec.workspace = true

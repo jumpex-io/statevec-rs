@@ -30,6 +30,11 @@ FLIGHT_EVAL_STATEVEC_CLI_BIN=/absolute/path/to/statevec-cli
 The scripts fail fast if any configured runtime binary path is missing or not
 executable.
 
+GNU/Linux runtime binaries and demo plugin `.so` files are expected to run on
+glibc `>= 2.30`. Ubuntu 20.04+ and Debian 11+ satisfy this baseline. Build
+custom `*-unknown-linux-gnu` plugins on a system with a compatible glibc
+baseline, and use matching architecture/runtime binaries.
+
 The flight booking plugin is built from this repository by default:
 
 ```text
@@ -58,8 +63,21 @@ Default endpoints:
 
 ## Command Input
 
-This deploy profile prepares Kafka topics and starts the runtime. It does not
-include a flight command producer binary yet.
+This deploy profile prepares Kafka topics, starts the runtime, and includes
+helper scripts for sending flight booking commands.
+
+Enter the `statevec-cli` client console:
+
+```bash
+demo/flight-booking/deploy/run_client_console.sh
+```
+
+Query operation API paths through the same wrapper:
+
+```bash
+demo/flight-booking/deploy/run_client_console.sh /status
+demo/flight-booking/deploy/run_client_console.sh /state/stats
+```
 
 To drive the demo, write StateVec command envelopes for the flight booking
 schema to:
@@ -77,6 +95,20 @@ The plugin supports these command kinds:
 
 Reserve and cancel business failures are committed as `ReserveResult` and
 `CancelResult` events instead of plugin runtime errors.
+
+Send commands with the bundled helper:
+
+```bash
+demo/flight-booking/deploy/send_command.sh add-flight flight_id=JX100 flight_date=20260503 origin=SIN destination=NRT airline=JX aircraft_model=A350 economy_total=120 business_total=24 first_total=8
+demo/flight-booking/deploy/send_command.sh reserve-order flight_id=JX100 order_id=ORD-1 passenger_document_id=P1234567 nationality=SG birth_date=19900101 document_type=1 cabin=economy
+demo/flight-booking/deploy/send_command.sh cancel-reservation flight_id=JX100 passenger_document_id=P1234567 order_id=ORD-1
+```
+
+Seed a small flight schedule:
+
+```bash
+demo/flight-booking/deploy/seed_flights.sh
+```
 
 ## Domain Scope
 
@@ -107,6 +139,46 @@ demo/flight-booking/deploy/run_replayer.sh --emit-state-deltas --emit-events
 
 The script refuses to read the eval data directory while `statevec-eval` is
 still running.
+
+Example replay session after seeding flights and making a reservation:
+
+```text
+statevec-replay> status
+{
+  "committed_tx_seq": 11,
+  "record_count": 12
+}
+
+statevec-replay> inspect-by-sysid 1
+{
+  "record_type": "Flight",
+  "value": {
+    "flight_id": {
+      "utf8": "JX100"
+    },
+    "origin": {
+      "utf8": "SIN"
+    },
+    "destination": {
+      "utf8": "NRT"
+    },
+    "economy_reserved": 1,
+    "economy_total": 120,
+    "status": 1
+  }
+}
+```
+
+Replay is useful for deterministic debugging:
+
+```bash
+demo/flight-booking/deploy/run_replayer.sh --to-tx-seq 10
+demo/flight-booking/deploy/run_replayer.sh --from-tx-seq 10 --emit-events
+demo/flight-booking/deploy/run_replayer.sh --emit-state-deltas --emit-events
+```
+
+Use it to inspect committed `Flight`, `Passenger`, and `Reservation` records
+without adding demo-specific query APIs.
 
 ## Stop / Reset
 

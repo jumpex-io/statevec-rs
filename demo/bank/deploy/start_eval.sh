@@ -6,7 +6,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 ensure_runtime_binaries
 
 if [[ "${BANK_EVAL_SKIP_INFRA_BOOTSTRAP:-0}" != "1" ]]; then
-  "$DEPLOY_EVAL_DIR/start_infra.sh"
+  "$DEPLOY_DIR/start_infra.sh"
 fi
 
 DATA_DIR="$(eval_data_dir)"
@@ -30,6 +30,7 @@ if [[ -n "$RUNNING_PID_BY_CONFIG" ]]; then
 fi
 
 ensure_bank_plugin_release_build
+ensure_runtime_can_load_plugin "$STATEVEC_EVAL_BIN" "$(bank_plugin_path)"
 render_eval_config "$RENDERED_CONFIG_PATH"
 
 "$STATEVEC_EVAL_BIN" --config "$RENDERED_CONFIG_PATH" --check-config

@@ -11,10 +11,10 @@ This deploy profile opens the statevec-replay shell:
   statevec-replay --config <rendered eval config> [replay shell flags]
 
 Examples:
-  demo/bank/deploy-eval/run_replayer.sh
-  demo/bank/deploy-eval/run_replayer.sh --to-tx-seq 1000
-  demo/bank/deploy-eval/run_replayer.sh --from-tx-seq 1000 --emit-events
-  BANK_EVAL_STATEVEC_REPLAY_BIN=/path/to/statevec-replay demo/bank/deploy-eval/run_replayer.sh
+  demo/bank/deploy/run_replayer.sh
+  demo/bank/deploy/run_replayer.sh --to-tx-seq 1000
+  demo/bank/deploy/run_replayer.sh --from-tx-seq 1000 --emit-events
+  BANK_EVAL_STATEVEC_REPLAY_BIN=/path/to/statevec-replay demo/bank/deploy/run_replayer.sh
 USAGE
 }
 
