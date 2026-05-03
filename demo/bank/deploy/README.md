@@ -35,6 +35,10 @@ glibc `>= 2.30`. Ubuntu 20.04+ and Debian 11+ satisfy this baseline. Build
 custom `*-unknown-linux-gnu` plugins on a system with a compatible glibc
 baseline, and use matching architecture/runtime binaries.
 
+On Windows, run this deploy profile from WSL2 rather than PowerShell or cmd.exe.
+Use a WSL2 Linux distro with Docker access and the matching GNU/Linux runtime
+binaries.
+
 The single-host evaluation memory limit is configured in MiB:
 
 ```text
