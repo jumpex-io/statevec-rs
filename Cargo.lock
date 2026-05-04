@@ -7,6 +7,7 @@ name = "bank"
 version = "0.1.0"
 dependencies = [
  "statevec",
+ "statevec-test",
 ]
 
 [[package]]
@@ -20,6 +21,7 @@ name = "flight-booking"
 version = "0.1.0"
 dependencies = [
  "statevec",
+ "statevec-test",
 ]
 
 [[package]]
@@ -169,6 +171,14 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+]
+
+[[package]]
+name = "statevec-test"
+version = "0.1.0"
+dependencies = [
+ "statevec-api",
+ "statevec-model",
 ]
 
 [[package]]

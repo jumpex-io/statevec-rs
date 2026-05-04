@@ -20,3 +20,6 @@ path = "src/bin/flight_booking_command.rs"
 
 [dependencies]
 statevec.workspace = true
+
+[dev-dependencies]
+statevec_test.workspace = true
