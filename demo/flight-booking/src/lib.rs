@@ -766,214 +766,13 @@ statevec::export_runtime_plugin!(Box::new(FlightBookingRuntimeFactory));
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+    use statevec::{FixedBytes, RuntimeHostContextExt};
+    use statevec_test::{PluginTestHost, TestHost};
 
-    use statevec::{
-        EventSchema, FixedBytes, GeneratedRecordAccess, PkCodec, RecordKey, RuntimeHostContextExt,
-        RuntimeHostError,
-    };
+    type Host = PluginTestHost<FlightBookingRuntime>;
 
-    #[derive(Default)]
-    struct MockRuntimeHostContext {
-        next_sys_id: u64,
-        records: BTreeMap<(u8, u64), Vec<u8>>,
-        events: Vec<(u8, Vec<u8>)>,
-    }
-
-    impl MockRuntimeHostContext {
-        fn new() -> Self {
-            Self {
-                next_sys_id: 1,
-                ..Self::default()
-            }
-        }
-
-        fn data_len(record_kind: u8) -> Result<usize, RuntimeHostError> {
-            match record_kind {
-                Flight::KIND => Ok(Flight::DATA_LEN),
-                Passenger::KIND => Ok(Passenger::DATA_LEN),
-                Reservation::KIND => Ok(Reservation::DATA_LEN),
-                _ => Err(RuntimeHostError::new("unexpected record kind")),
-            }
-        }
-
-        fn encode_pk(record_kind: u8, data: &[u8]) -> Result<Vec<u8>, RuntimeHostError> {
-            match record_kind {
-                Flight::KIND => Ok(Flight::encode_pk_from_bytes(data).to_vec()),
-                Passenger::KIND => Ok(Passenger::encode_pk_from_bytes(data).to_vec()),
-                Reservation::KIND => Ok(Reservation::encode_pk_from_bytes(data).to_vec()),
-                _ => Err(RuntimeHostError::new("unexpected record kind")),
-            }
-        }
-
-        fn record_mut_by_pk(
-            &mut self,
-            record_kind: u8,
-            pk: &[u8],
-        ) -> Result<Option<&mut Vec<u8>>, RuntimeHostError> {
-            let mut found = None;
-            for ((kind, sys_id), data) in &self.records {
-                if *kind == record_kind && Self::encode_pk(record_kind, data)? == pk {
-                    found = Some((*kind, *sys_id));
-                    break;
-                }
-            }
-            Ok(found.and_then(|key| self.records.get_mut(&key)))
-        }
-
-        fn record_by_pk(
-            &self,
-            record_kind: u8,
-            pk: &[u8],
-        ) -> Result<Option<&Vec<u8>>, RuntimeHostError> {
-            for ((kind, _), data) in &self.records {
-                if *kind == record_kind && Self::encode_pk(record_kind, data)? == pk {
-                    return Ok(Some(data));
-                }
-            }
-            Ok(None)
-        }
-
-        fn last_reserve_result(&self) -> event::ReserveResultAccess<'_> {
-            let (kind, payload) = self.events.last().expect("missing event");
-            assert_eq!(*kind, ReserveResult::KIND);
-            event::ReserveResultAccess::new(payload)
-        }
-
-        fn last_cancel_result(&self) -> event::CancelResultAccess<'_> {
-            let (kind, payload) = self.events.last().expect("missing event");
-            assert_eq!(*kind, CancelResult::KIND);
-            event::CancelResultAccess::new(payload)
-        }
-    }
-
-    impl RuntimeHostContext for MockRuntimeHostContext {
-        fn with_read_typed_raw(
-            &self,
-            record_kind: u8,
-            sys_id: u64,
-            f: &mut dyn FnMut(&[u8]),
-        ) -> Result<bool, RuntimeHostError> {
-            let Some(data) = self.records.get(&(record_kind, sys_id)) else {
-                return Ok(false);
-            };
-            f(data);
-            Ok(true)
-        }
-
-        fn with_read_typed_by_pk_raw(
-            &self,
-            record_kind: u8,
-            pk: &[u8],
-            f: &mut dyn FnMut(&[u8]),
-        ) -> Result<bool, RuntimeHostError> {
-            let Some(data) = self.record_by_pk(record_kind, pk)? else {
-                return Ok(false);
-            };
-            f(data);
-            Ok(true)
-        }
-
-        fn create_typed_raw(
-            &mut self,
-            record_kind: u8,
-            init: &mut dyn FnMut(&mut [u8]),
-        ) -> Result<RecordKey, RuntimeHostError> {
-            let sys_id = self.next_sys_id;
-            self.next_sys_id += 1;
-
-            let mut data = vec![0u8; Self::data_len(record_kind)?];
-            init(&mut data);
-            self.records.insert((record_kind, sys_id), data);
-
-            Ok(RecordKey {
-                kind: record_kind,
-                sys_id,
-            })
-        }
-
-        fn update_typed_by_pk_raw(
-            &mut self,
-            record_kind: u8,
-            pk: &[u8],
-            f: &mut dyn FnMut(&mut [u8]),
-        ) -> Result<bool, RuntimeHostError> {
-            let Some(data) = self.record_mut_by_pk(record_kind, pk)? else {
-                return Ok(false);
-            };
-            f(data);
-            Ok(true)
-        }
-
-        fn delete_by_pk_raw(
-            &mut self,
-            record_kind: u8,
-            pk: &[u8],
-        ) -> Result<bool, RuntimeHostError> {
-            let Some((&key, _)) = self.records.iter().find(|((kind, _), data)| {
-                *kind == record_kind
-                    && Self::encode_pk(record_kind, data).is_ok_and(|encoded| encoded == pk)
-            }) else {
-                return Ok(false);
-            };
-            self.records.remove(&key);
-            Ok(true)
-        }
-
-        fn emit_typed_event_raw(
-            &mut self,
-            event_kind: u8,
-            payload: &[u8],
-        ) -> Result<(), RuntimeHostError> {
-            self.events.push((event_kind, payload.to_vec()));
-            Ok(())
-        }
-
-        fn for_each_record_key_raw(
-            &self,
-            kind: u8,
-            f: &mut dyn FnMut(RecordKey),
-        ) -> Result<(), RuntimeHostError> {
-            for (record_kind, sys_id) in self
-                .records
-                .keys()
-                .filter(|(record_kind, _)| *record_kind == kind)
-            {
-                f(RecordKey {
-                    kind: *record_kind,
-                    sys_id: *sys_id,
-                });
-            }
-            Ok(())
-        }
-    }
-
-    impl BizInvariantReadContext for MockRuntimeHostContext {
-        fn with_read_typed_raw(
-            &self,
-            record_kind: u8,
-            sys_id: u64,
-            f: &mut dyn FnMut(&[u8]),
-        ) -> Result<bool, RuntimeHostError> {
-            RuntimeHostContext::with_read_typed_raw(self, record_kind, sys_id, f)
-        }
-
-        fn with_read_typed_by_pk_raw(
-            &self,
-            record_kind: u8,
-            pk: &[u8],
-            f: &mut dyn FnMut(&[u8]),
-        ) -> Result<bool, RuntimeHostError> {
-            RuntimeHostContext::with_read_typed_by_pk_raw(self, record_kind, pk, f)
-        }
-
-        fn for_each_record_key_raw(
-            &self,
-            kind: u8,
-            f: &mut dyn FnMut(RecordKey),
-        ) -> Result<(), RuntimeHostError> {
-            RuntimeHostContext::for_each_record_key_raw(self, kind, f)
-        }
+    fn new_host() -> Host {
+        TestHost::for_plugin(FlightBookingRuntime).with_ref_time(1234)
     }
 
     fn fb<const N: usize>(bytes: &[u8]) -> FixedBytes<N> {
@@ -1026,94 +825,81 @@ mod tests {
             .build()
     }
 
-    fn add_flight(host: &mut MockRuntimeHostContext, economy_total: u32) {
-        let runtime = FlightBookingRuntime;
-        let payload = add_flight_payload(economy_total);
-        let tx = host as &mut dyn RuntimeHostContext;
-        runtime
-            .handle_add_flight(tx, AddFlight::wrap(&payload))
+    fn add_flight(host: &mut Host, economy_total: u32) {
+        host.run::<AddFlight>(add_flight_payload(economy_total))
             .expect("add flight should succeed");
     }
 
-    fn reserve(host: &mut MockRuntimeHostContext, order: &[u8], cabin_class: u8) {
-        let runtime = FlightBookingRuntime;
-        let payload = reserve_payload(order, cabin_class);
-        let tx = host as &mut dyn RuntimeHostContext;
-        runtime
-            .handle_reserve_order(tx, ReserveOrder::wrap(&payload), 1234)
+    fn reserve(host: &mut Host, order: &[u8], cabin_class: u8) {
+        host.run::<ReserveOrder>(reserve_payload(order, cabin_class))
             .expect("reserve command should not return plugin error");
     }
 
-    fn cancel(host: &mut MockRuntimeHostContext, order: &[u8]) {
-        let runtime = FlightBookingRuntime;
-        let payload = cancel_payload(order);
-        let tx = host as &mut dyn RuntimeHostContext;
-        runtime
-            .handle_cancel_reservation(tx, CancelReservation::wrap(&payload))
+    fn cancel(host: &mut Host, order: &[u8]) {
+        host.run::<CancelReservation>(cancel_payload(order))
             .expect("cancel command should not return plugin error");
     }
 
-    fn reserved_economy(host: &MockRuntimeHostContext) -> u32 {
-        RuntimeHostContextExt::with_read_typed_by_pk::<Flight, _, _, _>(
-            host,
-            Flight::pk(&flight_id()),
-            |flight| flight.economy_reserved(),
-        )
-        .unwrap()
-        .unwrap()
+    fn reserved_economy(host: &Host) -> u32 {
+        host.expect::<Flight, _>(Flight::pk(&flight_id()), |flight| flight.economy_reserved())
+    }
+
+    fn last_reserve_result(host: &Host) -> u8 {
+        host.last_event_of::<ReserveResult>()
+            .expect("missing ReserveResult")
+            .read(|event| event.result_code())
+    }
+
+    fn last_cancel_result(host: &Host) -> u8 {
+        host.last_event_of::<CancelResult>()
+            .expect("missing CancelResult")
+            .read(|event| event.result_code())
     }
 
     #[test]
     fn add_flight_success_emits_event() {
-        let mut host = MockRuntimeHostContext::new();
+        let mut host = new_host();
         add_flight(&mut host, 2);
 
-        assert_eq!(host.events.len(), 1);
-        assert_eq!(host.events[0].0, FlightAdded::KIND);
+        assert_eq!(host.count_events_of::<FlightAdded>(), 1);
         assert_eq!(reserved_economy(&host), 0);
     }
 
     #[test]
     fn duplicate_add_flight_is_plugin_error() {
-        let mut host = MockRuntimeHostContext::new();
+        let mut host = new_host();
         add_flight(&mut host, 2);
 
-        let runtime = FlightBookingRuntime;
-        let payload = add_flight_payload(2);
-        let tx = &mut host as &mut dyn RuntimeHostContext;
-        let err = runtime
-            .handle_add_flight(tx, AddFlight::wrap(&payload))
+        let err = host
+            .run::<AddFlight>(add_flight_payload(2))
             .expect_err("duplicate add should fail");
         assert_eq!(err.to_string(), "flight already exists");
     }
 
     #[test]
     fn reserve_success_updates_inventory_and_emits_accepted() {
-        let mut host = MockRuntimeHostContext::new();
+        let mut host = new_host();
         add_flight(&mut host, 2);
         reserve(&mut host, b"ORD-1", CABIN_ECONOMY);
 
         assert_eq!(reserved_economy(&host), 1);
-        assert_eq!(host.last_reserve_result().result_code(), RESULT_ACCEPTED);
+        assert_eq!(last_reserve_result(&host), RESULT_ACCEPTED);
     }
 
     #[test]
     fn duplicate_reserve_emits_failed_result_without_inventory_change() {
-        let mut host = MockRuntimeHostContext::new();
+        let mut host = new_host();
         add_flight(&mut host, 2);
         reserve(&mut host, b"ORD-1", CABIN_ECONOMY);
         reserve(&mut host, b"ORD-2", CABIN_ECONOMY);
 
         assert_eq!(reserved_economy(&host), 1);
-        assert_eq!(
-            host.last_reserve_result().result_code(),
-            RESULT_DUPLICATE_RESERVATION
-        );
+        assert_eq!(last_reserve_result(&host), RESULT_DUPLICATE_RESERVATION);
     }
 
     #[test]
     fn cabin_full_emits_failed_result() {
-        let mut host = MockRuntimeHostContext::new();
+        let mut host = new_host();
         add_flight(&mut host, 1);
         reserve(&mut host, b"ORD-1", CABIN_ECONOMY);
 
@@ -1127,65 +913,56 @@ mod tests {
             .set_passenger_document_type(1)
             .set_cabin_class(CABIN_ECONOMY)
             .build();
-        let tx = &mut host as &mut dyn RuntimeHostContext;
-        FlightBookingRuntime
-            .handle_reserve_order(tx, ReserveOrder::wrap(&payload), 1234)
-            .unwrap();
+        host.run::<ReserveOrder>(payload).unwrap();
 
         assert_eq!(reserved_economy(&host), 1);
-        assert_eq!(host.last_reserve_result().result_code(), RESULT_CABIN_FULL);
+        assert_eq!(last_reserve_result(&host), RESULT_CABIN_FULL);
     }
 
     #[test]
     fn retire_flight_prevents_future_reserve() {
-        let mut host = MockRuntimeHostContext::new();
+        let mut host = new_host();
         add_flight(&mut host, 2);
 
         let retire_payload = RetireFlight::builder().set_flight_id(flight_id()).build();
-        let tx = &mut host as &mut dyn RuntimeHostContext;
-        FlightBookingRuntime
-            .handle_retire_flight(tx, RetireFlight::wrap(&retire_payload))
-            .unwrap();
+        host.run::<RetireFlight>(retire_payload).unwrap();
 
         reserve(&mut host, b"ORD-1", CABIN_ECONOMY);
         assert_eq!(reserved_economy(&host), 0);
-        assert_eq!(
-            host.last_reserve_result().result_code(),
-            RESULT_FLIGHT_NOT_ACTIVE
-        );
+        assert_eq!(last_reserve_result(&host), RESULT_FLIGHT_NOT_ACTIVE);
     }
 
     #[test]
     fn cancel_active_reservation_releases_inventory() {
-        let mut host = MockRuntimeHostContext::new();
+        let mut host = new_host();
         add_flight(&mut host, 2);
         reserve(&mut host, b"ORD-1", CABIN_ECONOMY);
         cancel(&mut host, b"ORD-1");
 
         assert_eq!(reserved_economy(&host), 0);
-        assert_eq!(host.last_cancel_result().result_code(), RESULT_ACCEPTED);
+        assert_eq!(last_cancel_result(&host), RESULT_ACCEPTED);
     }
 
     #[test]
     fn reserve_again_after_cancel_reuses_reservation() {
-        let mut host = MockRuntimeHostContext::new();
+        let mut host = new_host();
         add_flight(&mut host, 2);
         reserve(&mut host, b"ORD-1", CABIN_ECONOMY);
         cancel(&mut host, b"ORD-1");
         reserve(&mut host, b"ORD-2", CABIN_ECONOMY);
 
         assert_eq!(reserved_economy(&host), 1);
-        assert_eq!(host.last_reserve_result().result_code(), RESULT_ACCEPTED);
+        assert_eq!(last_reserve_result(&host), RESULT_ACCEPTED);
     }
 
     #[test]
     fn invariant_validation_catches_inventory_reservation_mismatch() {
-        let mut host = MockRuntimeHostContext::new();
+        let mut host = new_host();
         add_flight(&mut host, 2);
         reserve(&mut host, b"ORD-1", CABIN_ECONOMY);
 
         RuntimeHostContextExt::update_typed_by_pk::<Flight, _, _, _>(
-            &mut host,
+            host.inner_mut(),
             Flight::pk(&flight_id()),
             |flight| {
                 flight.set_economy_reserved(0);
@@ -1193,8 +970,8 @@ mod tests {
         )
         .unwrap();
 
-        let err = FlightBookingRuntime
-            .validate_biz_invariants(&host)
+        let err = host
+            .validate_invariants()
             .expect_err("mismatch should be rejected");
         assert!(err.contains("reservation aggregate"));
     }

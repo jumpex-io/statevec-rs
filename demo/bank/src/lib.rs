@@ -271,3 +271,59 @@ impl RuntimePluginFactory for BankRuntimeFactory {
 }
 
 statevec::export_runtime_plugin!(Box::new(BankRuntimeFactory));
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use statevec::GeneratedCommandAccess;
+    use statevec_test::TestHost;
+
+    fn new_host() -> statevec_test::PluginTestHost<BankRuntime> {
+        TestHost::for_plugin(BankRuntime)
+    }
+
+    #[test]
+    fn deposit_updates_user_and_platform_accounts() {
+        let mut host = new_host();
+
+        host.run::<Deposit>(Deposit::builder().set_account_id(1).set_amount(100).build())
+            .unwrap();
+
+        assert_eq!(
+            host.expect::<Account, _>(Account::pk(1), |account| account.total_credit()),
+            100
+        );
+        assert_eq!(
+            host.expect::<Account, _>(Account::pk(PLATFORM_ACCOUNT_ID), |account| {
+                account.total_debit()
+            }),
+            100
+        );
+        assert_eq!(host.count_events_of::<BalanceChanged>(), 2);
+        host.expect_event::<BalanceChanged, _>(|event| {
+            event.account_id() == 1
+                && event.new_credit() == 100
+                && event.new_debit() == 0
+                && event.entry_type() == ENTRY_TYPE_DEPOSIT
+        });
+        host.validate_invariants().unwrap();
+    }
+
+    #[test]
+    fn withdraw_without_balance_is_plugin_error() {
+        let mut host = new_host();
+
+        let err = host
+            .run::<Withdraw>(
+                Withdraw::builder()
+                    .set_account_id(1)
+                    .set_amount(100)
+                    .build(),
+            )
+            .expect_err("withdraw should fail");
+
+        assert_eq!(err.to_string(), "insufficient balance");
+        assert_eq!(host.count::<Account>(), 0);
+        assert_eq!(host.count_events_of::<BalanceChanged>(), 0);
+    }
+}

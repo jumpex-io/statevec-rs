@@ -33,9 +33,14 @@ running StateVec domains:
 - `statevec-macros`: derive and attribute macros for schema-first domain
   definitions.
 - `statevec-api`: typed runtime host APIs and the stable runtime plugin ABI.
+- `statevec-test`: lightweight in-memory unit-test host for domain plugins. It
+  is for business logic tests only and does not implement the production
+  runtime's page memory, durability, replay, or queue integration.
 - `demo/bank`: a small bank domain plugin with deposit, withdraw, and transfer
   commands. See [`demo/bank/deploy/README.md`](demo/bank/deploy/README.md)
   for the Docker-based single-host evaluation setup.
+- `demo/flight-booking`: an inventory and reservation domain plugin with local
+  deploy scripts in [`demo/flight-booking/deploy/README.md`](demo/flight-booking/deploy/README.md).
 
 The current scope is the domain model, generated accessors, runtime plugin
 contract, and tests. Single-node runtime binaries, operational tooling, and HA
@@ -165,9 +170,12 @@ Runtime binaries are distributed separately and should be downloaded from
 |   |-- statevec/
 |   |-- statevec-api/
 |   |-- statevec-macros/
-|   `-- statevec-model/
+|   |-- statevec-model/
+|   `-- statevec-test/
 |-- demo/
-|   `-- bank/
+|   |-- bank/
+|   |   `-- deploy/
+|   `-- flight-booking/
 |       `-- deploy/
 |-- Cargo.toml
 `-- LICENSE
@@ -190,6 +198,7 @@ Run tests for a specific crate:
 cargo test -p statevec-model
 cargo test -p statevec-macros
 cargo test -p statevec-api
+cargo test -p statevec-test
 ```
 
 The macro crate uses `trybuild` for compile-fail tests. If an intentional macro

@@ -4,6 +4,7 @@ members = [
     "crates/statevec-model",
     "crates/statevec-macros",
     "crates/statevec-api",
+    "crates/statevec-test",
     "demo/bank",
     "demo/flight-booking",
 ]
@@ -22,6 +23,7 @@ statevec = { version = "0.1.0", path = "crates/statevec" }
 statevec_model = { package = "statevec-model", version = "0.1.0", path = "crates/statevec-model" }
 statevec_macros = { package = "statevec-macros", version = "0.1.0", path = "crates/statevec-macros" }
 statevec_api = { package = "statevec-api", version = "0.1.0", path = "crates/statevec-api" }
+statevec_test = { package = "statevec-test", version = "0.1.0", path = "crates/statevec-test" }
 
 # External
 proc-macro2 = "1"
