@@ -1,0 +1,5 @@
+error: uk field '_reserved' cannot be reserved
+ --> tests/compile_fail/record/reserved_in_uk.rs:6:58
+  |
+6 | #[record(kind = 1, record_len = 64, uk(id = 0, fields = [_reserved]))]
+  |                                                          ^^^^^^^^^

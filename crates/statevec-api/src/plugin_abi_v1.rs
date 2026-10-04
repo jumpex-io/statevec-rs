@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::ffi::c_void;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use crate::{
-    BizInvariantReadContext, RecordKey, RecordKind, RuntimeCommandRef, RuntimeHostContext,
-    RuntimeHostError, RuntimePlugin, RuntimePluginFactory, SysId,
+    BizInvariantReadContext, CanonicalIndexCount, CommandKind, EventKind, RecordKey, RecordKind, RuntimeCommandRef,
+    RuntimeHostContext, RuntimeHostError, RuntimePlugin, RuntimePluginFactory, SysId,
 };
 
 /// Status returned by FFI ABI calls.
@@ -62,6 +63,8 @@ pub mod runtime_error_kind {
     pub const HOST_INTERNAL_ERROR: RuntimeErrorKind = RuntimeErrorKind(4002);
 
     /// Plugin encountered an internal error.
+    /// This includes an unwind panic. It is not a business rejection and does
+    /// not certify that plugin or host mutations were rolled back.
     pub const PLUGIN_INTERNAL_ERROR: RuntimeErrorKind = RuntimeErrorKind(5001);
 }
 
@@ -81,18 +84,12 @@ pub struct RuntimeBytesRef {
 impl RuntimeBytesRef {
     /// Returns an empty byte reference.
     pub const fn empty() -> Self {
-        Self {
-            ptr: std::ptr::null(),
-            len: 0,
-        }
+        Self { ptr: std::ptr::null(), len: 0 }
     }
 
     /// Creates a byte reference from a Rust slice.
     pub fn from_slice(bytes: &[u8]) -> Self {
-        Self {
-            ptr: bytes.as_ptr(),
-            len: bytes.len(),
-        }
+        Self { ptr: bytes.as_ptr(), len: bytes.len() }
     }
 }
 
@@ -113,18 +110,12 @@ pub struct RuntimeBytesMutRef {
 impl RuntimeBytesMutRef {
     /// Returns an empty mutable byte reference.
     pub const fn empty() -> Self {
-        Self {
-            ptr: std::ptr::null_mut(),
-            len: 0,
-        }
+        Self { ptr: std::ptr::null_mut(), len: 0 }
     }
 
     /// Creates a mutable byte reference from a Rust slice.
     pub fn from_slice(bytes: &mut [u8]) -> Self {
-        Self {
-            ptr: bytes.as_mut_ptr(),
-            len: bytes.len(),
-        }
+        Self { ptr: bytes.as_mut_ptr(), len: bytes.len() }
     }
 }
 
@@ -144,17 +135,8 @@ pub struct RuntimeErrorBuf {
 
 impl RuntimeErrorBuf {
     /// Creates an empty error buffer with phase and kind metadata.
-    pub const fn new(
-        phase: RuntimeErrorPhase,
-        kind: RuntimeErrorKind,
-        _message: RuntimeBytesRef,
-    ) -> Self {
-        Self {
-            phase,
-            kind,
-            message_len: 0,
-            message_buf: [0; RUNTIME_ERROR_MESSAGE_CAPACITY],
-        }
+    pub const fn new(phase: RuntimeErrorPhase, kind: RuntimeErrorKind, _message: RuntimeBytesRef) -> Self {
+        Self { phase, kind, message_len: 0, message_buf: [0; RUNTIME_ERROR_MESSAGE_CAPACITY] }
     }
 }
 
@@ -166,7 +148,7 @@ pub const RUNTIME_ERROR_MESSAGE_CAPACITY: usize = 512;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeCommandView {
     /// Command kind.
-    pub command_kind: u8,
+    pub command_kind: CommandKind,
     /// Source queue sequence.
     pub ext_seq: u64,
     /// Source-provided reference time in microseconds.
@@ -187,31 +169,50 @@ pub struct RuntimeRecordKeyView {
 
 impl From<RecordKey> for RuntimeRecordKeyView {
     fn from(value: RecordKey) -> Self {
-        Self {
-            kind: value.kind,
-            sys_id: value.sys_id,
-        }
+        Self { kind: value.kind, sys_id: value.sys_id }
     }
 }
 
 impl From<RuntimeRecordKeyView> for RecordKey {
     fn from(value: RuntimeRecordKeyView) -> Self {
-        Self {
-            kind: value.kind,
-            sys_id: value.sys_id,
+        Self { kind: value.kind, sys_id: value.sys_id }
+    }
+}
+
+/// ABI view of a capped canonical-index count.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeCanonicalIndexCountView {
+    /// 0 means exact, 1 means at least `count`.
+    pub tag: u8,
+    /// Exact count or lower bound, depending on `tag`.
+    pub count: usize,
+}
+
+impl From<CanonicalIndexCount> for RuntimeCanonicalIndexCountView {
+    fn from(value: CanonicalIndexCount) -> Self {
+        match value {
+            CanonicalIndexCount::Exact(count) => Self { tag: 0, count },
+            CanonicalIndexCount::AtLeast(count) => Self { tag: 1, count },
+        }
+    }
+}
+
+impl From<RuntimeCanonicalIndexCountView> for CanonicalIndexCount {
+    fn from(value: RuntimeCanonicalIndexCountView) -> Self {
+        match value.tag {
+            0 => Self::Exact(value.count),
+            _ => Self::AtLeast(value.count),
         }
     }
 }
 
 /// Visitor callback for borrowed byte slices.
-pub type RuntimeBytesVisitor =
-    unsafe extern "C" fn(visitor_ctx: *mut c_void, bytes: RuntimeBytesRef);
+pub type RuntimeBytesVisitor = unsafe extern "C" fn(visitor_ctx: *mut c_void, bytes: RuntimeBytesRef);
 /// Visitor callback for uniquely borrowed mutable byte slices.
-pub type RuntimeBytesMutVisitor =
-    unsafe extern "C" fn(visitor_ctx: *mut c_void, bytes: RuntimeBytesMutRef);
+pub type RuntimeBytesMutVisitor = unsafe extern "C" fn(visitor_ctx: *mut c_void, bytes: RuntimeBytesMutRef);
 /// Visitor callback for record keys.
-pub type RuntimeRecordKeyVisitor =
-    unsafe extern "C" fn(visitor_ctx: *mut c_void, key: RuntimeRecordKeyView);
+pub type RuntimeRecordKeyVisitor = unsafe extern "C" fn(visitor_ctx: *mut c_void, key: RuntimeRecordKeyView);
 
 /// ABI handle for mutable runtime host access.
 #[repr(C)]
@@ -246,11 +247,11 @@ pub struct RuntimeHostVTableV1 {
         out_found: *mut bool,
         out_error: *mut RuntimeErrorBuf,
     ) -> RuntimeCallStatus,
-    /// Read by primary key.
-    pub with_read_typed_by_pk_raw: unsafe extern "C" fn(
+    /// Read by unique key.
+    pub with_read_typed_by_uk_raw: unsafe extern "C" fn(
         ctx_ptr: *const c_void,
         record_kind: RecordKind,
-        pk: RuntimeBytesRef,
+        uk: RuntimeBytesRef,
         visitor_ctx: *mut c_void,
         visitor: RuntimeBytesVisitor,
         out_found: *mut bool,
@@ -265,28 +266,28 @@ pub struct RuntimeHostVTableV1 {
         out_key: *mut RuntimeRecordKeyView,
         out_error: *mut RuntimeErrorBuf,
     ) -> RuntimeCallStatus,
-    /// Update a record by primary key.
-    pub update_typed_by_pk_raw: unsafe extern "C" fn(
+    /// Update a record by unique key.
+    pub update_typed_by_uk_raw: unsafe extern "C" fn(
         ctx_ptr: *mut c_void,
         record_kind: RecordKind,
-        pk: RuntimeBytesRef,
+        uk: RuntimeBytesRef,
         update_ctx: *mut c_void,
         update: RuntimeBytesMutVisitor,
         out_found: *mut bool,
         out_error: *mut RuntimeErrorBuf,
     ) -> RuntimeCallStatus,
-    /// Delete a record by primary key.
-    pub delete_by_pk_raw: unsafe extern "C" fn(
+    /// Delete a record by unique key.
+    pub delete_by_uk_raw: unsafe extern "C" fn(
         ctx_ptr: *mut c_void,
         record_kind: RecordKind,
-        pk: RuntimeBytesRef,
+        uk: RuntimeBytesRef,
         out_deleted: *mut bool,
         out_error: *mut RuntimeErrorBuf,
     ) -> RuntimeCallStatus,
     /// Emit an event.
     pub emit_typed_event_raw: unsafe extern "C" fn(
         ctx_ptr: *mut c_void,
-        event_kind: u8,
+        event_kind: EventKind,
         payload: RuntimeBytesRef,
         out_error: *mut RuntimeErrorBuf,
     ) -> RuntimeCallStatus,
@@ -296,6 +297,16 @@ pub struct RuntimeHostVTableV1 {
         kind: RecordKind,
         visitor_ctx: *mut c_void,
         visitor: RuntimeRecordKeyVisitor,
+        out_error: *mut RuntimeErrorBuf,
+    ) -> RuntimeCallStatus,
+    /// Count a canonical-index prefix, capped.
+    pub count_index_prefix_capped_raw: unsafe extern "C" fn(
+        ctx_ptr: *const c_void,
+        record_kind: RecordKind,
+        index_id: u8,
+        prefix: RuntimeBytesRef,
+        cap: usize,
+        out_count: *mut RuntimeCanonicalIndexCountView,
         out_error: *mut RuntimeErrorBuf,
     ) -> RuntimeCallStatus,
     /// Emit host-side diagnostic text.
@@ -319,11 +330,11 @@ pub struct RuntimeReadVTableV1 {
         out_found: *mut bool,
         out_error: *mut RuntimeErrorBuf,
     ) -> RuntimeCallStatus,
-    /// Read by primary key.
-    pub with_read_typed_by_pk_raw: unsafe extern "C" fn(
+    /// Read by unique key.
+    pub with_read_typed_by_uk_raw: unsafe extern "C" fn(
         ctx_ptr: *const c_void,
         record_kind: RecordKind,
-        pk: RuntimeBytesRef,
+        uk: RuntimeBytesRef,
         visitor_ctx: *mut c_void,
         visitor: RuntimeBytesVisitor,
         out_found: *mut bool,
@@ -340,13 +351,22 @@ pub struct RuntimeReadVTableV1 {
 }
 
 /// Current stable runtime plugin ABI version.
-pub const RUNTIME_PLUGIN_ABI_VERSION_V1: u32 = 1;
+pub const RUNTIME_PLUGIN_ABI_VERSION_V2: u32 = 2;
 /// Null-terminated symbol name exported by StateVec runtime plugins.
-pub const RUNTIME_PLUGIN_ENTRY_V1_SYMBOL: &[u8] = b"statevec_runtime_plugin_entry_v1\0";
+pub const RUNTIME_PLUGIN_ENTRY_V2_SYMBOL: &[u8] = b"statevec_runtime_plugin_entry_v2\0";
 
 /// ABI function table returned by a runtime plugin entrypoint.
+///
+/// The supplied helpers contain unwind panics for calls returning
+/// `RuntimeCallStatus`, including synchronous Rust visitor callbacks, and report
+/// `PLUGIN_INTERNAL_ERROR`. This is an undetermined execution failure, not a
+/// business rejection or rollback certificate; the host decides retirement.
+/// `panic=abort`, a panic hook/double-panic abort, invalid raw memory, and foreign
+/// host functions that unwind through their own C frames cannot be contained.
+/// Metadata and destruction have no error channel in this ABI and must not
+/// panic; violation retains process fail-stop, not a fabricated success value.
 #[repr(C)]
-pub struct RuntimePluginApiV1 {
+pub struct RuntimePluginApiV2 {
     /// ABI version implemented by the plugin.
     pub abi_version: u32,
     /// Returns the plugin name.
@@ -375,17 +395,14 @@ pub struct RuntimePluginApiV1 {
         out_error: *mut RuntimeErrorBuf,
     ) -> RuntimeCallStatus,
     /// Unloads a runtime plugin instance.
-    pub on_unload: unsafe extern "C" fn(
-        runtime: *mut c_void,
-        out_error: *mut RuntimeErrorBuf,
-    ) -> RuntimeCallStatus,
+    pub on_unload: unsafe extern "C" fn(runtime: *mut c_void, out_error: *mut RuntimeErrorBuf) -> RuntimeCallStatus,
 }
 
 /// Runtime plugin entrypoint function type.
-pub type RuntimePluginEntryV1 = unsafe extern "C" fn() -> RuntimePluginApiV1;
+pub type RuntimePluginEntryV2 = unsafe extern "C" fn() -> RuntimePluginApiV2;
 
 /// Boxed plugin handle owned across the ABI boundary.
-pub struct ExportedRuntimePluginV1Handle {
+pub struct ExportedRuntimePluginV2Handle {
     /// Plugin instance.
     pub plugin: Box<dyn RuntimePlugin>,
 }
@@ -412,9 +429,7 @@ pub unsafe fn runtime_bytes_slice<'a>(bytes: RuntimeBytesRef) -> Result<&'a [u8]
 ///
 /// The caller must ensure `bytes.ptr` is valid and uniquely borrowed for
 /// `bytes.len` bytes for the returned lifetime.
-pub unsafe fn runtime_bytes_slice_mut<'a>(
-    bytes: RuntimeBytesMutRef,
-) -> Result<&'a mut [u8], &'static str> {
+pub unsafe fn runtime_bytes_slice_mut<'a>(bytes: RuntimeBytesMutRef) -> Result<&'a mut [u8], &'static str> {
     if bytes.ptr.is_null() {
         if bytes.len == 0 {
             return Ok(&mut []);
@@ -425,8 +440,19 @@ pub unsafe fn runtime_bytes_slice_mut<'a>(
 }
 
 /// Resets an optional ABI error buffer.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn clear_runtime_error(out_error: *mut RuntimeErrorBuf) {
+///
+/// # Safety
+///
+/// `out_error` must be null or aligned, valid and exclusively writable for one
+/// `RuntimeErrorBuf`. The storage need not be initialized. No reference to it
+/// may be used during this call.
+///
+/// A raw output pointer is not a safe Rust borrow:
+///
+/// ```compile_fail,E0133
+/// statevec_api::clear_runtime_error(std::ptr::dangling_mut());
+/// ```
+pub unsafe fn clear_runtime_error(out_error: *mut RuntimeErrorBuf) {
     if out_error.is_null() {
         return;
     }
@@ -440,8 +466,19 @@ pub fn clear_runtime_error(out_error: *mut RuntimeErrorBuf) {
 }
 
 /// Writes an error into an optional ABI error buffer.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn write_runtime_error(
+///
+/// # Safety
+///
+/// `out_error` must be null or aligned, valid and exclusively writable for one
+/// `RuntimeErrorBuf`. The storage need not be initialized and must not overlap
+/// `message` or any other live borrow used during this call.
+///
+/// ```compile_fail,E0133
+/// use statevec_api::{runtime_error_kind, write_runtime_error, RuntimeErrorPhase};
+/// write_runtime_error(std::ptr::dangling_mut(), RuntimeErrorPhase::RunTx,
+///     runtime_error_kind::HOST_INTERNAL_ERROR, "invalid output pointer");
+/// ```
+pub unsafe fn write_runtime_error(
     out_error: *mut RuntimeErrorBuf,
     phase: RuntimeErrorPhase,
     kind: RuntimeErrorKind,
@@ -470,12 +507,7 @@ pub fn runtime_error_text(error: &RuntimeErrorBuf) -> String {
 
 /// Formats an ABI error buffer for diagnostics.
 pub fn runtime_error_message(error: &RuntimeErrorBuf) -> String {
-    format!(
-        "phase={:?} kind={} message={}",
-        error.phase,
-        error.kind.0,
-        runtime_error_text(error)
-    )
+    format!("phase={:?} kind={} message={}", error.phase, error.kind.0, runtime_error_text(error))
 }
 
 /// ABI helper returning a plugin factory name.
@@ -493,13 +525,38 @@ pub fn runtime_plugin_schema_bytes_v1(
     RuntimeBytesRef::from_slice(bytes.as_bytes())
 }
 
+type CaughtPanic = Box<dyn std::any::Any + Send>;
+
+// Called only after unwinding has ended, while still on the Rust side of the
+// exported C call. Even a custom panic payload's destructor cannot unwind into
+// C; if dropping it panics, forget that secondary payload rather than run yet
+// another arbitrary destructor. No business state is repaired or retried here.
+unsafe fn plugin_panic_failure(
+    panic: CaughtPanic,
+    phase: RuntimeErrorPhase,
+    out_error: *mut RuntimeErrorBuf,
+) -> RuntimeCallStatus {
+    if let Err(secondary) = catch_unwind(AssertUnwindSafe(|| drop(panic))) {
+        std::mem::forget(secondary);
+    }
+    unsafe {
+        write_runtime_error(
+            out_error,
+            phase,
+            runtime_error_kind::PLUGIN_INTERNAL_ERROR,
+            "runtime plugin panicked; operation state is not rolled back",
+        );
+    }
+    RuntimeCallStatus::Failure
+}
+
 unsafe fn exported_runtime_plugin_handle_mut(
     runtime: *mut c_void,
-) -> Result<&'static mut ExportedRuntimePluginV1Handle, &'static str> {
+) -> Result<&'static mut ExportedRuntimePluginV2Handle, &'static str> {
     if runtime.is_null() {
         Err("runtime handle is null")
     } else {
-        Ok(unsafe { &mut *runtime.cast::<ExportedRuntimePluginV1Handle>() })
+        Ok(unsafe { &mut *runtime.cast::<ExportedRuntimePluginV2Handle>() })
     }
 }
 
@@ -516,62 +573,78 @@ pub unsafe fn runtime_plugin_create_runtime_v1(
     out_runtime: *mut *mut c_void,
     out_error: *mut RuntimeErrorBuf,
 ) -> RuntimeCallStatus {
-    clear_runtime_error(out_error);
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        unsafe {
+            clear_runtime_error(out_error);
+        }
 
-    if out_runtime.is_null() {
-        write_runtime_error(
-            out_error,
-            RuntimeErrorPhase::Create,
-            runtime_error_kind::ABI_CONTRACT_VIOLATION,
-            "out_runtime is null",
-        );
-        return RuntimeCallStatus::Failure;
+        if out_runtime.is_null() {
+            unsafe {
+                write_runtime_error(
+                    out_error,
+                    RuntimeErrorPhase::Create,
+                    runtime_error_kind::ABI_CONTRACT_VIOLATION,
+                    "out_runtime is null",
+                );
+            }
+            return RuntimeCallStatus::Failure;
+        }
+
+        let config_bytes = match unsafe { runtime_bytes_slice(config) } {
+            Ok(bytes) => bytes,
+            Err(message) => {
+                unsafe {
+                    write_runtime_error(
+                        out_error,
+                        RuntimeErrorPhase::Create,
+                        runtime_error_kind::ABI_CONTRACT_VIOLATION,
+                        message,
+                    );
+                }
+                return RuntimeCallStatus::Failure;
+            }
+        };
+
+        let config_text = match std::str::from_utf8(config_bytes) {
+            Ok(value) => value,
+            Err(err) => {
+                unsafe {
+                    write_runtime_error(
+                        out_error,
+                        RuntimeErrorPhase::Create,
+                        runtime_error_kind::CONFIG_ERROR,
+                        &format!("plugin config is not valid UTF-8: {err}"),
+                    );
+                }
+                return RuntimeCallStatus::Failure;
+            }
+        };
+
+        let plugin = match factory().create(config_text) {
+            Ok(plugin) => plugin,
+            Err(err) => {
+                unsafe {
+                    write_runtime_error(
+                        out_error,
+                        RuntimeErrorPhase::Create,
+                        runtime_error_kind::CONFIG_ERROR,
+                        &err.to_string(),
+                    );
+                }
+                return RuntimeCallStatus::Failure;
+            }
+        };
+
+        let handle = Box::new(ExportedRuntimePluginV2Handle { plugin });
+        unsafe {
+            *out_runtime = Box::into_raw(handle).cast();
+        }
+        RuntimeCallStatus::Success
+    }));
+    match outcome {
+        Ok(status) => status,
+        Err(panic) => unsafe { plugin_panic_failure(panic, RuntimeErrorPhase::Create, out_error) },
     }
-
-    let config_bytes = match unsafe { runtime_bytes_slice(config) } {
-        Ok(bytes) => bytes,
-        Err(message) => {
-            write_runtime_error(
-                out_error,
-                RuntimeErrorPhase::Create,
-                runtime_error_kind::ABI_CONTRACT_VIOLATION,
-                message,
-            );
-            return RuntimeCallStatus::Failure;
-        }
-    };
-
-    let config_text = match std::str::from_utf8(config_bytes) {
-        Ok(value) => value,
-        Err(err) => {
-            write_runtime_error(
-                out_error,
-                RuntimeErrorPhase::Create,
-                runtime_error_kind::CONFIG_ERROR,
-                &format!("plugin config is not valid UTF-8: {err}"),
-            );
-            return RuntimeCallStatus::Failure;
-        }
-    };
-
-    let plugin = match factory().create(config_text) {
-        Ok(plugin) => plugin,
-        Err(err) => {
-            write_runtime_error(
-                out_error,
-                RuntimeErrorPhase::Create,
-                runtime_error_kind::CONFIG_ERROR,
-                &err.to_string(),
-            );
-            return RuntimeCallStatus::Failure;
-        }
-    };
-
-    let handle = Box::new(ExportedRuntimePluginV1Handle { plugin });
-    unsafe {
-        *out_runtime = Box::into_raw(handle).cast();
-    }
-    RuntimeCallStatus::Success
 }
 
 /// Destroys a runtime plugin instance created by
@@ -586,9 +659,7 @@ pub unsafe fn runtime_plugin_destroy_runtime_v1(runtime: *mut c_void) {
         return;
     }
     unsafe {
-        drop(Box::from_raw(
-            runtime.cast::<ExportedRuntimePluginV1Handle>(),
-        ));
+        drop(Box::from_raw(runtime.cast::<ExportedRuntimePluginV2Handle>()));
     }
 }
 
@@ -601,56 +672,65 @@ pub unsafe fn runtime_plugin_destroy_runtime_v1(runtime: *mut c_void) {
 /// `out_error` must remain valid for the duration of the call.
 pub unsafe fn runtime_plugin_run_tx_v1(
     runtime: *mut c_void,
-    host: RuntimeHostContextV1,
+    mut host: RuntimeHostContextV1,
     command: RuntimeCommandView,
     out_error: *mut RuntimeErrorBuf,
 ) -> RuntimeCallStatus {
-    clear_runtime_error(out_error);
-
-    let payload = match unsafe { runtime_bytes_slice(command.payload) } {
-        Ok(bytes) => bytes,
-        Err(message) => {
-            write_runtime_error(
-                out_error,
-                RuntimeErrorPhase::RunTx,
-                runtime_error_kind::ABI_CONTRACT_VIOLATION,
-                message,
-            );
-            return RuntimeCallStatus::Failure;
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        unsafe {
+            clear_runtime_error(out_error);
         }
-    };
 
-    let handle = match unsafe { exported_runtime_plugin_handle_mut(runtime) } {
-        Ok(handle) => handle,
-        Err(message) => {
-            write_runtime_error(
-                out_error,
-                RuntimeErrorPhase::RunTx,
-                runtime_error_kind::ABI_CONTRACT_VIOLATION,
-                message,
-            );
-            return RuntimeCallStatus::Failure;
-        }
-    };
+        let payload = match unsafe { runtime_bytes_slice(command.payload) } {
+            Ok(bytes) => bytes,
+            Err(message) => {
+                unsafe {
+                    write_runtime_error(
+                        out_error,
+                        RuntimeErrorPhase::RunTx,
+                        runtime_error_kind::ABI_CONTRACT_VIOLATION,
+                        message,
+                    );
+                }
+                return RuntimeCallStatus::Failure;
+            }
+        };
 
-    let mut host_adapter = RuntimeHostContextV1Adapter::new(host);
-    let command = RuntimeCommandRef::new(
-        command.command_kind,
-        command.ext_seq,
-        command.ref_ext_time_us,
-        payload,
-    );
-    match handle.plugin.run_tx(&mut host_adapter, &command) {
-        Ok(()) => RuntimeCallStatus::Success,
-        Err(err) => {
-            write_runtime_error(
-                out_error,
-                RuntimeErrorPhase::RunTx,
-                runtime_error_kind::PLUGIN_REJECTED,
-                &err.to_string(),
-            );
-            RuntimeCallStatus::Failure
+        let handle = match unsafe { exported_runtime_plugin_handle_mut(runtime) } {
+            Ok(handle) => handle,
+            Err(message) => {
+                unsafe {
+                    write_runtime_error(
+                        out_error,
+                        RuntimeErrorPhase::RunTx,
+                        runtime_error_kind::ABI_CONTRACT_VIOLATION,
+                        message,
+                    );
+                }
+                return RuntimeCallStatus::Failure;
+            }
+        };
+
+        let mut host_adapter = unsafe { RuntimeHostContextV1Adapter::from_raw(&mut host) };
+        let command = RuntimeCommandRef::new(command.command_kind, command.ext_seq, command.ref_ext_time_us, payload);
+        match handle.plugin.run_tx(&mut host_adapter, &command) {
+            Ok(()) => RuntimeCallStatus::Success,
+            Err(err) => {
+                unsafe {
+                    write_runtime_error(
+                        out_error,
+                        RuntimeErrorPhase::RunTx,
+                        runtime_error_kind::PLUGIN_REJECTED,
+                        &err.to_string(),
+                    );
+                }
+                RuntimeCallStatus::Failure
+            }
         }
+    }));
+    match outcome {
+        Ok(status) => status,
+        Err(panic) => unsafe { plugin_panic_failure(panic, RuntimeErrorPhase::RunTx, out_error) },
     }
 }
 
@@ -666,33 +746,45 @@ pub unsafe fn runtime_plugin_validate_biz_invariants_v1(
     host: RuntimeReadContextV1,
     out_error: *mut RuntimeErrorBuf,
 ) -> RuntimeCallStatus {
-    clear_runtime_error(out_error);
-
-    let handle = match unsafe { exported_runtime_plugin_handle_mut(runtime) } {
-        Ok(handle) => handle,
-        Err(message) => {
-            write_runtime_error(
-                out_error,
-                RuntimeErrorPhase::ValidateBizInvariants,
-                runtime_error_kind::ABI_CONTRACT_VIOLATION,
-                message,
-            );
-            return RuntimeCallStatus::Failure;
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        unsafe {
+            clear_runtime_error(out_error);
         }
-    };
 
-    let host_adapter = RuntimeReadContextV1Adapter::new(host);
-    match handle.plugin.validate_biz_invariants(&host_adapter) {
-        Ok(()) => RuntimeCallStatus::Success,
-        Err(err) => {
-            write_runtime_error(
-                out_error,
-                RuntimeErrorPhase::ValidateBizInvariants,
-                runtime_error_kind::PLUGIN_REJECTED,
-                &err,
-            );
-            RuntimeCallStatus::Failure
+        let handle = match unsafe { exported_runtime_plugin_handle_mut(runtime) } {
+            Ok(handle) => handle,
+            Err(message) => {
+                unsafe {
+                    write_runtime_error(
+                        out_error,
+                        RuntimeErrorPhase::ValidateBizInvariants,
+                        runtime_error_kind::ABI_CONTRACT_VIOLATION,
+                        message,
+                    );
+                }
+                return RuntimeCallStatus::Failure;
+            }
+        };
+
+        let host_adapter = unsafe { RuntimeReadContextV1Adapter::from_raw(&host) };
+        match handle.plugin.validate_biz_invariants(&host_adapter) {
+            Ok(()) => RuntimeCallStatus::Success,
+            Err(err) => {
+                unsafe {
+                    write_runtime_error(
+                        out_error,
+                        RuntimeErrorPhase::ValidateBizInvariants,
+                        runtime_error_kind::PLUGIN_REJECTED,
+                        &err,
+                    );
+                }
+                RuntimeCallStatus::Failure
+            }
         }
+    }));
+    match outcome {
+        Ok(status) => status,
+        Err(panic) => unsafe { plugin_panic_failure(panic, RuntimeErrorPhase::ValidateBizInvariants, out_error) },
     }
 }
 
@@ -702,92 +794,148 @@ pub unsafe fn runtime_plugin_validate_biz_invariants_v1(
 ///
 /// `runtime` must be a live plugin handle and `out_error` must be null or valid
 /// for writes.
-pub unsafe fn runtime_plugin_on_unload_v1(
-    runtime: *mut c_void,
-    out_error: *mut RuntimeErrorBuf,
-) -> RuntimeCallStatus {
-    clear_runtime_error(out_error);
-
-    let handle = match unsafe { exported_runtime_plugin_handle_mut(runtime) } {
-        Ok(handle) => handle,
-        Err(message) => {
-            write_runtime_error(
-                out_error,
-                RuntimeErrorPhase::Unload,
-                runtime_error_kind::ABI_CONTRACT_VIOLATION,
-                message,
-            );
-            return RuntimeCallStatus::Failure;
+pub unsafe fn runtime_plugin_on_unload_v1(runtime: *mut c_void, out_error: *mut RuntimeErrorBuf) -> RuntimeCallStatus {
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        unsafe {
+            clear_runtime_error(out_error);
         }
-    };
 
-    match handle.plugin.on_unload() {
-        Ok(()) => RuntimeCallStatus::Success,
-        Err(err) => {
-            write_runtime_error(
-                out_error,
-                RuntimeErrorPhase::Unload,
-                runtime_error_kind::PLUGIN_INTERNAL_ERROR,
-                &err.to_string(),
-            );
-            RuntimeCallStatus::Failure
+        let handle = match unsafe { exported_runtime_plugin_handle_mut(runtime) } {
+            Ok(handle) => handle,
+            Err(message) => {
+                unsafe {
+                    write_runtime_error(
+                        out_error,
+                        RuntimeErrorPhase::Unload,
+                        runtime_error_kind::ABI_CONTRACT_VIOLATION,
+                        message,
+                    );
+                }
+                return RuntimeCallStatus::Failure;
+            }
+        };
+
+        match handle.plugin.on_unload() {
+            Ok(()) => RuntimeCallStatus::Success,
+            Err(err) => {
+                unsafe {
+                    write_runtime_error(
+                        out_error,
+                        RuntimeErrorPhase::Unload,
+                        runtime_error_kind::PLUGIN_INTERNAL_ERROR,
+                        &err.to_string(),
+                    );
+                }
+                RuntimeCallStatus::Failure
+            }
         }
+    }));
+    match outcome {
+        Ok(status) => status,
+        Err(panic) => unsafe { plugin_panic_failure(panic, RuntimeErrorPhase::Unload, out_error) },
     }
 }
 
 struct BytesVisitorForward<'a> {
     callback: &'a mut dyn FnMut(&[u8]),
+    panic: Option<CaughtPanic>,
 }
 
 struct BytesVisitorForwardMut<'a> {
     callback: &'a mut dyn FnMut(&mut [u8]),
+    panic: Option<CaughtPanic>,
 }
 
 struct RecordKeyVisitorForward<'a> {
     callback: &'a mut dyn FnMut(RecordKey),
+    panic: Option<CaughtPanic>,
+}
+
+fn capture_visitor_panic(panic: &mut Option<CaughtPanic>, call: impl FnOnce()) {
+    if panic.is_none() {
+        *panic = catch_unwind(AssertUnwindSafe(call)).err();
+    }
+}
+
+fn resume_visitor_panic(panic: Option<CaughtPanic>) {
+    if let Some(panic) = panic {
+        // The host vtable has returned. Resume only through Rust frames, so the
+        // outer plugin-call guard can classify the failure, even if the host
+        // reported Success after the callback returned.
+        resume_unwind(panic);
+    }
 }
 
 unsafe extern "C" fn forward_bytes_visitor(visitor_ctx: *mut c_void, bytes: RuntimeBytesRef) {
     let forward = unsafe { &mut *visitor_ctx.cast::<BytesVisitorForward<'_>>() };
-    let bytes = unsafe { runtime_bytes_slice(bytes) }.expect("host returned invalid bytes");
-    (forward.callback)(bytes);
+    capture_visitor_panic(&mut forward.panic, || {
+        let bytes = unsafe { runtime_bytes_slice(bytes) }.expect("host returned invalid bytes");
+        (forward.callback)(bytes);
+    });
 }
 
-unsafe extern "C" fn forward_bytes_visitor_mut(
-    visitor_ctx: *mut c_void,
-    bytes: RuntimeBytesMutRef,
-) {
+unsafe extern "C" fn forward_bytes_visitor_mut(visitor_ctx: *mut c_void, bytes: RuntimeBytesMutRef) {
     let forward = unsafe { &mut *visitor_ctx.cast::<BytesVisitorForwardMut<'_>>() };
-    let bytes =
-        unsafe { runtime_bytes_slice_mut(bytes) }.expect("host returned invalid mutable bytes");
-    (forward.callback)(bytes);
+    capture_visitor_panic(&mut forward.panic, || {
+        let bytes = unsafe { runtime_bytes_slice_mut(bytes) }.expect("host returned invalid mutable bytes");
+        (forward.callback)(bytes);
+    });
 }
 
-unsafe extern "C" fn forward_record_key_visitor(
-    visitor_ctx: *mut c_void,
-    key: RuntimeRecordKeyView,
-) {
+unsafe extern "C" fn forward_record_key_visitor(visitor_ctx: *mut c_void, key: RuntimeRecordKeyView) {
     let forward = unsafe { &mut *visitor_ctx.cast::<RecordKeyVisitorForward<'_>>() };
-    (forward.callback)(key.into());
+    capture_visitor_panic(&mut forward.panic, || (forward.callback)(key.into()));
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct RuntimeHostContextV1Adapter {
-    raw: RuntimeHostContextV1,
+/// A call-scoped, exclusive host borrow. The ABI handle itself is only raw data.
+///
+/// ```compile_fail,E0515
+/// use statevec_api::{RuntimeHostContextV1, RuntimeHostContextV1Adapter};
+/// fn escape<'a>(mut raw: RuntimeHostContextV1) -> RuntimeHostContextV1Adapter<'a> {
+///     unsafe { RuntimeHostContextV1Adapter::from_raw(&mut raw) }
+/// }
+/// ```
+///
+/// ```compile_fail,E0382
+/// use statevec_api::RuntimeHostContextV1Adapter;
+/// fn duplicate(adapter: RuntimeHostContextV1Adapter<'_>) {
+///     let moved = adapter;
+///     let copied = adapter;
+/// }
+/// ```
+#[derive(Debug)]
+pub struct RuntimeHostContextV1Adapter<'call> {
+    raw: &'call mut RuntimeHostContextV1,
 }
 
-impl RuntimeHostContextV1Adapter {
-    pub const fn new(raw: RuntimeHostContextV1) -> Self {
+impl<'call> RuntimeHostContextV1Adapter<'call> {
+    /// Borrows an ABI host context for one synchronous call.
+    ///
+    /// # Safety
+    ///
+    /// A non-null vtable must remain valid and immutable for `'call`. Its context
+    /// and functions must satisfy every host operation's contract, including
+    /// exclusive mutable access, valid callback bytes and synchronous callbacks
+    /// that neither overlap nor retain their borrowed inputs. No alias of the raw handle may
+    /// access the context during this borrow. Null vtables return a host error.
+    ///
+    /// ```compile_fail,E0133
+    /// use statevec_api::{RuntimeHostContextV1, RuntimeHostContextV1Adapter};
+    /// let mut raw = RuntimeHostContextV1 {
+    ///     ctx_ptr: std::ptr::null_mut(), vtable: std::ptr::dangling(),
+    /// };
+    /// let adapter = RuntimeHostContextV1Adapter::from_raw(&mut raw);
+    /// ```
+    pub const unsafe fn from_raw(raw: &'call mut RuntimeHostContextV1) -> Self {
         Self { raw }
     }
 
     fn vtable(&self) -> Result<&RuntimeHostVTableV1, RuntimeHostError> {
-        unsafe { self.raw.vtable.as_ref() }
-            .ok_or_else(|| RuntimeHostError::new("runtime host vtable is null"))
+        unsafe { self.raw.vtable.as_ref() }.ok_or_else(|| RuntimeHostError::new("runtime host vtable is null"))
     }
 }
 
-impl RuntimeHostContext for RuntimeHostContextV1Adapter {
+impl RuntimeHostContext for RuntimeHostContextV1Adapter<'_> {
     fn with_read_typed_raw(
         &self,
         record_kind: RecordKind,
@@ -800,7 +948,7 @@ impl RuntimeHostContext for RuntimeHostContextV1Adapter {
             runtime_error_kind::HOST_INTERNAL_ERROR,
             RuntimeBytesRef::empty(),
         );
-        let mut visitor = BytesVisitorForward { callback: f };
+        let mut visitor = BytesVisitorForward { callback: f, panic: None };
         let status = unsafe {
             (self.vtable()?.with_read_typed_raw)(
                 self.raw.ctx_ptr.cast_const(),
@@ -812,16 +960,17 @@ impl RuntimeHostContext for RuntimeHostContextV1Adapter {
                 &mut error,
             )
         };
+        resume_visitor_panic(visitor.panic);
         match status {
             RuntimeCallStatus::Success => Ok(found),
             RuntimeCallStatus::Failure => Err(RuntimeHostError::new(runtime_error_message(&error))),
         }
     }
 
-    fn with_read_typed_by_pk_raw(
+    fn with_read_typed_by_uk_raw(
         &self,
         record_kind: RecordKind,
-        pk: &[u8],
+        uk: &[u8],
         f: &mut dyn FnMut(&[u8]),
     ) -> Result<bool, RuntimeHostError> {
         let mut found = false;
@@ -830,18 +979,19 @@ impl RuntimeHostContext for RuntimeHostContextV1Adapter {
             runtime_error_kind::HOST_INTERNAL_ERROR,
             RuntimeBytesRef::empty(),
         );
-        let mut visitor = BytesVisitorForward { callback: f };
+        let mut visitor = BytesVisitorForward { callback: f, panic: None };
         let status = unsafe {
-            (self.vtable()?.with_read_typed_by_pk_raw)(
+            (self.vtable()?.with_read_typed_by_uk_raw)(
                 self.raw.ctx_ptr.cast_const(),
                 record_kind,
-                RuntimeBytesRef::from_slice(pk),
+                RuntimeBytesRef::from_slice(uk),
                 (&mut visitor as *mut BytesVisitorForward<'_>).cast(),
                 forward_bytes_visitor,
                 &mut found,
                 &mut error,
             )
         };
+        resume_visitor_panic(visitor.panic);
         match status {
             RuntimeCallStatus::Success => Ok(found),
             RuntimeCallStatus::Failure => Err(RuntimeHostError::new(runtime_error_message(&error))),
@@ -859,7 +1009,7 @@ impl RuntimeHostContext for RuntimeHostContextV1Adapter {
             runtime_error_kind::HOST_INTERNAL_ERROR,
             RuntimeBytesRef::empty(),
         );
-        let mut visitor = BytesVisitorForwardMut { callback: init };
+        let mut visitor = BytesVisitorForwardMut { callback: init, panic: None };
         let status = unsafe {
             (self.vtable()?.create_typed_raw)(
                 self.raw.ctx_ptr,
@@ -870,16 +1020,17 @@ impl RuntimeHostContext for RuntimeHostContextV1Adapter {
                 &mut error,
             )
         };
+        resume_visitor_panic(visitor.panic);
         match status {
             RuntimeCallStatus::Success => Ok(key.into()),
             RuntimeCallStatus::Failure => Err(RuntimeHostError::new(runtime_error_message(&error))),
         }
     }
 
-    fn update_typed_by_pk_raw(
+    fn update_typed_by_uk_raw(
         &mut self,
         record_kind: RecordKind,
-        pk: &[u8],
+        uk: &[u8],
         f: &mut dyn FnMut(&mut [u8]),
     ) -> Result<bool, RuntimeHostError> {
         let mut found = false;
@@ -888,29 +1039,26 @@ impl RuntimeHostContext for RuntimeHostContextV1Adapter {
             runtime_error_kind::HOST_INTERNAL_ERROR,
             RuntimeBytesRef::empty(),
         );
-        let mut visitor = BytesVisitorForwardMut { callback: f };
+        let mut visitor = BytesVisitorForwardMut { callback: f, panic: None };
         let status = unsafe {
-            (self.vtable()?.update_typed_by_pk_raw)(
+            (self.vtable()?.update_typed_by_uk_raw)(
                 self.raw.ctx_ptr,
                 record_kind,
-                RuntimeBytesRef::from_slice(pk),
+                RuntimeBytesRef::from_slice(uk),
                 (&mut visitor as *mut BytesVisitorForwardMut<'_>).cast(),
                 forward_bytes_visitor_mut,
                 &mut found,
                 &mut error,
             )
         };
+        resume_visitor_panic(visitor.panic);
         match status {
             RuntimeCallStatus::Success => Ok(found),
             RuntimeCallStatus::Failure => Err(RuntimeHostError::new(runtime_error_message(&error))),
         }
     }
 
-    fn delete_by_pk_raw(
-        &mut self,
-        record_kind: RecordKind,
-        pk: &[u8],
-    ) -> Result<bool, RuntimeHostError> {
+    fn delete_by_uk_raw(&mut self, record_kind: RecordKind, uk: &[u8]) -> Result<bool, RuntimeHostError> {
         let mut deleted = false;
         let mut error = RuntimeErrorBuf::new(
             RuntimeErrorPhase::RunTx,
@@ -918,10 +1066,10 @@ impl RuntimeHostContext for RuntimeHostContextV1Adapter {
             RuntimeBytesRef::empty(),
         );
         let status = unsafe {
-            (self.vtable()?.delete_by_pk_raw)(
+            (self.vtable()?.delete_by_uk_raw)(
                 self.raw.ctx_ptr,
                 record_kind,
-                RuntimeBytesRef::from_slice(pk),
+                RuntimeBytesRef::from_slice(uk),
                 &mut deleted,
                 &mut error,
             )
@@ -932,11 +1080,7 @@ impl RuntimeHostContext for RuntimeHostContextV1Adapter {
         }
     }
 
-    fn emit_typed_event_raw(
-        &mut self,
-        event_kind: u8,
-        payload: &[u8],
-    ) -> Result<(), RuntimeHostError> {
+    fn emit_typed_event_raw(&mut self, event_kind: EventKind, payload: &[u8]) -> Result<(), RuntimeHostError> {
         let mut error = RuntimeErrorBuf::new(
             RuntimeErrorPhase::RunTx,
             runtime_error_kind::HOST_INTERNAL_ERROR,
@@ -956,17 +1100,13 @@ impl RuntimeHostContext for RuntimeHostContextV1Adapter {
         }
     }
 
-    fn for_each_record_key_raw(
-        &self,
-        kind: RecordKind,
-        f: &mut dyn FnMut(RecordKey),
-    ) -> Result<(), RuntimeHostError> {
+    fn for_each_record_key_raw(&self, kind: RecordKind, f: &mut dyn FnMut(RecordKey)) -> Result<(), RuntimeHostError> {
         let mut error = RuntimeErrorBuf::new(
             RuntimeErrorPhase::RunTx,
             runtime_error_kind::HOST_INTERNAL_ERROR,
             RuntimeBytesRef::empty(),
         );
-        let mut visitor = RecordKeyVisitorForward { callback: f };
+        let mut visitor = RecordKeyVisitorForward { callback: f, panic: None };
         let status = unsafe {
             (self.vtable()?.for_each_record_key_raw)(
                 self.raw.ctx_ptr.cast_const(),
@@ -976,8 +1116,39 @@ impl RuntimeHostContext for RuntimeHostContextV1Adapter {
                 &mut error,
             )
         };
+        resume_visitor_panic(visitor.panic);
         match status {
             RuntimeCallStatus::Success => Ok(()),
+            RuntimeCallStatus::Failure => Err(RuntimeHostError::new(runtime_error_message(&error))),
+        }
+    }
+
+    fn count_index_prefix_capped_raw(
+        &self,
+        record_kind: RecordKind,
+        index_id: u8,
+        prefix: &[u8],
+        cap: usize,
+    ) -> Result<CanonicalIndexCount, RuntimeHostError> {
+        let mut count = RuntimeCanonicalIndexCountView { tag: 0, count: 0 };
+        let mut error = RuntimeErrorBuf::new(
+            RuntimeErrorPhase::RunTx,
+            runtime_error_kind::HOST_INTERNAL_ERROR,
+            RuntimeBytesRef::empty(),
+        );
+        let status = unsafe {
+            (self.vtable()?.count_index_prefix_capped_raw)(
+                self.raw.ctx_ptr.cast_const(),
+                record_kind,
+                index_id,
+                RuntimeBytesRef::from_slice(prefix),
+                cap,
+                &mut count,
+                &mut error,
+            )
+        };
+        match status {
+            RuntimeCallStatus::Success => Ok(count.into()),
             RuntimeCallStatus::Failure => Err(RuntimeHostError::new(runtime_error_message(&error))),
         }
     }
@@ -989,11 +1160,7 @@ impl RuntimeHostContext for RuntimeHostContextV1Adapter {
             RuntimeBytesRef::empty(),
         );
         let status = unsafe {
-            (self.vtable()?.debug_log)(
-                self.raw.ctx_ptr,
-                RuntimeBytesRef::from_slice(message.as_bytes()),
-                &mut error,
-            )
+            (self.vtable()?.debug_log)(self.raw.ctx_ptr, RuntimeBytesRef::from_slice(message.as_bytes()), &mut error)
         };
         match status {
             RuntimeCallStatus::Success => Ok(()),
@@ -1002,23 +1169,47 @@ impl RuntimeHostContext for RuntimeHostContextV1Adapter {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct RuntimeReadContextV1Adapter {
-    raw: RuntimeReadContextV1,
+/// A call-scoped read-only host borrow, not an independently owned ABI handle.
+///
+/// ```compile_fail,E0515
+/// use statevec_api::{RuntimeReadContextV1, RuntimeReadContextV1Adapter};
+/// fn escape<'a>(raw: RuntimeReadContextV1) -> RuntimeReadContextV1Adapter<'a> {
+///     unsafe { RuntimeReadContextV1Adapter::from_raw(&raw) }
+/// }
+/// ```
+#[derive(Debug)]
+pub struct RuntimeReadContextV1Adapter<'call> {
+    raw: &'call RuntimeReadContextV1,
 }
 
-impl RuntimeReadContextV1Adapter {
-    pub const fn new(raw: RuntimeReadContextV1) -> Self {
+impl<'call> RuntimeReadContextV1Adapter<'call> {
+    /// Borrows a read-only ABI context for one synchronous call.
+    ///
+    /// # Safety
+    ///
+    /// A non-null vtable and its context must remain valid for `'call`, with no
+    /// conflicting mutable access. Vtable functions must uphold their contracts,
+    /// including valid callback bytes and no retention of callback borrows.
+    /// Calls to each visitor must be synchronous and non-overlapping.
+    /// Null vtables return a host error.
+    ///
+    /// ```compile_fail,E0133
+    /// use statevec_api::{RuntimeReadContextV1, RuntimeReadContextV1Adapter};
+    /// let raw = RuntimeReadContextV1 {
+    ///     ctx_ptr: std::ptr::null_mut(), vtable: std::ptr::dangling(),
+    /// };
+    /// let adapter = RuntimeReadContextV1Adapter::from_raw(&raw);
+    /// ```
+    pub const unsafe fn from_raw(raw: &'call RuntimeReadContextV1) -> Self {
         Self { raw }
     }
 
     fn vtable(&self) -> Result<&RuntimeReadVTableV1, RuntimeHostError> {
-        unsafe { self.raw.vtable.as_ref() }
-            .ok_or_else(|| RuntimeHostError::new("runtime read vtable is null"))
+        unsafe { self.raw.vtable.as_ref() }.ok_or_else(|| RuntimeHostError::new("runtime read vtable is null"))
     }
 }
 
-impl BizInvariantReadContext for RuntimeReadContextV1Adapter {
+impl BizInvariantReadContext for RuntimeReadContextV1Adapter<'_> {
     fn with_read_typed_raw(
         &self,
         record_kind: RecordKind,
@@ -1031,7 +1222,7 @@ impl BizInvariantReadContext for RuntimeReadContextV1Adapter {
             runtime_error_kind::HOST_INTERNAL_ERROR,
             RuntimeBytesRef::empty(),
         );
-        let mut visitor = BytesVisitorForward { callback: f };
+        let mut visitor = BytesVisitorForward { callback: f, panic: None };
         let status = unsafe {
             (self.vtable()?.with_read_typed_raw)(
                 self.raw.ctx_ptr.cast_const(),
@@ -1043,16 +1234,17 @@ impl BizInvariantReadContext for RuntimeReadContextV1Adapter {
                 &mut error,
             )
         };
+        resume_visitor_panic(visitor.panic);
         match status {
             RuntimeCallStatus::Success => Ok(found),
             RuntimeCallStatus::Failure => Err(RuntimeHostError::new(runtime_error_message(&error))),
         }
     }
 
-    fn with_read_typed_by_pk_raw(
+    fn with_read_typed_by_uk_raw(
         &self,
         record_kind: RecordKind,
-        pk: &[u8],
+        uk: &[u8],
         f: &mut dyn FnMut(&[u8]),
     ) -> Result<bool, RuntimeHostError> {
         let mut found = false;
@@ -1061,35 +1253,32 @@ impl BizInvariantReadContext for RuntimeReadContextV1Adapter {
             runtime_error_kind::HOST_INTERNAL_ERROR,
             RuntimeBytesRef::empty(),
         );
-        let mut visitor = BytesVisitorForward { callback: f };
+        let mut visitor = BytesVisitorForward { callback: f, panic: None };
         let status = unsafe {
-            (self.vtable()?.with_read_typed_by_pk_raw)(
+            (self.vtable()?.with_read_typed_by_uk_raw)(
                 self.raw.ctx_ptr.cast_const(),
                 record_kind,
-                RuntimeBytesRef::from_slice(pk),
+                RuntimeBytesRef::from_slice(uk),
                 (&mut visitor as *mut BytesVisitorForward<'_>).cast(),
                 forward_bytes_visitor,
                 &mut found,
                 &mut error,
             )
         };
+        resume_visitor_panic(visitor.panic);
         match status {
             RuntimeCallStatus::Success => Ok(found),
             RuntimeCallStatus::Failure => Err(RuntimeHostError::new(runtime_error_message(&error))),
         }
     }
 
-    fn for_each_record_key_raw(
-        &self,
-        kind: RecordKind,
-        f: &mut dyn FnMut(RecordKey),
-    ) -> Result<(), RuntimeHostError> {
+    fn for_each_record_key_raw(&self, kind: RecordKind, f: &mut dyn FnMut(RecordKey)) -> Result<(), RuntimeHostError> {
         let mut error = RuntimeErrorBuf::new(
             RuntimeErrorPhase::ValidateBizInvariants,
             runtime_error_kind::HOST_INTERNAL_ERROR,
             RuntimeBytesRef::empty(),
         );
-        let mut visitor = RecordKeyVisitorForward { callback: f };
+        let mut visitor = RecordKeyVisitorForward { callback: f, panic: None };
         let status = unsafe {
             (self.vtable()?.for_each_record_key_raw)(
                 self.raw.ctx_ptr.cast_const(),
@@ -1099,6 +1288,7 @@ impl BizInvariantReadContext for RuntimeReadContextV1Adapter {
                 &mut error,
             )
         };
+        resume_visitor_panic(visitor.panic);
         match status {
             RuntimeCallStatus::Success => Ok(()),
             RuntimeCallStatus::Failure => Err(RuntimeHostError::new(runtime_error_message(&error))),

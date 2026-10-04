@@ -1,0 +1,11 @@
+error: record_len exceeds the runtime limit of 32768 bytes (including header); got 65536
+ --> tests/compile_fail/record/oversized_record.rs:4:12
+  |
+4 | pub struct AboveRuntimeLimit {
+  |            ^^^^^^^^^^^^^^^^^
+
+error: record_len exceeds the runtime limit of 32768 bytes (including header); got 8589934592
+  --> tests/compile_fail/record/oversized_record.rs:10:12
+   |
+10 | pub struct TruncatedMetadata {
+   |            ^^^^^^^^^^^^^^^^^

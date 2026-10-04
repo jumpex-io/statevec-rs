@@ -87,7 +87,7 @@ impl FlightBookingRuntime {
         tx: &mut Tx,
         flight_id: statevec::FixedBytes<16>,
     ) {
-        tx.emit_typed_event::<FlightAdded>(FlightAdded::builder().set_flight_id(flight_id).build());
+        tx.emit_typed_event::<FlightAdded>(FlightAdded::builder().set_flight_id(flight_id).build().expect("fixed-width payload"));
     }
 
     fn emit_flight_removed<Tx: TypedTxContext + ?Sized>(
@@ -95,7 +95,7 @@ impl FlightBookingRuntime {
         flight_id: statevec::FixedBytes<16>,
     ) {
         tx.emit_typed_event::<FlightRemoved>(
-            FlightRemoved::builder().set_flight_id(flight_id).build(),
+            FlightRemoved::builder().set_flight_id(flight_id).build().expect("fixed-width payload"),
         );
     }
 
@@ -111,7 +111,7 @@ impl FlightBookingRuntime {
                 .set_order_id(command.order_id())
                 .set_cabin_class(command.cabin_class())
                 .set_result_code(result_code)
-                .build(),
+                .build().expect("fixed-width payload"),
         );
     }
 
@@ -130,7 +130,7 @@ impl FlightBookingRuntime {
                 .set_order_id(order_id)
                 .set_cabin_class(cabin_class)
                 .set_result_code(result_code)
-                .build(),
+                .build().expect("fixed-width payload"),
         );
     }
 
@@ -238,7 +238,7 @@ impl FlightBookingRuntime {
             return Err(Self::bad("at least one cabin capacity must be positive"));
         }
         if tx
-            .with_read_typed_by_pk::<Flight, _, _, _>(Flight::pk(&flight_id), |_| ())
+            .with_read_typed_by_uk::<Flight, _, _, _>(Flight::uk(&flight_id), |_| ())
             .map_err(Into::into)?
             .is_some()
         {
@@ -272,7 +272,7 @@ impl FlightBookingRuntime {
     ) -> Result<(), FlightBookingError> {
         let flight_id = command.flight_id();
         let retired = tx
-            .update_typed_by_pk::<Flight, _, _, _>(Flight::pk(&flight_id), |flight| {
+            .update_typed_by_uk::<Flight, _, _, _>(Flight::uk(&flight_id), |flight| {
                 flight.set_status(FLIGHT_STATUS_RETIRED);
             })
             .map_err(Into::into)?;
@@ -293,8 +293,8 @@ impl FlightBookingRuntime {
         }
 
         let passenger_valid = tx
-            .with_read_typed_by_pk::<Passenger, _, _, _>(
-                Passenger::pk(&command.passenger_document_id()),
+            .with_read_typed_by_uk::<Passenger, _, _, _>(
+                Passenger::uk(&command.passenger_document_id()),
                 |passenger| {
                     Self::passenger_matches(
                         passenger,
@@ -310,7 +310,7 @@ impl FlightBookingRuntime {
         }
 
         let Some(flight) = tx
-            .with_read_typed_by_pk::<Flight, _, _, _>(Flight::pk(&command.flight_id()), |flight| {
+            .with_read_typed_by_uk::<Flight, _, _, _>(Flight::uk(&command.flight_id()), |flight| {
                 FlightSnapshot {
                     status: flight.status(),
                     economy_total: flight.economy_total(),
@@ -334,8 +334,8 @@ impl FlightBookingRuntime {
         }
 
         let duplicate = tx
-            .with_read_typed_by_pk::<Reservation, _, _, _>(
-                Reservation::pk(&command.flight_id(), &command.passenger_document_id()),
+            .with_read_typed_by_uk::<Reservation, _, _, _>(
+                Reservation::uk(&command.flight_id(), &command.passenger_document_id()),
                 |reservation| reservation.status() == RESERVATION_STATUS_ACTIVE,
             )
             .map_err(Into::into)?
@@ -368,8 +368,8 @@ impl FlightBookingRuntime {
         let cabin_class = command.cabin_class();
 
         if tx
-            .with_read_typed_by_pk::<Passenger, _, _, _>(
-                Passenger::pk(&passenger_document_id),
+            .with_read_typed_by_uk::<Passenger, _, _, _>(
+                Passenger::uk(&passenger_document_id),
                 |_| (),
             )
             .map_err(Into::into)?
@@ -384,14 +384,14 @@ impl FlightBookingRuntime {
             .map_err(Into::into)?;
         }
 
-        tx.update_typed_by_pk::<Flight, _, _, _>(Flight::pk(&flight_id), |flight| {
+        tx.update_typed_by_uk::<Flight, _, _, _>(Flight::uk(&flight_id), |flight| {
             Self::increment_cabin(flight, cabin_class)
         })
         .map_err(Into::into)?
         .ok_or_else(|| Self::bad("flight disappeared during reserve"))??;
 
-        tx.update_or_create_typed_by_pk::<Reservation, _, _, _, _>(
-            Reservation::pk(&flight_id, &passenger_document_id),
+        tx.update_or_create_typed_by_uk::<Reservation, _, _, _, _>(
+            Reservation::uk(&flight_id, &passenger_document_id),
             |reservation| {
                 reservation.set_order_id(&order_id);
                 reservation.set_cabin_class(cabin_class);
@@ -423,8 +423,8 @@ impl FlightBookingRuntime {
         let command_order_id = command.order_id();
 
         let Some(reservation) = tx
-            .with_read_typed_by_pk::<Reservation, _, _, _>(
-                Reservation::pk(&flight_id, &passenger_document_id),
+            .with_read_typed_by_uk::<Reservation, _, _, _>(
+                Reservation::uk(&flight_id, &passenger_document_id),
                 |reservation| ReservationSnapshot {
                     order_id: reservation.order_id(),
                     cabin_class: reservation.cabin_class(),
@@ -468,14 +468,14 @@ impl FlightBookingRuntime {
             return Ok(());
         }
 
-        tx.update_typed_by_pk::<Flight, _, _, _>(Flight::pk(&flight_id), |flight| {
+        tx.update_typed_by_uk::<Flight, _, _, _>(Flight::uk(&flight_id), |flight| {
             Self::decrement_cabin(flight, reservation.cabin_class)
         })
         .map_err(Into::into)?
         .ok_or_else(|| Self::bad("reservation references missing flight"))??;
 
-        tx.update_typed_by_pk::<Reservation, _, _, _>(
-            Reservation::pk(&flight_id, &passenger_document_id),
+        tx.update_typed_by_uk::<Reservation, _, _, _>(
+            Reservation::uk(&flight_id, &passenger_document_id),
             |reservation| {
                 reservation.set_status(RESERVATION_STATUS_CANCELED);
             },
@@ -541,6 +541,14 @@ impl RuntimePlugin for FlightBookingRuntime {
         tx: &mut dyn RuntimeHostContext,
         command: &dyn RuntimeCommandEnvelope,
     ) -> Result<(), RuntimePluginError> {
+        let checked = match command.command_kind() {
+            AddFlight::KIND => AddFlight::validate_payload(command.payload()),
+            RetireFlight::KIND => RetireFlight::validate_payload(command.payload()),
+            ReserveOrder::KIND => ReserveOrder::validate_payload(command.payload()),
+            CancelReservation::KIND => CancelReservation::validate_payload(command.payload()),
+            kind => Err(statevec::model::CommandSchemaFailure::UnsupportedKind { kind }),
+        };
+        checked.map_err(|error| RuntimePluginError::new(format!("invalid command payload: {error:?}")))?;
         if self
             .dispatch(tx, command)
             .map_err(|e| RuntimePluginError::new(e.to_string()))?
@@ -635,7 +643,7 @@ impl RuntimePlugin for FlightBookingRuntime {
                 continue;
             }
             if ctx
-                .with_read_typed_by_pk::<Flight, _, _, _>(Flight::pk(&flight_id), |_| ())
+                .with_read_typed_by_uk::<Flight, _, _, _>(Flight::uk(&flight_id), |_| ())
                 .map_err(|e| e.to_string())?
                 .is_none()
             {
@@ -645,8 +653,8 @@ impl RuntimePlugin for FlightBookingRuntime {
                 ));
             }
             if ctx
-                .with_read_typed_by_pk::<Passenger, _, _, _>(
-                    Passenger::pk(&passenger_document_id),
+                .with_read_typed_by_uk::<Passenger, _, _, _>(
+                    Passenger::uk(&passenger_document_id),
                     |_| (),
                 )
                 .map_err(|e| e.to_string())?
@@ -672,7 +680,7 @@ impl RuntimePlugin for FlightBookingRuntime {
 
         for (flight_id, cabin_class, count) in &aggregates {
             let Some(expected) = ctx
-                .with_read_typed_by_pk::<Flight, _, _, _>(Flight::pk(flight_id), |flight| {
+                .with_read_typed_by_uk::<Flight, _, _, _>(Flight::uk(flight_id), |flight| {
                     match *cabin_class {
                         CABIN_ECONOMY => Some(flight.economy_reserved()),
                         CABIN_BUSINESS => Some(flight.business_reserved()),
@@ -802,7 +810,7 @@ mod tests {
             .set_economy_total(economy_total)
             .set_business_total(1)
             .set_first_total(1)
-            .build()
+            .build().expect("fixed-width payload")
     }
 
     fn reserve_payload(order: &[u8], cabin_class: u8) -> Vec<u8> {
@@ -814,7 +822,7 @@ mod tests {
             .set_passenger_birth_date(19900101)
             .set_passenger_document_type(1)
             .set_cabin_class(cabin_class)
-            .build()
+            .build().expect("fixed-width payload")
     }
 
     fn cancel_payload(order: &[u8]) -> Vec<u8> {
@@ -822,7 +830,7 @@ mod tests {
             .set_flight_id(flight_id())
             .set_passenger_document_id(passenger_id())
             .set_order_id(order_id(order))
-            .build()
+            .build().expect("fixed-width payload")
     }
 
     fn add_flight(host: &mut Host, economy_total: u32) {
@@ -841,7 +849,7 @@ mod tests {
     }
 
     fn reserved_economy(host: &Host) -> u32 {
-        host.expect::<Flight, _>(Flight::pk(&flight_id()), |flight| flight.economy_reserved())
+        host.expect::<Flight, _>(Flight::uk(&flight_id()), |flight| flight.economy_reserved())
     }
 
     fn last_reserve_result(host: &Host) -> u8 {
@@ -912,7 +920,7 @@ mod tests {
             .set_passenger_birth_date(19900101)
             .set_passenger_document_type(1)
             .set_cabin_class(CABIN_ECONOMY)
-            .build();
+            .build().expect("fixed-width payload");
         host.run::<ReserveOrder>(payload).unwrap();
 
         assert_eq!(reserved_economy(&host), 1);
@@ -924,7 +932,7 @@ mod tests {
         let mut host = new_host();
         add_flight(&mut host, 2);
 
-        let retire_payload = RetireFlight::builder().set_flight_id(flight_id()).build();
+        let retire_payload = RetireFlight::builder().set_flight_id(flight_id()).build().expect("fixed-width payload");
         host.run::<RetireFlight>(retire_payload).unwrap();
 
         reserve(&mut host, b"ORD-1", CABIN_ECONOMY);
@@ -961,9 +969,9 @@ mod tests {
         add_flight(&mut host, 2);
         reserve(&mut host, b"ORD-1", CABIN_ECONOMY);
 
-        RuntimeHostContextExt::update_typed_by_pk::<Flight, _, _, _>(
+        RuntimeHostContextExt::update_typed_by_uk::<Flight, _, _, _>(
             host.inner_mut(),
-            Flight::pk(&flight_id()),
+            Flight::uk(&flight_id()),
             |flight| {
                 flight.set_economy_reserved(0);
             },

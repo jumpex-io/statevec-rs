@@ -15,7 +15,7 @@ mod bank {
     pub mod v1_0 {
         use super::*;
 
-        #[record(kind = 1, record_len = 64, pk(fields = [account_id]))]
+        #[record(kind = 1, record_len = 64, uk(id = 0, fields = [account_id]))]
         pub struct Account {
             #[field(index = 1, immutable = true)]
             pub account_id: u64,

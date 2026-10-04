@@ -1,0 +1,5 @@
+error: expected boolean literal
+ --> tests/compile_fail/event/inline_response_non_bool.rs:5:37
+  |
+5 | #[event(kind = 1, inline_response = "yes")]
+  |                                     ^^^^^

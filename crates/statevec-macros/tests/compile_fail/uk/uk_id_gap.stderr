@@ -1,0 +1,12 @@
+error: uk ids must be contiguous from 0; missing id 1
+ --> tests/compile_fail/uk/uk_id_gap.rs:3:1
+  |
+3 | / #[record(
+4 | |     kind = 1,
+5 | |     record_len = 64,
+6 | |     uk(id = 0, name = "by_a", fields = [a]),
+7 | |     uk(id = 2, name = "by_b", fields = [b])
+8 | | )]
+  | |__^
+  |
+  = note: this error originates in the attribute macro `record` (in Nightly builds, run with -Z macro-backtrace for more info)

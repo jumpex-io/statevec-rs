@@ -1,0 +1,7 @@
+error: uk id 3 is out of range; valid range is [0, 3)
+ --> tests/compile_fail/uk/uk_id_out_of_range.rs:3:1
+  |
+3 | #[record(kind = 1, record_len = 64, uk(id = 3, fields = [a]))]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `record` (in Nightly builds, run with -Z macro-backtrace for more info)

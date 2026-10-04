@@ -1,0 +1,5 @@
+error: kind must be in [1, 61439]
+ --> tests/compile_fail/command/kind_61440.rs:6:18
+  |
+6 | #[command(kind = 61440)]
+  |                  ^^^^^

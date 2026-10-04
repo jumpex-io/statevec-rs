@@ -1,0 +1,18 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/record/decimal_wrong_scale.rs:16:24
+   |
+16 |     builder.set_amount(Decimal::<2>::from_mantissa(123));
+   |             ---------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `6`, found `2`
+   |             |
+   |             arguments to this method are incorrect
+   |
+   = note: expected struct `statevec_model::Decimal<6>`
+              found struct `statevec_model::Decimal<2>`
+note: method defined here
+  --> tests/compile_fail/record/decimal_wrong_scale.rs:10:9
+   |
+ 7 | #[record(kind = 1, record_len = 64)]
+   | ------------------------------------
+...
+10 |     pub amount: Decimal<6>,
+   |         ^^^^^^

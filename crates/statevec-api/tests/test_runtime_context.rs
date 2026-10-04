@@ -4,19 +4,17 @@
 use std::collections::BTreeMap;
 
 use statevec_api::{
-    RecordKey, RuntimeBytesRef, RuntimeCallStatus, RuntimeCommandEnvelope, RuntimeCommandView,
-    RuntimeErrorBuf, RuntimeErrorPhase, RuntimeHostContext, RuntimeHostContextExt,
-    RuntimeHostError, RuntimePlugin, RuntimePluginError, RuntimePluginFactory,
-    RuntimePluginLoadError, RuntimePluginUnloadError, RuntimeReadContextV1, runtime_error_kind,
+    RecordKey, RuntimeBytesRef, RuntimeCallStatus, RuntimeCommandEnvelope, RuntimeCommandView, RuntimeErrorBuf,
+    RuntimeErrorPhase, RuntimeHostContext, RuntimeHostContextExt, RuntimeHostError, RuntimePlugin, RuntimePluginError,
+    RuntimePluginFactory, RuntimePluginLoadError, RuntimePluginUnloadError, RuntimeReadContextV1, runtime_error_kind,
     runtime_error_message, runtime_plugin_create_runtime_v1, runtime_plugin_destroy_runtime_v1,
-    runtime_plugin_on_unload_v1, runtime_plugin_run_tx_v1,
-    runtime_plugin_validate_biz_invariants_v1,
+    runtime_plugin_on_unload_v1, runtime_plugin_run_tx_v1, runtime_plugin_validate_biz_invariants_v1,
 };
-use statevec_model::event::GeneratedEventAccess;
-use statevec_model::record::PkCodec;
+use statevec_model::event::{EventKind, GeneratedEventAccess};
+use statevec_model::record::{RecordKind, UkCodec};
 use statevec_model::{
-    EventDefinition, EventSchema, FieldDefinition, FieldType, GeneratedRecordAccess, PkBytes,
-    RecordDefinition, RecordSchema, SchemaRegistry, Version,
+    EventDefinition, EventSchema, FieldDefinition, FieldType, GeneratedRecordAccess, KeyBytes, RecordDefinition,
+    RecordSchema, SchemaRegistry, Version,
 };
 
 pub struct Asset;
@@ -34,10 +32,10 @@ pub struct UpdateAssetBuilder<'a> {
 }
 
 impl Asset {
-    fn pk(asset_id: u64) -> PkBytes {
-        let mut pk = PkBytes::new();
-        pk.extend_from_slice(&asset_id.to_be_bytes());
-        pk
+    fn uk(asset_id: u64) -> KeyBytes {
+        let mut uk = KeyBytes::new();
+        uk.extend_from_slice(&asset_id.to_be_bytes());
+        uk
     }
 }
 
@@ -73,7 +71,7 @@ impl UpdateAssetBuilder<'_> {
 }
 
 impl RecordSchema for Asset {
-    const KIND: u8 = 1;
+    const KIND: RecordKind = 1;
     const RECORD_LEN: usize = 64;
     const FIELD_COUNT: usize = 2;
 
@@ -87,6 +85,8 @@ impl RecordSchema for Asset {
                 len: 8,
                 rust_type_name: "u64",
                 enum_type_name: None,
+                decimal_scale: None,
+                semantic: None,
                 immutable: true,
             },
             FieldDefinition {
@@ -97,6 +97,8 @@ impl RecordSchema for Asset {
                 len: 1,
                 rust_type_name: "u8",
                 enum_type_name: None,
+                decimal_scale: None,
+                semantic: None,
                 immutable: false,
             },
         ];
@@ -104,24 +106,27 @@ impl RecordSchema for Asset {
         static DEF: RecordDefinition = RecordDefinition {
             kind: Asset::KIND,
             name: "Asset",
-            is_pk_idx: true,
-            support_range_scan: false,
             data_size: 64,
             version: 1,
-            pk_encode: Some(Asset::encode_pk_from_bytes),
+            unique_keys: &[statevec_model::UniqueKeyDefinition {
+                id: 0,
+                name: "",
+                encode: Some(Asset::encode_uk_from_bytes),
+                fields: &PK_FIELDS,
+            }],
+            canonical_indexes: &[],
             fields: &FIELDS,
             reserved_fields: &[],
-            pk_fields: &PK_FIELDS,
         };
         &DEF
     }
 }
 
-impl PkCodec for Asset {
-    fn encode_pk_from_bytes(data: &[u8]) -> PkBytes {
+impl UkCodec for Asset {
+    fn encode_uk_from_bytes(data: &[u8]) -> KeyBytes {
         let mut bytes = [0u8; 8];
         bytes.copy_from_slice(&data[0..8]);
-        Asset::pk(u64::from_le_bytes(bytes))
+        Asset::uk(u64::from_le_bytes(bytes))
     }
 }
 
@@ -175,15 +180,12 @@ impl AssetCreatedBuilder {
     }
 
     fn build(self) -> Vec<u8> {
-        self.asset_id
-            .expect("asset_id must be set")
-            .to_le_bytes()
-            .to_vec()
+        self.asset_id.expect("asset_id must be set").to_le_bytes().to_vec()
     }
 }
 
 impl EventSchema for AssetCreated {
-    const KIND: u8 = 1;
+    const KIND: EventKind = 1;
 
     fn definition() -> &'static EventDefinition {
         static DEF: EventDefinition = EventDefinition {
@@ -191,6 +193,7 @@ impl EventSchema for AssetCreated {
             name: "AssetCreated",
             version: 1,
             fields: &[],
+            inline_response: false,
         };
         &DEF
     }
@@ -210,47 +213,30 @@ impl GeneratedEventAccess for AssetCreated {
 }
 
 fn registry() -> SchemaRegistry {
-    SchemaRegistry::new(
-        Version::new(1, 0),
-        &[*Asset::definition()],
-        &[],
-        &[*AssetCreated::definition()],
-        &[],
-    )
+    SchemaRegistry::new(Version::new(1, 0), &[*Asset::definition()], &[], &[*AssetCreated::definition()], &[])
 }
 
 #[derive(Default)]
 struct MockRuntimeHostContext {
     next_sys_id: u64,
-    records: BTreeMap<(u8, u64), Vec<u8>>,
-    events: Vec<(u8, Vec<u8>)>,
+    records: BTreeMap<(RecordKind, u64), Vec<u8>>,
+    events: Vec<(EventKind, Vec<u8>)>,
 }
 
 impl MockRuntimeHostContext {
     fn new() -> Self {
-        Self {
-            next_sys_id: 1,
-            ..Self::default()
-        }
+        Self { next_sys_id: 1, ..Self::default() }
     }
 
-    fn asset_record_mut_by_pk(&mut self, pk: &[u8]) -> Option<&mut Vec<u8>> {
+    fn asset_record_mut_by_uk(&mut self, uk: &[u8]) -> Option<&mut Vec<u8>> {
         self.records.iter_mut().find_map(|((kind, _), data)| {
-            if *kind == Asset::KIND && Asset::encode_pk_from_bytes(data).as_slice() == pk {
-                Some(data)
-            } else {
-                None
-            }
+            if *kind == Asset::KIND && Asset::encode_uk_from_bytes(data).as_slice() == uk { Some(data) } else { None }
         })
     }
 
-    fn asset_record_by_pk(&self, pk: &[u8]) -> Option<&Vec<u8>> {
+    fn asset_record_by_uk(&self, uk: &[u8]) -> Option<&Vec<u8>> {
         self.records.iter().find_map(|((kind, _), data)| {
-            if *kind == Asset::KIND && Asset::encode_pk_from_bytes(data).as_slice() == pk {
-                Some(data)
-            } else {
-                None
-            }
+            if *kind == Asset::KIND && Asset::encode_uk_from_bytes(data).as_slice() == uk { Some(data) } else { None }
         })
     }
 }
@@ -258,7 +244,7 @@ impl MockRuntimeHostContext {
 impl RuntimeHostContext for MockRuntimeHostContext {
     fn with_read_typed_raw(
         &self,
-        record_kind: u8,
+        record_kind: RecordKind,
         sys_id: u64,
         f: &mut dyn FnMut(&[u8]),
     ) -> Result<bool, RuntimeHostError> {
@@ -269,16 +255,16 @@ impl RuntimeHostContext for MockRuntimeHostContext {
         Ok(true)
     }
 
-    fn with_read_typed_by_pk_raw(
+    fn with_read_typed_by_uk_raw(
         &self,
-        record_kind: u8,
-        pk: &[u8],
+        record_kind: RecordKind,
+        uk: &[u8],
         f: &mut dyn FnMut(&[u8]),
     ) -> Result<bool, RuntimeHostError> {
         if record_kind != Asset::KIND {
             return Err(RuntimeHostError::new("unexpected record kind"));
         }
-        let Some(data) = self.asset_record_by_pk(pk) else {
+        let Some(data) = self.asset_record_by_uk(uk) else {
             return Ok(false);
         };
         f(data);
@@ -287,7 +273,7 @@ impl RuntimeHostContext for MockRuntimeHostContext {
 
     fn create_typed_raw(
         &mut self,
-        record_kind: u8,
+        record_kind: RecordKind,
         init: &mut dyn FnMut(&mut [u8]),
     ) -> Result<RecordKey, RuntimeHostError> {
         if record_kind != Asset::KIND {
@@ -301,63 +287,57 @@ impl RuntimeHostContext for MockRuntimeHostContext {
         init(&mut data);
         self.records.insert((record_kind, sys_id), data);
 
-        Ok(RecordKey {
-            kind: record_kind,
-            sys_id,
-        })
+        Ok(RecordKey { kind: record_kind, sys_id })
     }
 
-    fn update_typed_by_pk_raw(
+    fn update_typed_by_uk_raw(
         &mut self,
-        record_kind: u8,
-        pk: &[u8],
+        record_kind: RecordKind,
+        uk: &[u8],
         f: &mut dyn FnMut(&mut [u8]),
     ) -> Result<bool, RuntimeHostError> {
         if record_kind != Asset::KIND {
             return Err(RuntimeHostError::new("unexpected record kind"));
         }
-        let Some(data) = self.asset_record_mut_by_pk(pk) else {
+        let Some(data) = self.asset_record_mut_by_uk(uk) else {
             return Ok(false);
         };
         f(data);
         Ok(true)
     }
 
-    fn delete_by_pk_raw(&mut self, record_kind: u8, pk: &[u8]) -> Result<bool, RuntimeHostError> {
-        let Some((&key, _)) = self.records.iter().find(|((kind, _), data)| {
-            *kind == record_kind && Asset::encode_pk_from_bytes(data).as_slice() == pk
-        }) else {
+    fn delete_by_uk_raw(&mut self, record_kind: RecordKind, uk: &[u8]) -> Result<bool, RuntimeHostError> {
+        let Some((&key, _)) = self
+            .records
+            .iter()
+            .find(|((kind, _), data)| *kind == record_kind && Asset::encode_uk_from_bytes(data).as_slice() == uk)
+        else {
             return Ok(false);
         };
         self.records.remove(&key);
         Ok(true)
     }
 
-    fn emit_typed_event_raw(
-        &mut self,
-        event_kind: u8,
-        payload: &[u8],
-    ) -> Result<(), RuntimeHostError> {
+    fn emit_typed_event_raw(&mut self, event_kind: EventKind, payload: &[u8]) -> Result<(), RuntimeHostError> {
         self.events.push((event_kind, payload.to_vec()));
         Ok(())
     }
 
-    fn for_each_record_key_raw(
-        &self,
-        kind: u8,
-        f: &mut dyn FnMut(RecordKey),
-    ) -> Result<(), RuntimeHostError> {
-        for (record_kind, sys_id) in self
-            .records
-            .keys()
-            .filter(|(record_kind, _)| *record_kind == kind)
-        {
-            f(RecordKey {
-                kind: *record_kind,
-                sys_id: *sys_id,
-            });
+    fn for_each_record_key_raw(&self, kind: RecordKind, f: &mut dyn FnMut(RecordKey)) -> Result<(), RuntimeHostError> {
+        for (record_kind, sys_id) in self.records.keys().filter(|(record_kind, _)| *record_kind == kind) {
+            f(RecordKey { kind: *record_kind, sys_id: *sys_id });
         }
         Ok(())
+    }
+
+    fn count_index_prefix_capped_raw(
+        &self,
+        _record_kind: RecordKind,
+        _index_id: u8,
+        _prefix: &[u8],
+        _cap: usize,
+    ) -> Result<statevec_api::CanonicalIndexCount, RuntimeHostError> {
+        Err(RuntimeHostError::new("mock does not support canonical indexes"))
     }
 }
 
@@ -372,38 +352,24 @@ fn runtime_tx_context_is_decoupled_from_engine_tx_access() -> Result<(), Runtime
             builder.init_asset_id(7);
             builder.set_precision(8);
         })?;
-        assert_eq!(
-            created_key,
-            RecordKey {
-                kind: Asset::KIND,
-                sys_id: 1
-            }
-        );
+        assert_eq!(created_key, RecordKey { kind: Asset::KIND, sys_id: 1 });
 
-        let precision = RuntimeHostContextExt::with_read_typed::<Asset, _, _>(
-            tx,
-            created_key.sys_id,
-            |asset| asset.precision(),
-        )?
-        .expect("record missing after create");
+        let precision =
+            RuntimeHostContextExt::with_read_typed::<Asset, _, _>(tx, created_key.sys_id, |asset| asset.precision())?
+                .expect("record missing after create");
         assert_eq!(precision, 8);
 
-        let precision_by_pk = RuntimeHostContextExt::with_read_typed_by_pk::<Asset, _, _, _>(
-            tx,
-            Asset::pk(7),
-            |asset| asset.precision(),
-        )?
-        .expect("record missing by pk");
-        assert_eq!(precision_by_pk, 8);
+        let precision_by_uk =
+            RuntimeHostContextExt::with_read_typed_by_uk::<Asset, _, _, _>(tx, Asset::uk(7), |asset| {
+                asset.precision()
+            })?
+            .expect("record missing by uk");
+        assert_eq!(precision_by_uk, 8);
 
-        let updated = RuntimeHostContextExt::update_typed_by_pk::<Asset, _, _, _>(
-            tx,
-            Asset::pk(7),
-            |builder| {
-                builder.set_precision(9);
-                9u8
-            },
-        )?
+        let updated = RuntimeHostContextExt::update_typed_by_uk::<Asset, _, _, _>(tx, Asset::uk(7), |builder| {
+            builder.set_precision(9);
+            9u8
+        })?
         .expect("update should find record");
         assert_eq!(updated, 9);
 
@@ -411,12 +377,10 @@ fn runtime_tx_context_is_decoupled_from_engine_tx_access() -> Result<(), Runtime
         RuntimeHostContextExt::for_each_record_key(tx, Asset::KIND, &mut |key| listed.push(key))?;
         assert_eq!(listed, vec![created_key]);
 
-        let payload = <AssetCreated as GeneratedEventAccess>::builder()
-            .set_asset_id(7)
-            .build();
+        let payload = <AssetCreated as GeneratedEventAccess>::builder().set_asset_id(7).build();
         RuntimeHostContextExt::emit_typed_event::<AssetCreated>(tx, payload)?;
 
-        let deleted = RuntimeHostContextExt::delete_by_pk::<Asset, _>(tx, Asset::pk(7))?;
+        let deleted = RuntimeHostContextExt::delete_by_uk::<Asset, _>(tx, Asset::uk(7))?;
         assert!(deleted);
     }
 
@@ -440,23 +404,15 @@ fn runtime_host_context_ext_typed_reads_return_none_when_missing() -> Result<(),
     })?;
 
     let precision =
-        RuntimeHostContextExt::with_read_typed::<Asset, _, _>(tx, created_key.sys_id, |asset| {
-            asset.precision()
-        })?;
+        RuntimeHostContextExt::with_read_typed::<Asset, _, _>(tx, created_key.sys_id, |asset| asset.precision())?;
     assert_eq!(precision, Some(3));
 
-    let precision_by_pk = RuntimeHostContextExt::with_read_typed_by_pk::<Asset, _, _, _>(
-        tx,
-        Asset::pk(9),
-        |asset| asset.precision(),
-    )?;
-    assert_eq!(precision_by_pk, Some(3));
+    let precision_by_uk =
+        RuntimeHostContextExt::with_read_typed_by_uk::<Asset, _, _, _>(tx, Asset::uk(9), |asset| asset.precision())?;
+    assert_eq!(precision_by_uk, Some(3));
 
-    let missing = RuntimeHostContextExt::with_read_typed::<Asset, _, _>(
-        tx,
-        created_key.sys_id + 1,
-        |asset| asset.precision(),
-    )?;
+    let missing =
+        RuntimeHostContextExt::with_read_typed::<Asset, _, _>(tx, created_key.sys_id + 1, |asset| asset.precision())?;
     assert_eq!(missing, None);
 
     Ok(())
@@ -486,21 +442,12 @@ impl RuntimePlugin for TestPlugin {
         Ok(())
     }
 
-    fn validate_biz_invariants(
-        &self,
-        _ctx: &dyn statevec_api::BizInvariantReadContext,
-    ) -> Result<(), String> {
+    fn validate_biz_invariants(&self, _ctx: &dyn statevec_api::BizInvariantReadContext) -> Result<(), String> {
         Ok(())
     }
 
     fn on_unload(&mut self) -> Result<(), RuntimePluginUnloadError> {
-        if self.unload_error {
-            Err(RuntimePluginUnloadError::new(
-                "unload rejected by test plugin",
-            ))
-        } else {
-            Ok(())
-        }
+        if self.unload_error { Err(RuntimePluginUnloadError::new("unload rejected by test plugin")) } else { Ok(()) }
     }
 }
 
@@ -513,16 +460,11 @@ impl RuntimePluginFactory for TestFactory {
         registry()
     }
 
-    fn create(
-        &self,
-        plugin_config_text: &str,
-    ) -> Result<Box<dyn RuntimePlugin>, RuntimePluginLoadError> {
+    fn create(&self, plugin_config_text: &str) -> Result<Box<dyn RuntimePlugin>, RuntimePluginLoadError> {
         match plugin_config_text {
             "bad-create" => Err(RuntimePluginLoadError::new("factory rejected config")),
             "unload-error" => Ok(Box::new(TestPlugin { unload_error: true })),
-            _ => Ok(Box::new(TestPlugin {
-                unload_error: false,
-            })),
+            _ => Ok(Box::new(TestPlugin { unload_error: false })),
         }
     }
 }
@@ -532,11 +474,7 @@ fn test_factory() -> Box<dyn RuntimePluginFactory> {
 }
 
 fn empty_error() -> RuntimeErrorBuf {
-    RuntimeErrorBuf::new(
-        RuntimeErrorPhase::Load,
-        runtime_error_kind::HOST_INTERNAL_ERROR,
-        RuntimeBytesRef::empty(),
-    )
+    RuntimeErrorBuf::new(RuntimeErrorPhase::Load, runtime_error_kind::HOST_INTERNAL_ERROR, RuntimeBytesRef::empty())
 }
 
 #[test]
@@ -565,10 +503,7 @@ fn runtime_plugin_create_runtime_v1_rejects_non_utf8_config() {
     let status = unsafe {
         runtime_plugin_create_runtime_v1(
             test_factory,
-            RuntimeBytesRef {
-                ptr: invalid.as_ptr(),
-                len: invalid.len(),
-            },
+            RuntimeBytesRef { ptr: invalid.as_ptr(), len: invalid.len() },
             &mut runtime,
             &mut error,
         )
@@ -607,10 +542,7 @@ fn runtime_plugin_run_tx_v1_rejects_null_runtime() {
     let status = unsafe {
         runtime_plugin_run_tx_v1(
             std::ptr::null_mut(),
-            statevec_api::RuntimeHostContextV1 {
-                ctx_ptr: std::ptr::null_mut(),
-                vtable: std::ptr::null(),
-            },
+            statevec_api::RuntimeHostContextV1 { ctx_ptr: std::ptr::null_mut(), vtable: std::ptr::null() },
             RuntimeCommandView {
                 command_kind: 1,
                 ext_seq: 17,
@@ -633,10 +565,7 @@ fn runtime_plugin_validate_biz_invariants_v1_rejects_null_runtime() {
     let status = unsafe {
         runtime_plugin_validate_biz_invariants_v1(
             std::ptr::null_mut(),
-            RuntimeReadContextV1 {
-                ctx_ptr: std::ptr::null_mut(),
-                vtable: std::ptr::null(),
-            },
+            RuntimeReadContextV1 { ctx_ptr: std::ptr::null_mut(), vtable: std::ptr::null() },
             &mut error,
         )
     };

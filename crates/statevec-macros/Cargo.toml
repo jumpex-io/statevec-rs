@@ -1,6 +1,6 @@
 [package]
 name = "statevec-macros"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.91"
 description = "Procedural macros for schema-first StateVec domain definitions."
@@ -19,6 +19,7 @@ syn.workspace = true
 
 [dev-dependencies]
 statevec_api.workspace = true
+test-case = "3.3.1"
 trybuild.workspace = true
 
 [lib]

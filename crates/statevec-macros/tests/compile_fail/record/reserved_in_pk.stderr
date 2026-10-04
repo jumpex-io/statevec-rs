@@ -1,5 +1,0 @@
-error: pk field '_reserved' cannot be reserved
- --> tests/compile_fail/record/reserved_in_pk.rs:6:50
-  |
-6 | #[record(kind = 1, record_len = 64, pk(fields = [_reserved]))]
-  |                                                  ^^^^^^^^^

@@ -19,17 +19,19 @@ categories = ["data-structures", "development-tools"]
 
 [workspace.dependencies]
 # Internal
-statevec = { version = "0.1.0", path = "crates/statevec" }
-statevec_model = { package = "statevec-model", version = "0.1.0", path = "crates/statevec-model" }
-statevec_macros = { package = "statevec-macros", version = "0.1.0", path = "crates/statevec-macros" }
-statevec_api = { package = "statevec-api", version = "0.1.0", path = "crates/statevec-api" }
-statevec_test = { package = "statevec-test", version = "0.1.0", path = "crates/statevec-test" }
+statevec = { version = "0.2.0", path = "crates/statevec" }
+statevec_model = { package = "statevec-model", version = "0.2.0", path = "crates/statevec-model" }
+statevec_macros = { package = "statevec-macros", version = "0.2.0", path = "crates/statevec-macros" }
+statevec_api = { package = "statevec-api", version = "0.2.0", path = "crates/statevec-api" }
+statevec_test = { package = "statevec-test", version = "0.2.0", path = "crates/statevec-test" }
 
 # External
 proc-macro2 = "1"
 quote = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 smallvec = "1"
 syn = { version = "2.0.117", features = ["full"] }
+test-case = "3.3.1"
 trybuild = "1"

@@ -1,5 +1,0 @@
-error: pk field 'missing_field' not found
- --> tests/compile_fail/pk/pk_field_not_found.rs:6:50
-  |
-6 | #[record(kind = 1, record_len = 64, pk(fields = [missing_field]))]
-  |                                                  ^^^^^^^^^^^^^

@@ -1,6 +1,6 @@
 [package]
 name = "statevec-model"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.91"
 description = "Core schema, record, command, event, IDL, and registry types for StateVec."
@@ -11,6 +11,10 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 smallvec.workspace = true
+
+[dev-dependencies]
+test-case = "3.3.1"

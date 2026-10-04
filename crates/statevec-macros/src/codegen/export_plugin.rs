@@ -70,10 +70,10 @@ pub(crate) fn expand_export_runtime_plugin(factory_expr: syn::Expr) -> proc_macr
 
         // V1 entry
         #[unsafe(no_mangle)]
-        pub extern "C" fn statevec_runtime_plugin_entry_v1(
-        ) -> statevec_api::RuntimePluginApiV1 {
-            statevec_api::RuntimePluginApiV1 {
-                abi_version: statevec_api::RUNTIME_PLUGIN_ABI_VERSION_V1,
+        pub extern "C" fn statevec_runtime_plugin_entry_v2(
+        ) -> statevec_api::RuntimePluginApiV2 {
+            statevec_api::RuntimePluginApiV2 {
+                abi_version: statevec_api::RUNTIME_PLUGIN_ABI_VERSION_V2,
                 plugin_name: __statevec_runtime_plugin_name_v1,
                 schema_bytes: __statevec_runtime_plugin_schema_bytes_v1,
                 create_runtime: __statevec_runtime_plugin_create_runtime_v1,

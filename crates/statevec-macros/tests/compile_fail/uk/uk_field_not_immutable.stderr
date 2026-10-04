@@ -1,0 +1,5 @@
+error: uk field 'a' must be declared #[field(immutable)]
+ --> tests/compile_fail/uk/uk_field_not_immutable.rs:6:58
+  |
+6 | #[record(kind = 1, record_len = 64, uk(id = 0, fields = [a]))]
+  |                                                          ^

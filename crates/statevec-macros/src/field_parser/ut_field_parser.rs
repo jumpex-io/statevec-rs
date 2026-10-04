@@ -6,7 +6,7 @@ use quote::quote;
 
 #[test]
 fn parse_args_do_not_leak_state_after_error() {
-    let err = parse_record_args(quote!(kind = 7, pk(unsupported = 1)))
+    let err = parse_record_args(quote!(kind = 7, uk(unsupported = 1)))
         .err()
         .expect("expected parse error");
     assert!(!err.to_string().is_empty());
@@ -15,7 +15,7 @@ fn parse_args_do_not_leak_state_after_error() {
     assert_eq!(args.kind, 0);
     assert_eq!(args.record_len, 16);
     assert_eq!(args.version, 1);
-    assert!(args.pk_fields.is_empty());
+    assert!(args.unique_keys.is_empty());
 
     let err = parse_payload_args(quote!(kind = 9, __schema_module_version =))
         .err()
@@ -25,8 +25,5 @@ fn parse_args_do_not_leak_state_after_error() {
     let err = parse_payload_args(quote!(__schema_module_version = 2))
         .err()
         .expect("expected parse error");
-    assert!(
-        err.to_string()
-            .contains("missing required argument: kind = N")
-    );
+    assert!(err.to_string().contains("missing required argument: kind = N"));
 }

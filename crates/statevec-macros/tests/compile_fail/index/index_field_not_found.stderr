@@ -1,0 +1,5 @@
+error: index field 'missing' not found
+ --> tests/compile_fail/index/index_field_not_found.rs:3:82
+  |
+3 | #[record(kind = 1, record_len = 64, index(id = 0, name = "by_missing", fields = [missing]))]
+  |                                                                                  ^^^^^^^

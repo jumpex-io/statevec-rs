@@ -1,0 +1,5 @@
+error: uk(...) requires id = N
+ --> tests/compile_fail/uk/uk_missing_id.rs:3:37
+  |
+3 | #[record(kind = 1, record_len = 64, uk(fields = [a]))]
+  |                                     ^^^^^^^^^^^^^^^^

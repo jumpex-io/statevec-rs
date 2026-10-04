@@ -5,4 +5,3 @@ idea/
 target
 /coverage
 /run
-demo/bank/deploy/.env.eval

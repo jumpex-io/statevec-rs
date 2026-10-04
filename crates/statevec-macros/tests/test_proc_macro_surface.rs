@@ -9,7 +9,7 @@ fn syn_can_parse_schema_module_item_mod() {
         pub mod v1_0 {
             use super::*;
 
-            #[record(kind = 1, record_len = 64, pk(fields = [asset_id]))]
+            #[record(kind = 1, record_len = 64, uk(id = 0, fields = [asset_id]))]
             pub struct Asset {
                 #[field(index = 1, immutable)]
                 pub asset_id: u64,

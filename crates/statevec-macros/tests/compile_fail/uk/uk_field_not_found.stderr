@@ -1,0 +1,5 @@
+error: uk field 'missing_field' not found
+ --> tests/compile_fail/uk/uk_field_not_found.rs:6:58
+  |
+6 | #[record(kind = 1, record_len = 64, uk(id = 0, fields = [missing_field]))]
+  |                                                          ^^^^^^^^^^^^^
