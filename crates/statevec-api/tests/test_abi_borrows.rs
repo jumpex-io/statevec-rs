@@ -10,6 +10,19 @@ use statevec_api::{
 };
 
 #[test]
+fn legacy_host_time_refusal_never_dereferences_the_abi_vtable() {
+    use statevec_api::{ReferenceTimeUnavailable, RuntimeHostContext, RuntimeHostContextV1,
+        RuntimeHostContextV1Adapter, TypedTxContext};
+    let mut raw = RuntimeHostContextV1 { ctx_ptr: std::ptr::null_mut(), vtable: std::ptr::null() };
+    // A null vtable is explicitly allowed by from_raw. Time is not in V1 and
+    // must refuse locally, without invoking any foreign callback.
+    let adapter = unsafe { RuntimeHostContextV1Adapter::from_raw(&mut raw) };
+    assert_eq!(adapter.ref_tx_time_ns_raw(), Err(ReferenceTimeUnavailable));
+    let typed: &dyn RuntimeHostContext = &adapter;
+    assert_eq!(typed.ref_tx_time_ns(), Err(ReferenceTimeUnavailable));
+}
+
+#[test]
 fn error_output_initializes_uninitialized_storage_and_clear_resets_it() {
     let mut storage = MaybeUninit::<RuntimeErrorBuf>::uninit();
 

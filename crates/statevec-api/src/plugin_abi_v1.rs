@@ -936,6 +936,11 @@ impl<'call> RuntimeHostContextV1Adapter<'call> {
 }
 
 impl RuntimeHostContext for RuntimeHostContextV1Adapter<'_> {
+    fn ref_tx_time_ns_raw(&self) -> Result<u64, crate::ReferenceTimeUnavailable> {
+        // V1 has no time slot. Do not read beyond its vtable or invent a time.
+        Err(crate::ReferenceTimeUnavailable)
+    }
+
     fn with_read_typed_raw(
         &self,
         record_kind: RecordKind,

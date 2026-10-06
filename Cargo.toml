@@ -22,15 +22,15 @@ categories = ["data-structures", "development-tools"]
 
 [workspace.dependencies]
 # Internal
-statevec = { version = "0.2.0", path = "crates/statevec" }
-statevec_model = { package = "statevec-model", version = "0.2.0", path = "crates/statevec-model" }
-statevec_macros = { package = "statevec-macros", version = "0.2.0", path = "crates/statevec-macros" }
-statevec_api = { package = "statevec-api", version = "0.2.0", path = "crates/statevec-api" }
-statevec_test = { package = "statevec-test", version = "0.2.0", path = "crates/statevec-test" }
+statevec = { version = "0.2.1", path = "crates/statevec" }
+statevec_model = { package = "statevec-model", version = "0.2.1", path = "crates/statevec-model" }
+statevec_macros = { package = "statevec-macros", version = "0.2.1", path = "crates/statevec-macros" }
+statevec_api = { package = "statevec-api", version = "0.2.1", path = "crates/statevec-api" }
+statevec_test = { package = "statevec-test", version = "0.2.1", path = "crates/statevec-test" }
 
-statevec_frame = { package = "statevec-frame", version = "0.2.0", path = "crates/statevec-frame" }
-ingress_api = { package = "ingress-api", version = "0.2.0", path = "crates/ingress-api" }
-statevec_ingress_client = { package = "statevec-ingress-client", version = "0.2.0", path = "crates/statevec-ingress-client" }
+statevec_frame = { package = "statevec-frame", version = "0.2.1", path = "crates/statevec-frame" }
+ingress_api = { package = "ingress-api", version = "0.2.1", path = "crates/ingress-api" }
+statevec_ingress_client = { package = "statevec-ingress-client", version = "0.2.1", path = "crates/statevec-ingress-client" }
 
 # External
 proc-macro2 = "1"

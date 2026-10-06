@@ -1,6 +1,6 @@
 [package]
 name = "statevec-test"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.91"
 description = "Simplified in-memory execution engine for StateVec business tests."
@@ -15,4 +15,6 @@ statevec_api.workspace = true
 statevec_model.workspace = true
 
 [dev-dependencies]
+statevec.workspace = true
 statevec_macros.workspace = true
+test-case.workspace = true

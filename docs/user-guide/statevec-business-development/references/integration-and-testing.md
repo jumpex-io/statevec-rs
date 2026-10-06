@@ -102,9 +102,34 @@ Use generated builders and handle their `Result`. Then construct a
 `statevec::Command` with its kind, external sequence, client-provided reference
 time and payload.
 
-The local test supplies time explicitly. The production platform separately
-binds its execution reference time into replicated input. Keep business time
-inputs explicit; do not read a local clock inside a handler.
+External command time is in microseconds. The host separately supplies the
+transaction reference time in nanoseconds, read through `tx.ref_tx_time_ns()`.
+In local tests, pass that input explicitly:
+
+```rust
+use statevec::prelude::*;
+use statevec_test::TestHost;
+
+let mut engine = TestHost::new(SchemaRegistry::with_records(Version::new(1, 0), &[]));
+assert_eq!(engine.ref_tx_time_ns(), Err(ReferenceTimeUnavailable));
+assert_eq!(engine.transaction_at(0, |tx| tx.ref_tx_time_ns()), Ok(0));
+assert_eq!(engine.transaction_at(90, |tx| tx.ref_tx_time_ns()), Ok(90));
+assert_eq!(engine.transaction_at(5, |tx| tx.ref_tx_time_ns()), Ok(5));
+assert_eq!(engine.ref_tx_time_ns(), Err(ReferenceTimeUnavailable));
+```
+
+The [executable context tests](../../../../crates/statevec-test/tests/reference_time.rs)
+also drive generated handlers and check rollback. `transaction_at(time_ns, f)`
+retains your typed error. `PluginTestHost::run_at::<CommandType>(time_ns, payload)`
+sets the same input while calling the bound plugin. Configure the independent
+external time with `with_ref_ext_time_us(time_us)`.
+
+Plain `transaction` and `run` provide no transaction time. This also applies to
+an untimed transaction nested inside a timed one. A nested timed call uses its
+own supplied value. Every call restores the outer value on success, error or
+panic; it never leaves a time for the next call to inherit. The production
+platform binds time into replicated input; business code must not read a local
+clock.
 
 The flight-booking command helper prints `kind:payload_hex` for inspecting
 generated payloads. Submission to a production cluster uses the platform
@@ -124,6 +149,25 @@ assembly using internal engine or Raft crates for local tests.
 Plugin ABI types and export macros are available for integration development.
 Dynamic loading and online runtime upgrades require the platform's separate
 qualification and release support.
+
+## Updating from SDK 0.2.0 to 0.2.1
+
+This development update adds required trait methods and therefore needs source
+changes in custom context implementations, despite the patch version:
+
+- Implement `ref_tx_time_ns_raw(&self) -> Result<u64, ReferenceTimeUnavailable>`
+  for `TxReadContext` and `RuntimeHostContext`.
+- A direct `TypedTxContext` implementation must implement `ref_tx_time_ns` with
+  the same return type. Existing blanket bridges forward to the raw method.
+- Return the call's explicit input, or `Err(ReferenceTimeUnavailable)` if the
+  context cannot supply it. The method has no default implementation.
+- Replace `PluginTestHost::with_ref_time` with `with_ref_ext_time_us`. Use
+  `run_at`/`transaction_at` when a handler also requires transaction time.
+
+The [custom host example](../../../../crates/statevec-api/tests/test_runtime_context.rs)
+implements explicit unavailability. The plugin ABI version and layout are
+unchanged. The package version alone does not authorize a production execution
+revision or an existing-data upgrade.
 
 ## Schema and behavior changes
 

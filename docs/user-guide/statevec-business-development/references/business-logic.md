@@ -99,6 +99,37 @@ classification.
 
 ## Transaction access
 
+### Transaction reference time
+
+Handlers read the execution time supplied by the host:
+
+```rust
+use statevec::{ReferenceTimeUnavailable, TypedTxContext};
+
+fn execution_time<Tx: TypedTxContext + ?Sized>(tx: &Tx) -> Result<u64, ReferenceTimeUnavailable> {
+    tx.ref_tx_time_ns()
+}
+```
+
+The value is in nanoseconds. Production assigns it before simulation and
+retains it through replication and replay. Zero is valid, and successive values
+may decrease. It is separate from the command's client-supplied
+`ref_ext_time_us`, which is in microseconds.
+
+Propagate `ReferenceTimeUnavailable` as an execution failure, not a business
+refusal. For example, add a `ReferenceTimeUnavailable { source:
+statevec::ReferenceTimeUnavailable }` variant and its `From` conversion to your
+runtime error. Never replace an unavailable value with zero, external time or a
+local clock. Local tests supply it with `transaction_at` or `run_at`, described
+in [integration and testing](integration-and-testing.md#commands-and-time).
+
+The existing plugin ABI has no transaction-time capability. Its Rust host
+adapter returns `ReferenceTimeUnavailable`; using the new SDK does not add a
+field to that ABI. Native transaction candidate before/after queries are
+currently platform-internal and are not exposed through this SDK.
+
+### Records and events
+
 | Call | Use |
 | --- | --- |
 | `with_read_typed_by_uk::<R, _, _, _>(R::uk(..), read)` | Read a record by UK 0 |

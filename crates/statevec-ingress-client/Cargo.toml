@@ -1,6 +1,6 @@
 [package]
 name = "statevec-ingress-client"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.91"
 description = "Bounded StateVec ingress client ownership, custody and driving."
@@ -12,7 +12,7 @@ categories.workspace = true
 
 [dependencies]
 ingress_api.workspace = true
-statevec_frame = { package = "statevec-frame", version = "0.2.0", path = "../statevec-frame" }
+statevec_frame = { package = "statevec-frame", version = "0.2.1", path = "../statevec-frame" }
 socket2.workspace = true
 polling.workspace = true
 libc.workspace = true

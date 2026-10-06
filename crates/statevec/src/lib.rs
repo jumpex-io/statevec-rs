@@ -20,8 +20,8 @@ pub use statevec_model;
 
 pub use statevec_api::{
     BizInvariantReadContext, BusinessRejectCode, CanonicalIndexCount, CommittedStatus, InvariantReadContextExt,
-    RejectedErrorCode, RuntimeApiProbe, RuntimeCommandEnvelope, RuntimeCommandRef, RuntimeHostContext,
-    RuntimeHostContextExt, RuntimeHostError, RuntimePlugin, RuntimePluginError, RuntimePluginFactory,
+    ReferenceTimeUnavailable, RejectedErrorCode, RuntimeApiProbe, RuntimeCommandEnvelope, RuntimeCommandRef,
+    RuntimeHostContext, RuntimeHostContextExt, RuntimeHostError, RuntimePlugin, RuntimePluginError, RuntimePluginFactory,
     RuntimePluginLoadError, RuntimePluginUnloadError, STATEVEC_API_COMPAT_VERSION, STATEVEC_API_VERSION, TxContext,
     TxReadContext, TxSysIdCreateContext, TxUkContext, TxWriteContext, TypedTxContext,
 };
@@ -73,8 +73,8 @@ pub mod prelude {
 
     pub use statevec_api::{
         BizInvariantReadContext, BusinessRejectCode, CanonicalIndexCount, InvariantReadContextExt,
-        RuntimeCommandEnvelope, RuntimeCommandRef, RuntimeHostContext, RuntimeHostContextExt, RuntimeHostError,
-        RuntimePlugin, RuntimePluginError, RuntimePluginFactory, RuntimePluginLoadError, RuntimePluginUnloadError,
+        ReferenceTimeUnavailable, RuntimeCommandEnvelope, RuntimeCommandRef, RuntimeHostContext, RuntimeHostContextExt,
+        RuntimeHostError, RuntimePlugin, RuntimePluginError, RuntimePluginFactory, RuntimePluginLoadError, RuntimePluginUnloadError,
         TxContext, TxReadContext, TxSysIdCreateContext, TxUkContext, TxWriteContext, TypedTxContext,
     };
     pub use statevec_macros::{EnumU8, command, command_dispatch, event, export_runtime_plugin, record, schema_module};

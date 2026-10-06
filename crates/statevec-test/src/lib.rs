@@ -26,7 +26,7 @@ use std::ops::{Deref, DerefMut};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use statevec_api::{
-    BizInvariantReadContext, CanonicalIndexCount, InvariantReadContextExt, RecordKey,
+    BizInvariantReadContext, CanonicalIndexCount, InvariantReadContextExt, RecordKey, ReferenceTimeUnavailable,
     RuntimeCommandRef, RuntimeHostContext, RuntimeHostContextExt, RuntimeHostError, RuntimePlugin,
     RuntimePluginError, TxReadContext, TxSysIdCreateContext, TxUkContext, TxWriteContext,
 };
@@ -76,7 +76,7 @@ pub struct PluginTestHost<P> {
     inner: TestHost,
     plugin: P,
     next_ext_seq: u64,
-    ref_time_us: u64,
+    ref_ext_time_us: u64,
 }
 
 impl<P> PluginTestHost<P>
@@ -85,8 +85,8 @@ where
 {
     /// Sets the reference external time used by subsequent [`run`](Self::run)
     /// calls.
-    pub fn with_ref_time(mut self, ref_time_us: u64) -> Self {
-        self.ref_time_us = ref_time_us;
+    pub fn with_ref_ext_time_us(mut self, ref_ext_time_us: u64) -> Self {
+        self.ref_ext_time_us = ref_ext_time_us;
         self
     }
 
@@ -120,7 +120,8 @@ where
     /// Runs one typed command payload.
     ///
     /// The command kind comes from `C::KIND`, `ext_seq` increments
-    /// automatically, and `ref_time_us` uses the value configured on the host.
+    /// automatically, and the external time uses [`Self::with_ref_ext_time_us`].
+    /// Transaction reference time is unavailable; use [`Self::run_at`] to supply it.
     pub fn run<C>(&mut self, payload: impl AsRef<[u8]>) -> Result<(), RuntimePluginError>
     where
         C: GeneratedCommandAccess,
@@ -128,23 +129,49 @@ where
         let ext_seq = self.next_ext_seq;
         self.next_ext_seq = self.next_ext_seq.checked_add(1)
             .ok_or_else(|| RuntimePluginError::new("test source sequence exhausted"))?;
-        self.run_with_envelope::<C>(ext_seq, self.ref_time_us, payload)
+        self.run_scoped::<C>(ext_seq, self.ref_ext_time_us, None, payload.as_ref())
     }
 
-    /// Runs one typed command payload with explicit envelope fields.
+    /// Runs a typed command with an explicit transaction reference time in
+    /// nanoseconds, independent of the envelope's external time in microseconds.
+    pub fn run_at<C>(&mut self, ref_tx_time_ns: u64, payload: impl AsRef<[u8]>) -> Result<(), RuntimePluginError>
+    where
+        C: GeneratedCommandAccess,
+    {
+        let ext_seq = self.next_ext_seq;
+        self.next_ext_seq = self.next_ext_seq.checked_add(1)
+            .ok_or_else(|| RuntimePluginError::new("test source sequence exhausted"))?;
+        self.run_scoped::<C>(ext_seq, self.ref_ext_time_us, Some(ref_tx_time_ns), payload.as_ref())
+    }
+
+    /// Runs one typed command payload with explicit envelope fields and no
+    /// transaction reference time.
     pub fn run_with_envelope<C>(
         &mut self,
         ext_seq: u64,
-        ref_time_us: u64,
+        ref_ext_time_us: u64,
         payload: impl AsRef<[u8]>,
     ) -> Result<(), RuntimePluginError>
     where
         C: GeneratedCommandAccess,
     {
-        C::validate_payload(payload.as_ref())
+        self.run_scoped::<C>(ext_seq, ref_ext_time_us, None, payload.as_ref())
+    }
+
+    fn run_scoped<C>(
+        &mut self,
+        ext_seq: u64,
+        ref_ext_time_us: u64,
+        ref_tx_time_ns: Option<u64>,
+        payload: &[u8],
+    ) -> Result<(), RuntimePluginError>
+    where
+        C: GeneratedCommandAccess,
+    {
+        C::validate_payload(payload)
             .map_err(|error| RuntimePluginError::new(format!("invalid command payload: {error:?}")))?;
-        let command = RuntimeCommandRef::new(C::KIND, ext_seq, ref_time_us, payload.as_ref());
-        self.inner.run_tx(&self.plugin, &command)
+        let command = RuntimeCommandRef::new(C::KIND, ext_seq, ref_ext_time_us, payload);
+        self.inner.transaction_with_time(ref_tx_time_ns, |host| self.plugin.run_tx(host, &command))
     }
 
     /// Runs business invariant validation through the bound plugin.
@@ -175,6 +202,7 @@ impl<P> DerefMut for PluginTestHost<P> {
 #[derive(Debug, Clone)]
 pub struct TestHost {
     registry: SchemaRegistry,
+    ref_tx_time_ns: Option<u64>,
     next_sys_id: SysId,
     records: BTreeMap<RecordKey, Vec<u8>>,
     uk_index: BTreeMap<(RecordKind, u8, Vec<u8>), SysId>,
@@ -188,6 +216,7 @@ impl TestHost {
     pub fn new(registry: SchemaRegistry) -> Self {
         Self {
             registry,
+            ref_tx_time_ns: None,
             next_sys_id: 1,
             records: BTreeMap::new(),
             uk_index: BTreeMap::new(),
@@ -206,7 +235,7 @@ impl TestHost {
             inner: Self::new(plugin.schema_registry()),
             plugin,
             next_ext_seq: 1,
-            ref_time_us: 0,
+            ref_ext_time_us: 0,
         }
     }
 
@@ -448,9 +477,32 @@ impl TestHost {
         &mut self,
         operation: impl FnOnce(&mut Self) -> Result<T, E>,
     ) -> Result<T, E> {
+        self.transaction_with_time(None, operation)
+    }
+
+    /// Runs a transaction with an explicit reference time in nanoseconds.
+    /// Nested calls restore the outer time on success, error or unwind. An
+    /// untimed [`Self::transaction`] always enters with time unavailable.
+    pub fn transaction_at<T, E>(
+        &mut self,
+        ref_tx_time_ns: u64,
+        operation: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E> {
+        self.transaction_with_time(Some(ref_tx_time_ns), operation)
+    }
+
+    fn transaction_with_time<T, E>(
+        &mut self,
+        ref_tx_time_ns: Option<u64>,
+        operation: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E> {
         let before = self.clone();
+        self.ref_tx_time_ns = ref_tx_time_ns;
         match catch_unwind(AssertUnwindSafe(|| operation(self))) {
-            Ok(Ok(value)) => Ok(value),
+            Ok(Ok(value)) => {
+                self.ref_tx_time_ns = before.ref_tx_time_ns;
+                Ok(value)
+            }
             Ok(Err(error)) => {
                 *self = before;
                 Err(error)
@@ -481,6 +533,10 @@ impl TestHost {
 }
 
 impl RuntimeHostContext for TestHost {
+    fn ref_tx_time_ns_raw(&self) -> Result<u64, ReferenceTimeUnavailable> {
+        self.ref_tx_time_ns.ok_or(ReferenceTimeUnavailable)
+    }
+
     fn with_read_typed_raw(
         &self,
         record_kind: RecordKind,
@@ -585,6 +641,10 @@ impl RuntimeHostContext for TestHost {
 
 impl TxReadContext for TestHost {
     type Error = RuntimeHostError;
+
+    fn ref_tx_time_ns_raw(&self) -> Result<u64, ReferenceTimeUnavailable> {
+        self.ref_tx_time_ns.ok_or(ReferenceTimeUnavailable)
+    }
 
     fn with_read_raw<T>(
         &self,

@@ -780,7 +780,7 @@ mod tests {
     type Host = PluginTestHost<FlightBookingRuntime>;
 
     fn new_host() -> Host {
-        TestHost::for_plugin(FlightBookingRuntime).with_ref_time(1234)
+        TestHost::for_plugin(FlightBookingRuntime).with_ref_ext_time_us(1234)
     }
 
     fn fb<const N: usize>(bytes: &[u8]) -> FixedBytes<N> {

@@ -1,6 +1,6 @@
 [package]
 name = "ingress-api"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.91"
 description = "Request and reply codecs for the StateVec cluster client."
@@ -12,4 +12,4 @@ categories.workspace = true
 
 [dependencies]
 serde.workspace = true
-statevec_frame = { package = "statevec-frame", version = "0.2.0", path = "../statevec-frame" }
+statevec_frame = { package = "statevec-frame", version = "0.2.1", path = "../statevec-frame" }

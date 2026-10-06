@@ -242,6 +242,10 @@ impl MockRuntimeHostContext {
 }
 
 impl RuntimeHostContext for MockRuntimeHostContext {
+    fn ref_tx_time_ns_raw(&self) -> Result<u64, statevec_api::ReferenceTimeUnavailable> {
+        Err(statevec_api::ReferenceTimeUnavailable)
+    }
+
     fn with_read_typed_raw(
         &self,
         record_kind: RecordKind,
@@ -339,6 +343,14 @@ impl RuntimeHostContext for MockRuntimeHostContext {
     ) -> Result<statevec_api::CanonicalIndexCount, RuntimeHostError> {
         Err(RuntimeHostError::new("mock does not support canonical indexes"))
     }
+}
+
+#[test]
+fn custom_host_explicitly_refuses_unavailable_time_through_the_typed_bridge() {
+    use statevec_api::{ReferenceTimeUnavailable, TypedTxContext};
+    let host = MockRuntimeHostContext::new();
+    let typed: &dyn RuntimeHostContext = &host;
+    assert_eq!(typed.ref_tx_time_ns(), Err(ReferenceTimeUnavailable));
 }
 
 // Covers CE-01..CE-06 and PLG-01..PLG-08 for runtime-host context boundaries.

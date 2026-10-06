@@ -75,6 +75,19 @@ impl std::fmt::Display for RuntimeHostError {
 
 impl std::error::Error for RuntimeHostError {}
 
+/// The host has not supplied a transaction reference time for this call.
+/// Hosts must not substitute a local clock or the command's external time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReferenceTimeUnavailable;
+
+impl std::fmt::Display for ReferenceTimeUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("transaction reference time is unavailable")
+    }
+}
+
+impl std::error::Error for ReferenceTimeUnavailable {}
+
 /// Capped canonical-index count result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CanonicalIndexCount {
@@ -156,6 +169,10 @@ impl std::error::Error for RuntimePluginUnloadError {}
 /// implement this trait through an adapter. Plugin-facing code should depend on
 /// this capability surface instead of any concrete engine transaction type.
 pub trait RuntimeHostContext {
+    /// Returns the host-supplied transaction reference time in nanoseconds.
+    /// Zero is valid; ordering between transactions is not guaranteed.
+    fn ref_tx_time_ns_raw(&self) -> Result<u64, ReferenceTimeUnavailable>;
+
     /// Reads a record by system id and passes its bytes to `f` when found.
     fn with_read_typed_raw(
         &self,
@@ -537,6 +554,9 @@ pub trait TxReadContext {
     /// Host error type.
     type Error;
 
+    /// Returns the execution input for this call, or an explicit absence.
+    fn ref_tx_time_ns_raw(&self) -> Result<u64, ReferenceTimeUnavailable>;
+
     /// Reads a record by key.
     fn with_read_raw<T>(&self, key: RecordKey, f: impl FnOnce(&[u8]) -> T) -> Result<Option<T>, Self::Error>;
     /// Iterates record keys for one record kind. An error may follow a partial
@@ -597,6 +617,18 @@ impl<T: TxUkContext + TxSysIdCreateContext + ?Sized> TxContext for T {}
 pub trait TypedTxContext {
     /// Host error type.
     type Error;
+
+    /// Returns the host-supplied transaction reference time in nanoseconds.
+    /// This is independent of the command's external time. Zero and decreasing
+    /// values are valid; no local clock is consulted when it is unavailable.
+    ///
+    /// ```
+    /// use statevec_api::{ReferenceTimeUnavailable, TypedTxContext};
+    /// fn execution_time<Tx: TypedTxContext + ?Sized>(tx: &Tx) -> Result<u64, ReferenceTimeUnavailable> {
+    ///     tx.ref_tx_time_ns()
+    /// }
+    /// ```
+    fn ref_tx_time_ns(&self) -> Result<u64, ReferenceTimeUnavailable>;
 
     /// Reads a generated record by system id.
     fn with_read_typed<R, T, F>(&self, sys_id: SysId, f: F) -> Result<Option<T>, Self::Error>
@@ -715,6 +747,10 @@ pub trait TypedTxContext {
 
 impl<Ctx: TxContext + ?Sized> TypedTxContext for Ctx {
     type Error = <Ctx as TxReadContext>::Error;
+
+    fn ref_tx_time_ns(&self) -> Result<u64, ReferenceTimeUnavailable> {
+        TxReadContext::ref_tx_time_ns_raw(self)
+    }
 
     fn with_read_typed<R, T, F>(&self, sys_id: SysId, f: F) -> Result<Option<T>, Self::Error>
     where
@@ -850,6 +886,10 @@ impl<Ctx: TxContext + ?Sized> TypedTxContext for Ctx {
 /// adapters without requiring engine-internal raw transaction capabilities.
 impl TypedTxContext for dyn RuntimeHostContext + '_ {
     type Error = RuntimeHostError;
+
+    fn ref_tx_time_ns(&self) -> Result<u64, ReferenceTimeUnavailable> {
+        RuntimeHostContext::ref_tx_time_ns_raw(self)
+    }
 
     fn with_read_typed<R, T, F>(&self, sys_id: SysId, f: F) -> Result<Option<T>, Self::Error>
     where
