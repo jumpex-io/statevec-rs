@@ -1,4 +1,4 @@
-error: record kind 0 is reserved; valid range is [1,255]
+error: record kind 0 is reserved; valid range is [1,61439]
  --> tests/compile_fail/record/record_kind_0.rs:7:12
   |
 7 | pub struct Bad {

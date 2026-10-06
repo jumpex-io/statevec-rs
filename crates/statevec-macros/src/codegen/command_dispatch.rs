@@ -1,7 +1,7 @@
 // Copyright 2026 Jumpex Technology.
 // SPDX-License-Identifier: Apache-2.0
 
-use quote::{ToTokens, quote};
+use quote::{ToTokens, format_ident, quote};
 use syn::{ExprPath, Ident, Path, Token, Type, parse::Parse, parse::ParseStream};
 
 pub(crate) struct CommandDispatchInput {
@@ -24,10 +24,7 @@ impl Parse for CommandDispatchInput {
 
         let runtime_kw: Ident = input.parse()?;
         if runtime_kw != Ident::new("runtime", runtime_kw.span()) {
-            return Err(syn::Error::new(
-                runtime_kw.span(),
-                "expected `runtime = Type;`",
-            ));
+            return Err(syn::Error::new(runtime_kw.span(), "expected `runtime = Type;`"));
         }
         input.parse::<Token![=]>()?;
         let runtime: Path = input.parse()?;
@@ -35,10 +32,7 @@ impl Parse for CommandDispatchInput {
 
         let error_kw: Ident = input.parse()?;
         if error_kw != Ident::new("error", error_kw.span()) {
-            return Err(syn::Error::new(
-                error_kw.span(),
-                "expected `error = ErrorType;`",
-            ));
+            return Err(syn::Error::new(error_kw.span(), "expected `error = ErrorType;`"));
         }
         input.parse::<Token![=]>()?;
         let error: Type = input.parse()?;
@@ -60,12 +54,7 @@ impl Parse for CommandDispatchInput {
             ));
         }
 
-        Ok(Self {
-            fn_name,
-            runtime,
-            error,
-            entries,
-        })
+        Ok(Self { fn_name, runtime, error, entries })
     }
 }
 
@@ -78,12 +67,19 @@ impl Parse for CommandDispatchEntry {
     }
 }
 
-pub(crate) fn expand_command_dispatch(
-    input: CommandDispatchInput,
-) -> syn::Result<proc_macro2::TokenStream> {
+pub(crate) fn expand_command_dispatch(input: CommandDispatchInput) -> syn::Result<proc_macro2::TokenStream> {
     let fn_name = &input.fn_name;
     let runtime = &input.runtime;
     let error = &input.error;
+    let preflight_name = format_ident!("preflight_{}", fn_name);
+    let preflight_arms = input.entries.iter().map(|entry| {
+        let command = &entry.command;
+        quote! {
+            <#command as statevec_model::CommandSchema>::KIND => {
+                <#command as statevec_model::GeneratedCommandAccess>::validate_payload(payload)
+            }
+        }
+    });
 
     // Detect duplicate command type paths at macro expansion time.
     {
@@ -141,6 +137,17 @@ pub(crate) fn expand_command_dispatch(
         #( #kind_assertions )*
 
         impl #runtime {
+            fn #preflight_name(
+                &self,
+                kind: statevec_model::CommandKind,
+                payload: &[u8],
+            ) -> ::core::result::Result<(), statevec_model::CommandSchemaFailure> {
+                match kind {
+                    #( #preflight_arms, )*
+                    _ => ::core::result::Result::Err(statevec_model::CommandSchemaFailure::UnsupportedKind { kind }),
+                }
+            }
+
             fn #fn_name<Tx: statevec_api::TypedTxContext + ?Sized>(
                 &self,
                 tx: &mut Tx,

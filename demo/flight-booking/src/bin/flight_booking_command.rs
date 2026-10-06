@@ -7,9 +7,7 @@ use flight_booking::{
     AddFlight, CABIN_BUSINESS, CABIN_ECONOMY, CABIN_FIRST, CancelReservation, ReserveOrder,
     RetireFlight,
 };
-use statevec::{
-    CommandSchema, FixedBytes, GeneratedCommandAccess, api::SubmitRequest, encode_submit_request,
-};
+use statevec::{CommandSchema, FixedBytes, GeneratedCommandAccess};
 
 fn main() {
     match run() {
@@ -41,9 +39,7 @@ fn run() -> Result<String, String> {
         other => return Err(format!("unknown command: {other}")),
     };
 
-    let encoded = encode_submit_request(&SubmitRequest::new(kind, payload))
-        .map_err(|err| format!("failed to encode submit request: {err}"))?;
-    Ok(hex_encode(&encoded))
+    Ok(format!("{kind}:{}", hex_encode(&payload)))
 }
 
 fn parse_fields(args: impl Iterator<Item = String>) -> Result<BTreeMap<String, String>, String> {
@@ -71,13 +67,13 @@ fn add_flight(fields: &BTreeMap<String, String>) -> Result<Vec<u8>, String> {
         .set_economy_total(u32_field(fields, "economy_total")?)
         .set_business_total(u32_field(fields, "business_total")?)
         .set_first_total(u32_field(fields, "first_total")?)
-        .build())
+        .build().expect("fixed-width payload"))
 }
 
 fn retire_flight(fields: &BTreeMap<String, String>) -> Result<Vec<u8>, String> {
     Ok(RetireFlight::builder()
         .set_flight_id(fixed::<16>(fields, "flight_id")?)
-        .build())
+        .build().expect("fixed-width payload"))
 }
 
 fn reserve_order(fields: &BTreeMap<String, String>) -> Result<Vec<u8>, String> {
@@ -89,7 +85,7 @@ fn reserve_order(fields: &BTreeMap<String, String>) -> Result<Vec<u8>, String> {
         .set_passenger_birth_date(u32_field(fields, "birth_date")?)
         .set_passenger_document_type(u8_field(fields, "document_type")?)
         .set_cabin_class(cabin_class(fields)?)
-        .build())
+        .build().expect("fixed-width payload"))
 }
 
 fn cancel_reservation(fields: &BTreeMap<String, String>) -> Result<Vec<u8>, String> {
@@ -97,7 +93,7 @@ fn cancel_reservation(fields: &BTreeMap<String, String>) -> Result<Vec<u8>, Stri
         .set_flight_id(fixed::<16>(fields, "flight_id")?)
         .set_passenger_document_id(fixed::<32>(fields, "passenger_document_id")?)
         .set_order_id(fixed::<32>(fields, "order_id")?)
-        .build())
+        .build().expect("fixed-width payload"))
 }
 
 fn field<'a>(fields: &'a BTreeMap<String, String>, key: &str) -> Result<&'a str, String> {

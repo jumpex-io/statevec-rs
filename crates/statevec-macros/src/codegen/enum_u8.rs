@@ -12,15 +12,12 @@ pub(crate) fn expand_enum_u8(input: DeriveInput) -> proc_macro2::TokenStream {
     let mut errors = proc_macro2::TokenStream::new();
 
     if !has_repr_u8(&input.attrs) {
-        errors.extend(
-            syn::Error::new(input.span(), "EnumU8 requires #[repr(u8)]").to_compile_error(),
-        );
+        errors.extend(syn::Error::new(input.span(), "EnumU8 requires #[repr(u8)]").to_compile_error());
     }
 
     let Data::Enum(DataEnum { variants, .. }) = input.data else {
         // Can't continue without variants — structural error, return immediately.
-        errors
-            .extend(syn::Error::new(input.span(), "EnumU8 only supports enums").to_compile_error());
+        errors.extend(syn::Error::new(input.span(), "EnumU8 only supports enums").to_compile_error());
         return errors;
     };
 
@@ -31,42 +28,28 @@ pub(crate) fn expand_enum_u8(input: DeriveInput) -> proc_macro2::TokenStream {
 
     for variant in variants.iter() {
         if !variant.fields.is_empty() {
-            errors.extend(
-                syn::Error::new(variant.span(), "EnumU8 only supports fieldless enums")
-                    .to_compile_error(),
-            );
+            errors.extend(syn::Error::new(variant.span(), "EnumU8 only supports fieldless enums").to_compile_error());
             continue;
         }
 
         let Some((_, expr)) = &variant.discriminant else {
             errors.extend(
-                syn::Error::new(
-                    variant.span(),
-                    "EnumU8 requires every variant to have an explicit discriminant",
-                )
-                .to_compile_error(),
+                syn::Error::new(variant.span(), "EnumU8 requires every variant to have an explicit discriminant")
+                    .to_compile_error(),
             );
             continue;
         };
 
         let Expr::Lit(expr_lit) = expr else {
             errors.extend(
-                syn::Error::new(
-                    expr.span(),
-                    "EnumU8 discriminant must be an integer literal",
-                )
-                .to_compile_error(),
+                syn::Error::new(expr.span(), "EnumU8 discriminant must be an integer literal").to_compile_error(),
             );
             continue;
         };
 
         let Lit::Int(lit_int) = &expr_lit.lit else {
             errors.extend(
-                syn::Error::new(
-                    expr.span(),
-                    "EnumU8 discriminant must be an integer literal",
-                )
-                .to_compile_error(),
+                syn::Error::new(expr.span(), "EnumU8 discriminant must be an integer literal").to_compile_error(),
             );
             continue;
         };
@@ -74,10 +57,7 @@ pub(crate) fn expand_enum_u8(input: DeriveInput) -> proc_macro2::TokenStream {
         let value = match lit_int.base10_parse::<u16>() {
             Ok(v) if v <= u8::MAX as u16 => v as u8,
             _ => {
-                errors.extend(
-                    syn::Error::new(lit_int.span(), "EnumU8 discriminant must fit in u8")
-                        .to_compile_error(),
-                );
+                errors.extend(syn::Error::new(lit_int.span(), "EnumU8 discriminant must fit in u8").to_compile_error());
                 continue;
             }
         };
@@ -119,6 +99,8 @@ pub(crate) fn expand_enum_u8(input: DeriveInput) -> proc_macro2::TokenStream {
         };
 
         impl statevec_model::EnumU8 for #enum_name {
+            const DEFINITION: &'static statevec_model::EnumDefinition = &#def_static_name;
+
             #[inline(always)]
             fn to_u8(self) -> u8 {
                 match self {
@@ -135,15 +117,6 @@ pub(crate) fn expand_enum_u8(input: DeriveInput) -> proc_macro2::TokenStream {
                         raw: other,
                     }),
                 }
-            }
-
-            #[inline(always)]
-            fn type_name() -> &'static str {
-                ::core::stringify!(#enum_name)
-            }
-
-            fn definition() -> &'static statevec_model::EnumDefinition {
-                &#def_static_name
             }
         }
 

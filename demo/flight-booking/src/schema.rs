@@ -15,7 +15,7 @@ mod flight_booking {
     pub mod v1_0 {
         use super::*;
 
-        #[record(kind = 1, record_len = 128, pk(fields = [flight_id]))]
+        #[record(kind = 1, record_len = 128, uk(id = 0, fields = [flight_id]))]
         pub struct Flight {
             #[field(index = 1, immutable = true)]
             pub flight_id: FixedBytes<16>,
@@ -45,7 +45,7 @@ mod flight_booking {
             pub first_reserved: u32,
         }
 
-        #[record(kind = 2, record_len = 64, pk(fields = [document_id]))]
+        #[record(kind = 2, record_len = 128, uk(id = 0, fields = [document_id]))]
         pub struct Passenger {
             #[field(index = 1, immutable = true)]
             pub document_id: FixedBytes<32>,
@@ -60,7 +60,7 @@ mod flight_booking {
         #[record(
             kind = 3,
             record_len = 128,
-            pk(fields = [flight_id, passenger_document_id])
+            uk(id = 0, fields = [flight_id, passenger_document_id])
         )]
         pub struct Reservation {
             #[field(index = 1, immutable = true)]

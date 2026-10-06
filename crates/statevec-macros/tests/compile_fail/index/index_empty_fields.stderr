@@ -1,0 +1,5 @@
+error: index(fields = [...]) cannot be empty
+ --> tests/compile_fail/index/index_empty_fields.rs:4:12
+  |
+4 | pub struct EmptyIndexFields {
+  |            ^^^^^^^^^^^^^^^^

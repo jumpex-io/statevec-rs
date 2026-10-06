@@ -1,15 +1,13 @@
 // Copyright 2026 Jumpex Technology.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Lightweight in-memory test host for StateVec domain plugins.
+//! Simplified in-memory execution engine for local business tests.
 //!
-//! This crate is intentionally a unit-test harness, not a runtime engine. It
-//! stores record bytes and emitted events in ordinary Rust collections so
-//! domain crates can exercise [`statevec_api::RuntimePlugin`] logic without
-//! linking the production runtime. It does not implement durable storage,
-//! recovery replay, Kafka ingress, snapshot publication, or runtime scheduling
-//! semantics. Records and events live in plain Rust collections for the
-//! duration of the test.
+//! Records, unique keys and emitted events live in ordinary Rust collections.
+//! Business handlers can use the typed transaction traits directly, or run
+//! through [`statevec_api::RuntimePlugin`]. Transactions restore their prior
+//! state on errors and unwind. Production durability, replication, recovery
+//! and scheduling are supplied by the platform runtime.
 //!
 //! TestHost behaviors that are not part of the public runtime contract:
 //!
@@ -20,15 +18,17 @@
 //!   may surface host failures differently.
 //!
 //! Tests should assert on domain-level facts, such as record fields, event
-//! payloads, and business invariants, rather than these implementation details.
+//! payloads, and typed business rejections.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use statevec_api::{
-    BizInvariantReadContext, InvariantReadContextExt, RecordKey, RuntimeCommandRef,
-    RuntimeHostContext, RuntimeHostContextExt, RuntimeHostError, RuntimePlugin, RuntimePluginError,
+    BizInvariantReadContext, CanonicalIndexCount, InvariantReadContextExt, RecordKey,
+    RuntimeCommandRef, RuntimeHostContext, RuntimeHostContextExt, RuntimeHostError, RuntimePlugin,
+    RuntimePluginError, TxReadContext, TxSysIdCreateContext, TxUkContext, TxWriteContext,
 };
 use statevec_model::SchemaRegistry;
 use statevec_model::command::GeneratedCommandAccess;
@@ -39,7 +39,7 @@ use statevec_model::record::{GeneratedRecordAccess, RecordKind, SysId};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestEvent {
     /// Stable event kind from the domain schema.
-    pub event_kind: u8,
+    pub event_kind: statevec_model::EventKind,
     /// Encoded event payload bytes.
     pub payload: Vec<u8>,
 }
@@ -126,7 +126,8 @@ where
         C: GeneratedCommandAccess,
     {
         let ext_seq = self.next_ext_seq;
-        self.next_ext_seq = self.next_ext_seq.saturating_add(1);
+        self.next_ext_seq = self.next_ext_seq.checked_add(1)
+            .ok_or_else(|| RuntimePluginError::new("test source sequence exhausted"))?;
         self.run_with_envelope::<C>(ext_seq, self.ref_time_us, payload)
     }
 
@@ -140,15 +141,10 @@ where
     where
         C: GeneratedCommandAccess,
     {
+        C::validate_payload(payload.as_ref())
+            .map_err(|error| RuntimePluginError::new(format!("invalid command payload: {error:?}")))?;
         let command = RuntimeCommandRef::new(C::KIND, ext_seq, ref_time_us, payload.as_ref());
-        let snapshot = self.inner.clone();
-        match self.plugin.run_tx(&mut self.inner, &command) {
-            Ok(()) => Ok(()),
-            Err(err) => {
-                self.inner = snapshot;
-                Err(err)
-            }
-        }
+        self.inner.run_tx(&self.plugin, &command)
     }
 
     /// Runs business invariant validation through the bound plugin.
@@ -175,13 +171,14 @@ impl<P> DerefMut for PluginTestHost<P> {
 ///
 /// `TestHost` implements both [`RuntimeHostContext`] and
 /// [`BizInvariantReadContext`]. It uses the supplied [`SchemaRegistry`] to size
-/// new records and maintain primary-key lookup indexes.
+/// new records and maintain unique-key lookup indexes.
 #[derive(Debug, Clone)]
 pub struct TestHost {
     registry: SchemaRegistry,
     next_sys_id: SysId,
     records: BTreeMap<RecordKey, Vec<u8>>,
-    pk_index: BTreeMap<(RecordKind, Vec<u8>), SysId>,
+    uk_index: BTreeMap<(RecordKind, u8, Vec<u8>), SysId>,
+    allocated_ids: BTreeSet<SysId>,
     events: Vec<TestEvent>,
     debug_logs: Vec<String>,
 }
@@ -193,7 +190,8 @@ impl TestHost {
             registry,
             next_sys_id: 1,
             records: BTreeMap::new(),
-            pk_index: BTreeMap::new(),
+            uk_index: BTreeMap::new(),
+            allocated_ids: BTreeSet::new(),
             events: Vec::new(),
             debug_logs: Vec::new(),
         }
@@ -248,14 +246,14 @@ impl TestHost {
         plugin: &dyn RuntimePlugin,
         command: &dyn statevec_api::RuntimeCommandEnvelope,
     ) -> Result<(), RuntimePluginError> {
-        plugin.run_tx(self, command)
+        self.transaction(|host| plugin.run_tx(host, command))
     }
 
     /// Runs one encoded command payload against a plugin.
     pub fn run_command_payload(
         &mut self,
         plugin: &dyn RuntimePlugin,
-        command_kind: u8,
+        command_kind: statevec_model::CommandKind,
         ext_seq: u64,
         ref_ext_time_us: u64,
         payload: &[u8],
@@ -269,25 +267,25 @@ impl TestHost {
         plugin.validate_biz_invariants(self)
     }
 
-    /// Reads a generated record by primary-key bytes.
+    /// Reads a generated record by unique-key bytes.
     ///
     /// This high-level helper panics on host implementation errors and returns
     /// `None` only when the record is absent. Prefer this method in business
     /// tests over the `_raw` trait methods.
-    pub fn read<R, T>(&self, pk: impl AsRef<[u8]>, f: impl FnOnce(R::Access<'_>) -> T) -> Option<T>
+    pub fn read<R, T>(&self, uk: impl AsRef<[u8]>, f: impl FnOnce(R::Access<'_>) -> T) -> Option<T>
     where
         R: GeneratedRecordAccess,
     {
-        self.read_typed_by_pk::<R, _, _, _>(pk, f)
-            .expect("test host failed to read record by primary key")
+        self.read_typed_by_uk::<R, _, _, _>(uk, f)
+            .expect("test host failed to read record by unique key")
     }
 
-    /// Reads a generated record by primary-key bytes or panics when absent.
-    pub fn expect<R, T>(&self, pk: impl AsRef<[u8]>, f: impl FnOnce(R::Access<'_>) -> T) -> T
+    /// Reads a generated record by unique-key bytes or panics when absent.
+    pub fn expect<R, T>(&self, uk: impl AsRef<[u8]>, f: impl FnOnce(R::Access<'_>) -> T) -> T
     where
         R: GeneratedRecordAccess,
     {
-        self.read::<R, T>(pk, f)
+        self.read::<R, T>(uk, f)
             .expect("expected record to exist in test host")
     }
 
@@ -325,14 +323,14 @@ impl TestHost {
         RuntimeHostContextExt::with_read_typed::<R, T, F>(self, sys_id, f)
     }
 
-    /// Reads a generated record by primary-key bytes.
-    pub fn read_typed_by_pk<R, P, T, F>(&self, pk: P, f: F) -> Result<Option<T>, RuntimeHostError>
+    /// Reads a generated record by unique-key bytes.
+    pub fn read_typed_by_uk<R, P, T, F>(&self, uk: P, f: F) -> Result<Option<T>, RuntimeHostError>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
         F: FnOnce(R::Access<'_>) -> T,
     {
-        RuntimeHostContextExt::with_read_typed_by_pk::<R, P, T, F>(self, pk, f)
+        RuntimeHostContextExt::with_read_typed_by_uk::<R, P, T, F>(self, uk, f)
     }
 
     /// Reads an emitted generated event by index.
@@ -419,43 +417,66 @@ impl TestHost {
         Ok(def.data_size as usize)
     }
 
-    fn encode_pk(
+    fn encode_unique_keys(
         &self,
-        record_kind: RecordKind,
+        kind: RecordKind,
         data: &[u8],
-    ) -> Result<Option<Vec<u8>>, RuntimeHostError> {
-        if self.registry.try_get(record_kind).is_none() {
-            return Err(RuntimeHostError::new(format!(
-                "unknown record kind {record_kind}"
-            )));
+    ) -> Result<Vec<(u8, Vec<u8>)>, RuntimeHostError> {
+        let definition = self.registry.try_get(kind)
+            .ok_or_else(|| RuntimeHostError::new(format!("unknown record kind {kind}")))?;
+        if data.len() != definition.data_size as usize {
+            return Err(RuntimeHostError::new("record length does not match schema"));
         }
-        Ok(self
-            .registry
-            .encode_pk(record_kind, data)
-            .map(|pk| pk.as_slice().to_vec()))
+        statevec_model::reserved_bytes::validate_reserved_bytes_zero(definition, data)
+            .map_err(|error| RuntimeHostError::new(format!("invalid reserved bytes: {error:?}")))?;
+        if definition.unique_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.registry.encode_unique_keys(kind, data)
+            .map(|keys| keys.into_iter().map(|key| (key.uk_id, key.bytes.to_vec())).collect())
+            .ok_or_else(|| RuntimeHostError::new("cannot encode unique keys"))
     }
 
-    fn resolve_pk(&self, record_kind: RecordKind, pk: &[u8]) -> Option<RecordKey> {
-        let sys_id = self.pk_index.get(&(record_kind, pk.to_vec())).copied()?;
-        Some(RecordKey {
-            kind: record_kind,
-            sys_id,
-        })
+    fn resolve_uk(&self, kind: RecordKind, uk: &[u8]) -> Option<RecordKey> {
+        self.uk_index.get(&(kind, 0, uk.to_vec())).copied()
+            .map(|sys_id| RecordKey { kind, sys_id })
     }
 
-    fn ensure_pk_is_free(
+    /// Runs a business operation with rollback of records, keys, ids and events
+    /// on an error or unwind. No persistence or replication is involved.
+    pub fn transaction<T, E>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let before = self.clone();
+        match catch_unwind(AssertUnwindSafe(|| operation(self))) {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => {
+                *self = before;
+                Err(error)
+            }
+            Err(panic) => {
+                *self = before;
+                resume_unwind(panic)
+            }
+        }
+    }
+
+    /// Reads through a specific unique key, including secondary keys.
+    pub fn read_by_uk_id<R, T>(
         &self,
-        record_kind: RecordKind,
-        pk: &[u8],
-        current_sys_id: Option<SysId>,
-    ) -> Result<(), RuntimeHostError> {
-        let existing = self.pk_index.get(&(record_kind, pk.to_vec())).copied();
-        if existing.is_some() && existing != current_sys_id {
-            return Err(RuntimeHostError::new(format!(
-                "duplicate primary key for record kind {record_kind}"
-            )));
-        }
-        Ok(())
+        id: u8,
+        uk: impl AsRef<[u8]>,
+        read: impl FnOnce(R::Access<'_>) -> T,
+    ) -> Option<T>
+    where
+        R: GeneratedRecordAccess,
+    {
+        let sys_id = TxUkContext::resolve_uk_id(self, R::KIND, id, uk.as_ref())
+            .expect("test key lookup");
+        sys_id.and_then(|sys_id| {
+            self.read_typed::<R, _, _>(sys_id, read).expect("test record lookup")
+        })
     }
 }
 
@@ -477,13 +498,13 @@ impl RuntimeHostContext for TestHost {
         Ok(true)
     }
 
-    fn with_read_typed_by_pk_raw(
+    fn with_read_typed_by_uk_raw(
         &self,
         record_kind: RecordKind,
-        pk: &[u8],
+        uk: &[u8],
         f: &mut dyn FnMut(&[u8]),
     ) -> Result<bool, RuntimeHostError> {
-        let Some(key) = self.resolve_pk(record_kind, pk) else {
+        let Some(key) = self.resolve_uk(record_kind, uk) else {
             return Ok(false);
         };
         let Some(data) = self.records.get(&key) else {
@@ -501,83 +522,36 @@ impl RuntimeHostContext for TestHost {
         let mut data = vec![0u8; self.record_len(record_kind)?];
         init(&mut data);
 
-        let pk = self.encode_pk(record_kind, &data)?;
-        if let Some(pk) = pk.as_deref() {
-            self.ensure_pk_is_free(record_kind, pk, None)?;
-        }
-
-        let sys_id = self.next_sys_id;
-        self.next_sys_id += 1;
-        let key = RecordKey {
-            kind: record_kind,
-            sys_id,
-        };
-
-        if let Some(pk) = pk {
-            self.pk_index.insert((record_kind, pk), sys_id);
-        }
-        self.records.insert(key, data);
-        Ok(key)
+        TxWriteContext::create_raw(self, record_kind, data)
     }
 
-    fn update_typed_by_pk_raw(
+    fn update_typed_by_uk_raw(
         &mut self,
         record_kind: RecordKind,
-        pk: &[u8],
+        uk: &[u8],
         f: &mut dyn FnMut(&mut [u8]),
     ) -> Result<bool, RuntimeHostError> {
-        let Some(key) = self.resolve_pk(record_kind, pk) else {
+        let Some(key) = self.resolve_uk(record_kind, uk) else {
             return Ok(false);
         };
 
-        let old_data = self
-            .records
-            .get(&key)
-            .ok_or_else(|| RuntimeHostError::new("primary-key index points to no record"))?;
-        let old_pk = self.encode_pk(record_kind, old_data)?;
-        let mut new_data = old_data.clone();
-        f(&mut new_data);
-        let new_pk = self.encode_pk(record_kind, &new_data)?;
-
-        if old_pk != new_pk {
-            if let Some(new_pk) = new_pk.as_deref() {
-                self.ensure_pk_is_free(record_kind, new_pk, Some(key.sys_id))?;
-            }
-            if let Some(old_pk) = old_pk {
-                self.pk_index.remove(&(record_kind, old_pk));
-            }
-            if let Some(new_pk) = new_pk {
-                self.pk_index.insert((record_kind, new_pk), key.sys_id);
-            }
-        }
-
-        self.records.insert(key, new_data);
-        Ok(true)
+        TxWriteContext::update_raw(self, key, |data| f(data)).map(|result| result.is_some())
     }
 
-    fn delete_by_pk_raw(
+    fn delete_by_uk_raw(
         &mut self,
         record_kind: RecordKind,
-        pk: &[u8],
+        uk: &[u8],
     ) -> Result<bool, RuntimeHostError> {
-        let Some(key) = self.resolve_pk(record_kind, pk) else {
+        let Some(key) = self.resolve_uk(record_kind, uk) else {
             return Ok(false);
         };
-        let Some(data) = self.records.remove(&key) else {
-            self.pk_index.remove(&(record_kind, pk.to_vec()));
-            return Ok(false);
-        };
-        if let Some(encoded_pk) = self.encode_pk(record_kind, &data)? {
-            self.pk_index.remove(&(record_kind, encoded_pk));
-        } else {
-            self.pk_index.remove(&(record_kind, pk.to_vec()));
-        }
-        Ok(true)
+        TxWriteContext::delete_raw(self, key)
     }
 
     fn emit_typed_event_raw(
         &mut self,
-        event_kind: u8,
+        event_kind: statevec_model::EventKind,
         payload: &[u8],
     ) -> Result<(), RuntimeHostError> {
         self.events.push(TestEvent {
@@ -598,9 +572,168 @@ impl RuntimeHostContext for TestHost {
         Ok(())
     }
 
+    fn count_index_prefix_capped_raw(&self, kind: RecordKind, index_id: u8, prefix: &[u8], cap: usize)
+        -> Result<CanonicalIndexCount, RuntimeHostError> {
+        TxReadContext::count_index_prefix_capped_raw(self, kind, index_id, prefix, cap)
+    }
+
     fn debug_log(&mut self, message: String) -> Result<(), RuntimeHostError> {
         self.debug_logs.push(message);
         Ok(())
+    }
+}
+
+impl TxReadContext for TestHost {
+    type Error = RuntimeHostError;
+
+    fn with_read_raw<T>(
+        &self,
+        key: RecordKey,
+        read: impl FnOnce(&[u8]) -> T,
+    ) -> Result<Option<T>, Self::Error> {
+        Ok(self.records.get(&key).map(|data| read(data)))
+    }
+
+    fn for_each_record_key(
+        &self,
+        kind: RecordKind,
+        visit: &mut dyn FnMut(RecordKey),
+    ) -> Result<(), Self::Error> {
+        RuntimeHostContext::for_each_record_key_raw(self, kind, visit)
+    }
+
+    fn count_index_prefix_capped_raw(
+        &self,
+        kind: RecordKind,
+        index_id: u8,
+        prefix: &[u8],
+        cap: usize,
+    ) -> Result<CanonicalIndexCount, Self::Error> {
+        let definition = self.registry.try_get(kind)
+            .ok_or_else(|| RuntimeHostError::new(format!("unknown record kind {kind}")))?;
+        if !definition.canonical_indexes.iter().any(|index| index.id == index_id) {
+            return Err(RuntimeHostError::new("unknown canonical index"));
+        }
+        if cap == 0 {
+            return Ok(CanonicalIndexCount::AtLeast(0));
+        }
+        let mut count = 0;
+        // A small test engine derives index entries from the records rather
+        // than maintaining the production engine's ordered index structures.
+        for (key, data) in &self.records {
+            if key.kind != kind {
+                continue;
+            }
+            let index = self.registry.encode_canonical_index(kind, index_id, data)
+                .ok_or_else(|| RuntimeHostError::new("cannot encode canonical index"))?;
+            if prefix.len() > index.len() {
+                return Err(RuntimeHostError::new("index prefix exceeds key length"));
+            }
+            if index.starts_with(prefix) {
+                count += 1;
+                if count == cap {
+                    return Ok(CanonicalIndexCount::AtLeast(cap));
+                }
+            }
+        }
+        Ok(CanonicalIndexCount::Exact(count))
+    }
+}
+
+impl TxUkContext for TestHost {
+    fn resolve_uk(&self, kind: RecordKind, uk: &[u8]) -> Result<Option<SysId>, Self::Error> {
+        self.resolve_uk_id(kind, 0, uk)
+    }
+
+    fn resolve_uk_id(
+        &self,
+        kind: RecordKind,
+        id: u8,
+        uk: &[u8],
+    ) -> Result<Option<SysId>, Self::Error> {
+        let definition = self.registry.try_get(kind)
+            .ok_or_else(|| RuntimeHostError::new(format!("unknown record kind {kind}")))?;
+        if !definition.unique_keys.iter().any(|key| key.id == id) {
+            return Err(RuntimeHostError::new("unknown unique-key id"));
+        }
+        Ok(self.uk_index.get(&(kind, id, uk.to_vec())).copied())
+    }
+}
+
+impl TxWriteContext for TestHost {
+    fn create_raw(&mut self, kind: RecordKind, data: Vec<u8>) -> Result<RecordKey, Self::Error> {
+        self.create_with_sys_id_raw(kind, self.next_sys_id, data)
+    }
+
+    fn update_raw<T>(
+        &mut self,
+        key: RecordKey,
+        update: impl FnOnce(&mut [u8]) -> T,
+    ) -> Result<Option<T>, Self::Error> {
+        let Some(before) = self.records.get(&key) else {
+            return Ok(None);
+        };
+        let mut after = before.clone();
+        let result = update(&mut after);
+        self.encode_unique_keys(key.kind, &after)?;
+        let definition = self.registry.try_get(key.kind).expect("registered record");
+        for field in definition.fields.iter().filter(|field| field.immutable) {
+            let start = field.offset as usize;
+            let end = start + field.len as usize;
+            if before[start..end] != after[start..end] {
+                return Err(RuntimeHostError::new(format!("immutable field {} changed", field.name)));
+            }
+        }
+        self.records.insert(key, after);
+        Ok(Some(result))
+    }
+
+    fn delete_raw(&mut self, key: RecordKey) -> Result<bool, Self::Error> {
+        let Some(data) = self.records.get(&key) else {
+            return Ok(false);
+        };
+        let keys = self.encode_unique_keys(key.kind, data)?;
+        for (id, bytes) in keys {
+            self.uk_index.remove(&(key.kind, id, bytes));
+        }
+        self.records.remove(&key);
+        Ok(true)
+    }
+
+    fn emit_event_raw(&mut self, event_kind: statevec_model::EventKind, payload: Vec<u8>) {
+        self.events.push(TestEvent { event_kind, payload });
+    }
+
+    fn debug_log(&mut self, message: String) {
+        self.debug_logs.push(message);
+    }
+}
+
+impl TxSysIdCreateContext for TestHost {
+    fn create_with_sys_id_raw(
+        &mut self,
+        kind: RecordKind,
+        sys_id: SysId,
+        data: Vec<u8>,
+    ) -> Result<RecordKey, Self::Error> {
+        if sys_id == 0 || self.allocated_ids.contains(&sys_id) {
+            return Err(RuntimeHostError::new("system id is zero or already used"));
+        }
+        let next = sys_id.checked_add(1).ok_or_else(|| RuntimeHostError::new("system id exhausted"))?;
+        let keys = self.encode_unique_keys(kind, &data)?;
+        for (id, bytes) in &keys {
+            if self.uk_index.contains_key(&(kind, *id, bytes.clone())) {
+                return Err(RuntimeHostError::new(format!("duplicate unique key {id} for record kind {kind}")));
+            }
+        }
+        let key = RecordKey { kind, sys_id };
+        for (id, bytes) in keys {
+            self.uk_index.insert((kind, id, bytes), sys_id);
+        }
+        self.records.insert(key, data);
+        self.allocated_ids.insert(sys_id);
+        self.next_sys_id = self.next_sys_id.max(next);
+        Ok(key)
     }
 }
 
@@ -614,13 +747,13 @@ impl BizInvariantReadContext for TestHost {
         RuntimeHostContext::with_read_typed_raw(self, record_kind, sys_id, f)
     }
 
-    fn with_read_typed_by_pk_raw(
+    fn with_read_typed_by_uk_raw(
         &self,
         record_kind: RecordKind,
-        pk: &[u8],
+        uk: &[u8],
         f: &mut dyn FnMut(&[u8]),
     ) -> Result<bool, RuntimeHostError> {
-        RuntimeHostContext::with_read_typed_by_pk_raw(self, record_kind, pk, f)
+        RuntimeHostContext::with_read_typed_by_uk_raw(self, record_kind, uk, f)
     }
 
     fn for_each_record_key_raw(
@@ -632,10 +765,10 @@ impl BizInvariantReadContext for TestHost {
     }
 }
 
-/// Reads a generated record from any invariant context by primary-key bytes.
-pub fn read_invariant_by_pk<C, R, P, T, F>(
+/// Reads a generated record from any invariant context by unique-key bytes.
+pub fn read_invariant_by_uk<C, R, P, T, F>(
     ctx: &C,
-    pk: P,
+    uk: P,
     f: F,
 ) -> Result<Option<T>, RuntimeHostError>
 where
@@ -644,249 +777,153 @@ where
     P: AsRef<[u8]>,
     F: FnOnce(R::Access<'_>) -> T,
 {
-    InvariantReadContextExt::with_read_typed_by_pk::<R, P, T, F>(ctx, pk, f)
+    InvariantReadContextExt::with_read_typed_by_uk::<R, P, T, F>(ctx, uk, f)
 }
 
 #[cfg(test)]
 mod tests {
-    use statevec_api::{RuntimeCommandEnvelope, RuntimeHostContextExt};
-    use statevec_model::event::{EventSchema, GeneratedEventAccess};
-    use statevec_model::record::PkCodec;
-    use statevec_model::{
-        CommandDefinition, CommandSchema, EventDefinition, FieldDefinition, FieldType,
-        GeneratedCommandAccess, GeneratedRecordAccess, PkBytes, RecordDefinition, RecordSchema,
-        Version,
-    };
-
     use super::*;
+    use statevec_api::{RuntimeCommandEnvelope, RuntimeHostContextExt};
+    use statevec_model::{EventSchema, GeneratedEventAccess, RecordSchema};
+    use statevec_macros::{command, event, record, schema_module};
 
-    struct Asset;
-
-    struct AssetAccess<'a> {
-        data: &'a [u8],
-    }
-
-    struct NewAssetBuilder<'a> {
-        data: &'a mut [u8],
-    }
-
-    struct UpdateAssetBuilder<'a> {
-        data: &'a mut [u8],
-    }
-
-    impl Asset {
-        fn pk(asset_id: u64) -> PkBytes {
-            let mut pk = PkBytes::new();
-            pk.extend_from_slice(&asset_id.to_be_bytes());
-            pk
+    #[schema_module(version = "1.0")]
+    mod schema {
+        use super::*;
+        #[record(kind = 1, record_len = 64, uk(id = 0, fields = [asset_id]))]
+        pub struct Asset {
+            #[field(index = 1, immutable)]
+            pub asset_id: u64,
+            #[field(index = 2)]
+            pub precision: u8,
+        }
+        #[event(kind = 1)]
+        pub struct AssetCreated {
+            #[field(index = 1)]
+            pub asset_id: u64,
+        }
+        #[command(kind = 9)]
+        pub struct AssetCommand {
+            #[field(index = 1)]
+            pub asset_id: u64,
         }
     }
+    use schema::*;
 
-    impl AssetAccess<'_> {
-        fn asset_id(&self) -> u64 {
-            let mut bytes = [0u8; 8];
-            bytes.copy_from_slice(&self.data[0..8]);
-            u64::from_le_bytes(bytes)
-        }
-
-        fn precision(&self) -> u8 {
-            self.data[8]
-        }
+    #[record(
+        kind = 2, record_len = 128,
+        uk(id = 0, name = "by_item", fields = [item_id]),
+        uk(id = 1, name = "by_external", fields = [external_id]),
+        index(id = 0, name = "by_owner_status", fields = [owner, status])
+    )]
+    pub struct Item {
+        #[field(index = 1, immutable)]
+        pub item_id: u64,
+        #[field(index = 2, immutable)]
+        pub external_id: u64,
+        #[field(index = 3)]
+        pub owner: u64,
+        #[field(index = 4)]
+        pub status: u8,
     }
 
-    impl NewAssetBuilder<'_> {
-        fn init_asset_id(&mut self, asset_id: u64) -> &mut Self {
-            self.data[0..8].copy_from_slice(&asset_id.to_le_bytes());
-            self
-        }
-
-        fn set_precision(&mut self, precision: u8) -> &mut Self {
-            self.data[8] = precision;
-            self
-        }
+    fn item_host() -> TestHost {
+        TestHost::new(SchemaRegistry::with_records(statevec_model::Version::new(1, 0), &[*Item::definition()]))
     }
 
-    impl UpdateAssetBuilder<'_> {
-        fn set_precision(&mut self, precision: u8) -> &mut Self {
-            self.data[8] = precision;
-            self
-        }
-    }
-
-    impl RecordSchema for Asset {
-        const KIND: u8 = 1;
-        const RECORD_LEN: usize = 16;
-        const FIELD_COUNT: usize = 2;
-
-        fn definition() -> &'static RecordDefinition {
-            static FIELDS: [FieldDefinition; 2] = [
-                FieldDefinition {
-                    name: "asset_id",
-                    field_index: 1,
-                    offset: 0,
-                    ty: FieldType::U64,
-                    len: 8,
-                    rust_type_name: "u64",
-                    enum_type_name: None,
-                    immutable: true,
-                },
-                FieldDefinition {
-                    name: "precision",
-                    field_index: 2,
-                    offset: 8,
-                    ty: FieldType::U8,
-                    len: 1,
-                    rust_type_name: "u8",
-                    enum_type_name: None,
-                    immutable: false,
-                },
-            ];
-            static PK_FIELDS: [&str; 1] = ["asset_id"];
-            static DEF: RecordDefinition = RecordDefinition {
-                kind: Asset::KIND,
-                name: "Asset",
-                is_pk_idx: true,
-                support_range_scan: false,
-                data_size: 16,
-                version: 1,
-                pk_encode: Some(Asset::encode_pk_from_bytes),
-                fields: &FIELDS,
-                reserved_fields: &[],
-                pk_fields: &PK_FIELDS,
-            };
-            &DEF
-        }
-    }
-
-    impl PkCodec for Asset {
-        fn encode_pk_from_bytes(data: &[u8]) -> PkBytes {
-            let mut bytes = [0u8; 8];
-            bytes.copy_from_slice(&data[0..8]);
-            Asset::pk(u64::from_le_bytes(bytes))
-        }
-    }
-
-    impl GeneratedRecordAccess for Asset {
-        const DATA_LEN: usize = 16;
-        type Access<'a> = AssetAccess<'a>;
-        type NewBuilder<'a> = NewAssetBuilder<'a>;
-        type UpdateBuilder<'a> = UpdateAssetBuilder<'a>;
-
-        fn wrap<'a>(buf: &'a [u8]) -> Self::Access<'a> {
-            AssetAccess { data: buf }
-        }
-
-        fn wrap_new<'a>(buf: &'a mut [u8]) -> Self::NewBuilder<'a> {
-            NewAssetBuilder { data: buf }
-        }
-
-        fn wrap_update<'a>(buf: &'a mut [u8]) -> Self::UpdateBuilder<'a> {
-            UpdateAssetBuilder { data: buf }
-        }
-    }
-
-    struct AssetCreated;
-
-    struct AssetCreatedAccess<'a> {
-        data: &'a [u8],
-    }
-
-    impl AssetCreatedAccess<'_> {
-        fn asset_id(&self) -> u64 {
-            let mut bytes = [0u8; 8];
-            bytes.copy_from_slice(&self.data[0..8]);
-            u64::from_le_bytes(bytes)
-        }
-    }
-
-    struct AssetCreatedBuilder {
-        asset_id: Option<u64>,
-    }
-
-    impl AssetCreatedBuilder {
-        fn set_asset_id(mut self, asset_id: u64) -> Self {
-            self.asset_id = Some(asset_id);
-            self
-        }
-
-        fn build(self) -> Vec<u8> {
-            self.asset_id
-                .expect("asset_id must be set")
-                .to_le_bytes()
-                .to_vec()
-        }
-    }
-
-    impl EventSchema for AssetCreated {
-        const KIND: u8 = 1;
-
-        fn definition() -> &'static EventDefinition {
-            static DEF: EventDefinition = EventDefinition {
-                kind: AssetCreated::KIND,
-                name: "AssetCreated",
-                version: 1,
-                fields: &[],
-            };
-            &DEF
-        }
-    }
-
-    impl GeneratedEventAccess for AssetCreated {
-        type Access<'a> = AssetCreatedAccess<'a>;
-        type Builder = AssetCreatedBuilder;
-
-        fn wrap(data: &[u8]) -> Self::Access<'_> {
-            AssetCreatedAccess { data }
-        }
-
-        fn builder() -> Self::Builder {
-            AssetCreatedBuilder { asset_id: None }
-        }
-    }
-
-    struct AssetCommand;
-
-    struct AssetCommandAccess<'a> {
-        _data: &'a [u8],
-    }
-
-    impl CommandSchema for AssetCommand {
-        const KIND: u8 = 9;
-
-        fn definition() -> &'static CommandDefinition {
-            static DEF: CommandDefinition = CommandDefinition {
-                kind: AssetCommand::KIND,
-                name: "AssetCommand",
-                version: 1,
-                fields: &[],
-            };
-            &DEF
-        }
-    }
-
-    impl GeneratedCommandAccess for AssetCommand {
-        type Access<'a> = AssetCommandAccess<'a>;
-        type Builder = ();
-
-        fn wrap(data: &[u8]) -> Self::Access<'_> {
-            AssetCommandAccess { _data: data }
-        }
-
-        fn builder() -> Self::Builder {}
-    }
-
-    fn registry() -> SchemaRegistry {
-        SchemaRegistry::new(
-            Version::new(1, 0),
-            &[*Asset::definition()],
-            &[],
-            &[*AssetCreated::definition()],
-            &[],
-        )
+    fn create_item(host: &mut TestHost, item_id: u64, external_id: u64, owner: u64) -> RecordKey {
+        RuntimeHostContextExt::create_typed::<Item, _>(host, |item| {
+            item.init_item_id(item_id).init_external_id(external_id).set_owner(owner).set_status(1);
+        }).unwrap()
     }
 
     #[test]
-    fn create_read_update_and_delete_record_by_primary_key() {
+    fn secondary_unique_key_conflict_preserves_indexes_and_id_allocation() {
+        let mut host = item_host();
+        let first = create_item(&mut host, 1, 101, 7);
+
+        let error = RuntimeHostContextExt::create_typed::<Item, _>(&mut host, |item| {
+            item.init_item_id(2).init_external_id(101).set_owner(8).set_status(1);
+        }).unwrap_err();
+
+        assert!(error.message.contains("duplicate unique key 1"), "{error:?}");
+        assert_eq!(host.record_count(), 1);
+        assert_eq!(host.read::<Item, _>(Item::uk(2), |_| ()), None);
+        assert_eq!(host.read_by_uk_id::<Item, _>(1, Item::uk_by_external(101), |item| item.item_id()), Some(1));
+        let second = create_item(&mut host, 2, 102, 8);
+        assert_eq!(second.sys_id, first.sys_id + 1);
+
+        assert!(TxWriteContext::delete_raw(&mut host, first).unwrap());
+        assert_eq!(host.read_by_uk_id::<Item, _>(1, Item::uk_by_external(101), |_| ()), None);
+    }
+
+    #[test]
+    fn transaction_error_restores_records_secondary_keys_events_and_ids() {
+        let mut host = item_host();
+        let first = create_item(&mut host, 1, 101, 7);
+
+        let result = host.transaction(|tx| {
+            create_item(tx, 2, 102, 8);
+            RuntimeHostContext::emit_typed_event_raw(tx, 1, b"provisional")?;
+            Err::<(), _>(RuntimeHostError::new("business refused"))
+        });
+
+        assert_eq!(result.unwrap_err().message, "business refused");
+        assert_eq!(host.record_count(), 1);
+        assert_eq!(host.read_by_uk_id::<Item, _>(1, Item::uk_by_external(102), |_| ()), None);
+        assert!(host.events().is_empty());
+        let next = create_item(&mut host, 3, 102, 9);
+        assert_eq!(next.sys_id, first.sys_id + 1);
+    }
+
+    #[test]
+    fn index_count_observes_provisional_updates_and_transaction_rollback() {
+        let mut host = item_host();
+        create_item(&mut host, 1, 101, 7);
+        let second = create_item(&mut host, 2, 102, 8);
+        let prefix = Item::index_by_owner_status_prefix1(7);
+
+        let result = host.transaction(|tx| {
+            TxWriteContext::update_raw(tx, second, |data| { Item::wrap_update(data).set_owner(7); })?;
+            assert_eq!(TxReadContext::count_index_prefix_capped_raw(tx, Item::KIND, 0, &prefix, 2)?,
+                CanonicalIndexCount::AtLeast(2));
+            Err::<(), _>(RuntimeHostError::new("discard update"))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(TxReadContext::count_index_prefix_capped_raw(&host, Item::KIND, 0, &prefix, 2).unwrap(),
+            CanonicalIndexCount::Exact(1));
+        assert_eq!(host.expect::<Item, _>(Item::uk(2), |item| item.owner()), 8);
+    }
+
+    #[test]
+    fn transaction_unwind_restores_state_before_propagating_the_panic() {
+        let mut host = item_host();
+        let panic = catch_unwind(AssertUnwindSafe(|| {
+            let _: Result<(), ()> = host.transaction(|tx| {
+                create_item(tx, 1, 101, 7);
+                panic!("handler failed");
+            });
+        }));
+
+        assert!(panic.is_err());
+        assert_eq!(host.record_count(), 0);
+        assert_eq!(host.read_by_uk_id::<Item, _>(1, Item::uk_by_external(101), |_| ()), None);
+        assert_eq!(create_item(&mut host, 2, 101, 7).sys_id, 1);
+    }
+
+    #[test]
+    fn typed_plugin_run_checks_payload_before_invoking_the_plugin() {
+        let mut host = TestHost::for_plugin(EchoPlugin);
+        let result = host.run_with_envelope::<AssetCommand>(1, 0, [0; 7]);
+
+        assert!(result.is_err());
+        assert!(host.events().is_empty());
+        assert!(host.debug_logs().is_empty());
+    }
+
+    #[test]
+    fn create_read_update_and_delete_record_by_unique_key() {
         let mut host = TestHost::new(registry());
 
         let key = host
@@ -897,14 +934,14 @@ mod tests {
         assert_eq!(key.sys_id, 1);
 
         let asset = host
-            .read_typed_by_pk::<Asset, _, _, _>(Asset::pk(42), |asset| {
+            .read_typed_by_uk::<Asset, _, _, _>(Asset::uk(42), |asset| {
                 (asset.asset_id(), asset.precision())
             })
             .unwrap();
         assert_eq!(asset, Some((42, 6)));
 
         let updated = host
-            .update_typed_by_pk::<Asset, _, _, _>(Asset::pk(42), |asset| {
+            .update_typed_by_uk::<Asset, _, _, _>(Asset::uk(42), |asset| {
                 asset.set_precision(8);
                 8
             })
@@ -916,12 +953,12 @@ mod tests {
             Some(8)
         );
 
-        assert!(host.delete_by_pk::<Asset, _>(Asset::pk(42)).unwrap());
+        assert!(host.delete_by_uk::<Asset, _>(Asset::uk(42)).unwrap());
         assert_eq!(host.record_count(), 0);
     }
 
     #[test]
-    fn duplicate_primary_key_is_rejected() {
+    fn duplicate_unique_key_is_rejected() {
         let mut host = TestHost::new(registry());
         host.create_typed::<Asset, _>(|asset| {
             asset.init_asset_id(42).set_precision(6);
@@ -933,12 +970,12 @@ mod tests {
                 asset.init_asset_id(42).set_precision(8);
             })
             .unwrap_err();
-        assert!(err.message.contains("duplicate primary key"));
+        assert!(err.message.contains("duplicate unique key"));
         assert_eq!(host.record_count(), 1);
     }
 
     #[test]
-    fn failed_primary_key_change_does_not_commit_partial_update() {
+    fn immutable_key_change_does_not_commit_partial_update() {
         let mut host = TestHost::new(registry());
         host.create_typed::<Asset, _>(|asset| {
             asset.init_asset_id(1).set_precision(6);
@@ -949,10 +986,10 @@ mod tests {
         })
         .unwrap();
 
-        let err = RuntimeHostContext::update_typed_by_pk_raw(
+        let err = RuntimeHostContext::update_typed_by_uk_raw(
             &mut host,
             Asset::KIND,
-            Asset::pk(1).as_slice(),
+            Asset::uk(1).as_slice(),
             &mut |data| {
                 data[0..8].copy_from_slice(&2u64.to_le_bytes());
                 data[8] = 9;
@@ -960,9 +997,9 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(err.message.contains("duplicate primary key"));
+        assert!(err.message.contains("immutable field"));
         let asset = host
-            .read_typed_by_pk::<Asset, _, _, _>(Asset::pk(1), |asset| {
+            .read_typed_by_uk::<Asset, _, _, _>(Asset::uk(1), |asset| {
                 (asset.asset_id(), asset.precision())
             })
             .unwrap();
@@ -972,9 +1009,9 @@ mod tests {
     #[test]
     fn captures_and_reads_typed_events() {
         let mut host = TestHost::new(registry());
-        let payload = AssetCreated::builder().set_asset_id(7).build();
+        let payload = AssetCreated::builder().set_asset_id(7).build().expect("fixed-width payload");
 
-        host.emit_typed_event::<AssetCreated>(payload).unwrap();
+        RuntimeHostContextExt::emit_typed_event::<AssetCreated>(&mut host, payload).unwrap();
 
         assert_eq!(host.events().len(), 1);
         assert_eq!(
@@ -998,7 +1035,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(keys.len(), 1);
-        let precision = read_invariant_by_pk::<_, Asset, _, _, _>(&host, Asset::pk(42), |asset| {
+        let precision = read_invariant_by_uk::<_, Asset, _, _, _>(&host, Asset::uk(42), |asset| {
             asset.precision()
         })
         .unwrap();

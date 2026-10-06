@@ -35,9 +35,11 @@ pub fn derive_enum_u8(input: TokenStream) -> TokenStream {
 
 /// Defines a fixed-layout StateVec record.
 ///
-/// Required arguments include `kind = <u8>` and `record_len = <usize>`.
-/// Optional primary-key metadata can be provided with
-/// `pk(fields = [field_a, field_b])`.
+/// Required arguments include `kind = <u16>` and `record_len = <usize>`.
+/// `record_len` includes the header and must be a power of two from 64 bytes
+/// through the runtime's 32 KiB limit ([`statevec_model::MAX_RECORD_LEN`]).
+/// Optional unique-key metadata can be provided with
+/// `uk(id = 0, fields = [field_a, field_b])`.
 #[proc_macro_attribute]
 pub fn record(args: TokenStream, input: TokenStream) -> TokenStream {
     let args_ts: proc_macro2::TokenStream = args.into();
@@ -107,7 +109,5 @@ pub fn export_runtime_plugin(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn command_dispatch(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as CommandDispatchInput);
-    expand_command_dispatch(input)
-        .unwrap_or_else(|e| e.to_compile_error())
-        .into()
+    expand_command_dispatch(input).unwrap_or_else(|e| e.to_compile_error()).into()
 }
