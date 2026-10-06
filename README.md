@@ -34,8 +34,7 @@ The flight-booking example covers inventory and reservations.
 Application crates usually depend on `statevec`, with `statevec-test` as a
 development dependency. Use the same StateVec release or Git revision for all
 these crates. Cluster client usage is covered in the
-[client guide](docs/user-guide/cluster-client.md). The role-marker helper crates
-are internal build support; applications need not use them.
+[client guide](docs/user-guide/cluster-client.md).
 
 ```rust
 use statevec::prelude::*;
@@ -90,6 +89,8 @@ in the production cluster.
 ## Development
 
 The workspace uses Rust 2024 with a minimum declared Rust version of 1.91.
+Development and CI use Rust 1.95.0, pinned in `rust-toolchain.toml`, to keep
+compiler diagnostics reproducible for the compile-fail tests.
 
 ```sh
 cargo check --workspace --all-targets
