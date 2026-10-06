@@ -1,0 +1,22 @@
+name: Rust
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.132
+      - run: cargo check --workspace --all-targets --locked
+      - run: cargo nextest run --workspace --all-targets --locked --no-tests fail
+      - run: cargo test --workspace --doc --locked

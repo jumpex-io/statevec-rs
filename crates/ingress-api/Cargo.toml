@@ -1,0 +1,15 @@
+[package]
+name = "ingress-api"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.91"
+description = "Request and reply codecs for the StateVec cluster client."
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+serde.workspace = true
+statevec_frame = { package = "statevec-frame", version = "0.2.0", path = "../statevec-frame" }

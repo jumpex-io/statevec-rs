@@ -27,10 +27,15 @@ The flight-booking example covers inventory and reservations.
 | `statevec-macros` | Schema declarations, accessors, builders and checked payloads |
 | `statevec-api` | Business transaction interfaces and the plugin ABI |
 | `statevec-test` | A small memory engine and helpers for local tests |
+| `statevec-ingress-client` | Bounded cluster client with manual, background and async driving |
+| `ingress-api` | Request/reply codecs and incremental frame readers |
+| `statevec-frame` | Client inputs, intent identity and application-result bindings |
 
 Application crates usually depend on `statevec`, with `statevec-test` as a
 development dependency. Use the same StateVec release or Git revision for all
-these crates.
+these crates. Cluster client usage is covered in the
+[client guide](docs/user-guide/cluster-client.md). The role-marker helper crates
+are internal build support; applications need not use them.
 
 ```rust
 use statevec::prelude::*;
