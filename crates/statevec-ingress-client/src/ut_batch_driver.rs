@@ -95,6 +95,7 @@ struct Network {
     connect_error: Option<io::ErrorKind>,
     wait_error: Option<io::ErrorKind>,
     wait_error_delay: Duration,
+    physical_now: Option<std::time::Instant>,
     failed_wait_pauses: Vec<Duration>,
     waits: Vec<(bool, bool, Option<Duration>)>,
 }
@@ -124,8 +125,7 @@ impl BatchConnectIo for ScriptIo {
         network.waits.push((interests.0, interests.1, timeout));
         if let Some(kind) = network.wait_error.take() {
             let delay = network.wait_error_delay;
-            drop(network);
-            std::thread::sleep(delay);
+            *network.physical_now.as_mut().expect("scripted physical clock") += delay;
             return Err(kind.into());
         }
         let readable = interests.0
@@ -139,12 +139,17 @@ impl BatchConnectIo for ScriptIo {
     fn pause_after_wait_error(&mut self, remaining: Duration) {
         self.0.lock().unwrap().failed_wait_pauses.push(remaining);
     }
+
+    fn monotonic_now(&self) -> std::time::Instant {
+        self.0.lock().unwrap().physical_now.expect("scripted physical clock")
+    }
 }
 
 fn driver(devices: &[Arc<Mutex<Device>>]) -> (BatchDriverWorker<ScriptIo>, Arc<Mutex<Network>>) {
     let network = Arc::new(Mutex::new(Network {
         devices: devices.iter().cloned().collect(),
         connect_ready: true,
+        physical_now: Some(std::time::Instant::now()), // Epoch only; no elapsed samples.
         ..Network::default()
     }));
     (BatchDriverWorker::new(ScriptIo(network.clone())), network)

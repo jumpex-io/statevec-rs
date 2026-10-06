@@ -141,7 +141,6 @@ fn persistent_wait_errors_pause_only_within_the_remaining_budget(cut: WaitBudget
         assert!(matches!(driver.step(&mut client), Ok(BatchDriverStep::Waiting)));
         network.lock().unwrap().wait_error = Some(io::ErrorKind::AlreadyExists);
         network.lock().unwrap().wait_error_delay = Duration::from_millis(elapsed_floor);
-        let started = std::time::Instant::now();
         assert!(matches!(driver.wait(&mut client, Duration::from_millis(host_ceiling)),
             Ok(BatchDriverStep::Diagnostic { cause: ClientFailure::BatchWait { source } })
                 if source.kind() == io::ErrorKind::AlreadyExists));
@@ -149,13 +148,10 @@ fn persistent_wait_errors_pause_only_within_the_remaining_budget(cut: WaitBudget
         assert_eq!(network.waits.last().unwrap().2, Some(Duration::from_millis(wait_budget)));
         assert_eq!(network.failed_wait_pauses.len(), attempt, "each failed wait must park, not spin");
         let remaining = *network.failed_wait_pauses.last().unwrap();
-        assert!(
-            remaining <= Duration::from_millis(wait_budget - elapsed_floor),
-            "failed wait must deduct elapsed time within the existing budget: {remaining:?}"
-        );
-        assert!(
-            remaining >= Duration::from_millis(wait_budget).saturating_sub(started.elapsed()),
-            "an immediate error cannot discard the unspent wait budget: {remaining:?}"
+        assert_eq!(
+            remaining,
+            Duration::from_millis(wait_budget - elapsed_floor),
+            "failed wait must deduct exactly the device's elapsed time from its existing budget"
         );
         assert!(client.poll_event().is_none(), "wait diagnostics cannot terminate the owner's intent");
         assert_eq!(device.lock().unwrap().drops, 0);

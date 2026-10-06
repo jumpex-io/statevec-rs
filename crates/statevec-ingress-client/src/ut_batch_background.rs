@@ -65,6 +65,12 @@ struct GatedIo {
 }
 impl BatchConnectIo for GatedIo {
     type Stream = Bytes;
+    fn monotonic_now(&self) -> Instant {
+        self.io.monotonic_now()
+    }
+    fn pause_after_wait_error(&mut self, remaining: Duration) {
+        self.io.pause_after_wait_error(remaining);
+    }
     fn connect(&mut self, address: SocketAddr) -> io::Result<Bytes> {
         self.io.connect(address)
     }

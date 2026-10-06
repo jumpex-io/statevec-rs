@@ -23,6 +23,14 @@ impl BatchTcpWorker {
 impl BatchConnectIo for BatchTcpWorker {
     type Stream = TcpStream;
 
+    fn monotonic_now(&self) -> std::time::Instant {
+        std::time::Instant::now()
+    }
+
+    fn pause_after_wait_error(&mut self, remaining: Duration) {
+        std::thread::sleep(remaining);
+    }
+
     fn connect(&mut self, address: SocketAddr) -> io::Result<TcpStream> {
         let socket = Socket::new(Domain::for_address(address), Type::STREAM, Some(Protocol::TCP))?;
         socket.set_nonblocking(true)?;

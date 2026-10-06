@@ -16,12 +16,16 @@ pub trait BatchConnectIo {
         timeout: Option<Duration>,
     ) -> io::Result<(bool, bool)>;
 
+    /// Physical elapsed-time source for reducing an already authorized wait
+    /// after an I/O error. It never expires owner work. Virtual devices must
+    /// provide the same elapsed-time axis as their owner clock.
+    fn monotonic_now(&self) -> Instant;
+
     /// Consume the remainder of one failed manual wait without reusing its
     /// failed readiness mechanism. Zero is nonblocking. Virtual devices may
     /// record/advance this physical delay; it never authorizes owner work.
-    fn pause_after_wait_error(&mut self, remaining: Duration) {
-        std::thread::sleep(remaining);
-    }
+    /// Every implementation selects its own physical delay explicitly.
+    fn pause_after_wait_error(&mut self, remaining: Duration);
 }
 
 /// One mechanical turn, not a batch outcome. Diagnostics report an input
@@ -133,21 +137,25 @@ impl<P: BatchConnectIo> BatchDriverWorker<P> {
             return Ok(progress);
         }
         let budget = timeout.map_or(max_wait, |due| due.min(max_wait));
-        let started = Instant::now();
+        let started = self.io.monotonic_now();
         Ok(match self.wait_io(Some(budget)) {
             Ok(()) => BatchDriverStep::Runnable,
             Err(source) => {
                 // Physical elapsed time only reduces this already-authorized
                 // wait; it cannot expire, retry or retire owner work.
-                self.io.pause_after_wait_error(budget.saturating_sub(started.elapsed()));
+                let elapsed = self.io.monotonic_now().saturating_duration_since(started);
+                self.io.pause_after_wait_error(budget.saturating_sub(elapsed));
                 BatchDriverStep::Diagnostic { cause: ClientFailure::BatchWait { source } }
             }
         })
     }
 
-    // Same Drive ingress as step: time is sampled once by the sole owner,
-    // which may publish a due effect instead of authorizing a wait.
-    pub(crate) fn prepare_wait(
+    /// Prepare a physical wait through the same Drive ingress as step. The
+    /// sole owner samples current time and may publish a due effect instead.
+    /// Only Waiting permits parking; the returned duration is a scheduling
+    /// projection, not authority to retry or settle. A runner can release its
+    /// owner lock and call wait_io, then re-enter step after readiness or wake.
+    pub fn prepare_wait(
         &mut self,
         client: &mut IngressClientOwner,
     ) -> Result<(BatchDriverStep, Option<Duration>), ClientFailure> {
