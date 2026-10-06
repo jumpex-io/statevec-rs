@@ -16,7 +16,9 @@ use statevec_model::{CommandDefinition, CommandKind, SchemaRegistry};
 
 mod business_code;
 mod plugin_abi_v1;
+mod reference_time;
 pub use business_code::BusinessRejectCode;
+pub use reference_time::ReferenceTimeUnavailable;
 mod throughput_probe;
 pub use plugin_abi_v1::{
     ExportedRuntimePluginV2Handle, RUNTIME_PLUGIN_ABI_VERSION_V2, RUNTIME_PLUGIN_ENTRY_V2_SYMBOL, RuntimeBytesMutRef,
@@ -156,6 +158,13 @@ impl std::error::Error for RuntimePluginUnloadError {}
 /// implement this trait through an adapter. Plugin-facing code should depend on
 /// this capability surface instead of any concrete engine transaction type.
 pub trait RuntimeHostContext {
+    /// Returns the replicated transaction reference time in Unix-epoch nanoseconds.
+    /// Zero is valid; the value is neither monotonic nor a freshness proof.
+    /// Hosts without this input (including the V1 host ABI) fail explicitly.
+    fn ref_tx_time_ns(&self) -> Result<u64, ReferenceTimeUnavailable> {
+        Err(ReferenceTimeUnavailable)
+    }
+
     /// Reads a record by system id and passes its bytes to `f` when found.
     fn with_read_typed_raw(
         &self,
@@ -537,6 +546,13 @@ pub trait TxReadContext {
     /// Host error type.
     type Error;
 
+    /// Returns the immutable replicated execution time, not command external time.
+    /// Native execution supplies the exact assigned nanoseconds on every path.
+    /// Existing hosts without that capability return an explicit error, never zero.
+    fn ref_tx_time_ns(&self) -> Result<u64, ReferenceTimeUnavailable> {
+        Err(ReferenceTimeUnavailable)
+    }
+
     /// Reads a record by key.
     fn with_read_raw<T>(&self, key: RecordKey, f: impl FnOnce(&[u8]) -> T) -> Result<Option<T>, Self::Error>;
     /// Iterates record keys for one record kind. An error may follow a partial
@@ -597,6 +613,16 @@ impl<T: TxUkContext + TxSysIdCreateContext + ?Sized> TxContext for T {}
 pub trait TypedTxContext {
     /// Host error type.
     type Error;
+
+    /// Returns the leader-assigned, replicated Unix-epoch reference nanoseconds.
+    ///
+    /// Simulation, validation, retained apply and replay observe the same input.
+    /// Zero and decreasing values are valid. This is not a local clock, deadline
+    /// or freshness proof, and is unrelated to `RuntimeCommandEnvelope::ref_ext_time_us`.
+    /// An unsupported host must return an error rather than synthesize a value.
+    fn ref_tx_time_ns(&self) -> Result<u64, ReferenceTimeUnavailable> {
+        Err(ReferenceTimeUnavailable)
+    }
 
     /// Reads a generated record by system id.
     fn with_read_typed<R, T, F>(&self, sys_id: SysId, f: F) -> Result<Option<T>, Self::Error>
@@ -715,6 +741,10 @@ pub trait TypedTxContext {
 
 impl<Ctx: TxContext + ?Sized> TypedTxContext for Ctx {
     type Error = <Ctx as TxReadContext>::Error;
+
+    fn ref_tx_time_ns(&self) -> Result<u64, ReferenceTimeUnavailable> {
+        TxReadContext::ref_tx_time_ns(self)
+    }
 
     fn with_read_typed<R, T, F>(&self, sys_id: SysId, f: F) -> Result<Option<T>, Self::Error>
     where
@@ -850,6 +880,10 @@ impl<Ctx: TxContext + ?Sized> TypedTxContext for Ctx {
 /// adapters without requiring engine-internal raw transaction capabilities.
 impl TypedTxContext for dyn RuntimeHostContext + '_ {
     type Error = RuntimeHostError;
+
+    fn ref_tx_time_ns(&self) -> Result<u64, ReferenceTimeUnavailable> {
+        RuntimeHostContext::ref_tx_time_ns(self)
+    }
 
     fn with_read_typed<R, T, F>(&self, sys_id: SysId, f: F) -> Result<Option<T>, Self::Error>
     where

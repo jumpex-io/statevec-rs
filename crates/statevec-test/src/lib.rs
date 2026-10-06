@@ -26,7 +26,7 @@ use std::ops::{Deref, DerefMut};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use statevec_api::{
-    BizInvariantReadContext, CanonicalIndexCount, InvariantReadContextExt, RecordKey,
+    BizInvariantReadContext, CanonicalIndexCount, InvariantReadContextExt, RecordKey, ReferenceTimeUnavailable,
     RuntimeCommandRef, RuntimeHostContext, RuntimeHostContextExt, RuntimeHostError, RuntimePlugin,
     RuntimePluginError, TxReadContext, TxSysIdCreateContext, TxUkContext, TxWriteContext,
 };
@@ -87,6 +87,12 @@ where
     /// calls.
     pub fn with_ref_time(mut self, ref_time_us: u64) -> Self {
         self.ref_time_us = ref_time_us;
+        self
+    }
+
+    /// Supplies explicit execution nanoseconds independently of external time.
+    pub fn with_ref_tx_time_ns(mut self, ref_tx_time_ns: u64) -> Self {
+        self.inner.set_ref_tx_time_ns(ref_tx_time_ns);
         self
     }
 
@@ -175,6 +181,7 @@ impl<P> DerefMut for PluginTestHost<P> {
 #[derive(Debug, Clone)]
 pub struct TestHost {
     registry: SchemaRegistry,
+    ref_tx_time_ns: Option<u64>,
     next_sys_id: SysId,
     records: BTreeMap<RecordKey, Vec<u8>>,
     uk_index: BTreeMap<(RecordKind, u8, Vec<u8>), SysId>,
@@ -188,6 +195,7 @@ impl TestHost {
     pub fn new(registry: SchemaRegistry) -> Self {
         Self {
             registry,
+            ref_tx_time_ns: None,
             next_sys_id: 1,
             records: BTreeMap::new(),
             uk_index: BTreeMap::new(),
@@ -213,6 +221,12 @@ impl TestHost {
     /// Returns the schema registry used by this host.
     pub fn schema_registry(&self) -> &SchemaRegistry {
         &self.registry
+    }
+
+    /// Sets the explicit reference time for subsequent test transactions.
+    /// This fixture input does not establish production clock or Raft behavior.
+    pub fn set_ref_tx_time_ns(&mut self, ref_tx_time_ns: u64) {
+        self.ref_tx_time_ns = Some(ref_tx_time_ns);
     }
 
     /// Returns the number of materialized records.
@@ -481,6 +495,10 @@ impl TestHost {
 }
 
 impl RuntimeHostContext for TestHost {
+    fn ref_tx_time_ns(&self) -> Result<u64, ReferenceTimeUnavailable> {
+        self.ref_tx_time_ns.ok_or(ReferenceTimeUnavailable)
+    }
+
     fn with_read_typed_raw(
         &self,
         record_kind: RecordKind,
@@ -585,6 +603,10 @@ impl RuntimeHostContext for TestHost {
 
 impl TxReadContext for TestHost {
     type Error = RuntimeHostError;
+
+    fn ref_tx_time_ns(&self) -> Result<u64, ReferenceTimeUnavailable> {
+        RuntimeHostContext::ref_tx_time_ns(self)
+    }
 
     fn with_read_raw<T>(
         &self,
@@ -779,6 +801,9 @@ where
 {
     InvariantReadContextExt::with_read_typed_by_uk::<R, P, T, F>(ctx, uk, f)
 }
+
+#[cfg(test)]
+mod ut_reference_time;
 
 #[cfg(test)]
 mod tests {

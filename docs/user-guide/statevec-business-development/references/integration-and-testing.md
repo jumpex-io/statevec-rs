@@ -102,9 +102,20 @@ Use generated builders and handle their `Result`. Then construct a
 `statevec::Command` with its kind, external sequence, client-provided reference
 time and payload.
 
-The local test supplies time explicitly. The production platform separately
-binds its execution reference time into replicated input. Keep business time
-inputs explicit; do not read a local clock inside a handler.
+`TypedTxContext::ref_tx_time_ns()` returns the platform's replicated transaction
+reference as `Result<u64, statevec::api::ReferenceTimeUnavailable>`. Native
+execution supplies the exact leader-assigned Unix-epoch nanoseconds through
+simulation, validation, retained apply and replay. Zero and decreasing values
+are valid; this input is not a monotonic clock or a freshness guarantee.
+Command `ref_ext_time_us()` remains separate, client-provided microseconds.
+
+For local tests, call `TestHost::set_ref_tx_time_ns(value)` or construct the
+plugin wrapper with `.with_ref_tx_time_ns(value)`. This fixture input persists
+until explicitly changed. `.with_ref_time(value)` only sets command external
+microseconds. An unconfigured TestHost or legacy V1 host ABI returns
+`ReferenceTimeUnavailable`, never a fabricated zero. Preserve this as a typed
+execution failure; do not map it to a business refusal or substitute another
+clock. TestHost does not establish production assignment or replay behavior.
 
 The flight-booking command helper prints `kind:payload_hex` for inspecting
 generated payloads. Submission to a production cluster uses the platform
