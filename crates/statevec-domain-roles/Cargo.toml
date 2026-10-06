@@ -1,0 +1,12 @@
+[package]
+name = "statevec-domain-roles"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.91"
+publish = false
+description = "Zero-state semantic role markers for StateVec domains."
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+statevec-domain-role-macros = { version = "0.2.0", path = "../statevec-domain-role-macros" }

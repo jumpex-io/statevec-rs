@@ -1,0 +1,17 @@
+[package]
+name = "statevec-domain-role-macros"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.91"
+publish = false
+description = "Attribute markers for StateVec semantic domain roles."
+license.workspace = true
+repository.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn = { version = "2", features = ["full"] }

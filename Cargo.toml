@@ -5,6 +5,11 @@ members = [
     "crates/statevec-macros",
     "crates/statevec-api",
     "crates/statevec-test",
+    "crates/statevec-frame",
+    "crates/ingress-api",
+    "crates/statevec-ingress-client",
+    "crates/statevec-domain-roles",
+    "crates/statevec-domain-role-macros",
     "demo/bank",
     "demo/flight-booking",
 ]
@@ -25,13 +30,23 @@ statevec_macros = { package = "statevec-macros", version = "0.2.0", path = "crat
 statevec_api = { package = "statevec-api", version = "0.2.0", path = "crates/statevec-api" }
 statevec_test = { package = "statevec-test", version = "0.2.0", path = "crates/statevec-test" }
 
+statevec_frame = { package = "statevec-frame", version = "0.2.0", path = "crates/statevec-frame" }
+ingress_api = { package = "ingress-api", version = "0.2.0", path = "crates/ingress-api" }
+statevec_ingress_client = { package = "statevec-ingress-client", version = "0.2.0", path = "crates/statevec-ingress-client" }
+statevec_domain_roles = { package = "statevec-domain-roles", version = "0.2.0", path = "crates/statevec-domain-roles" }
+
 # External
 proc-macro2 = "1"
 quote = "1"
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 sha2 = "0.10"
 smallvec = "1"
 syn = { version = "2.0.117", features = ["full"] }
 test-case = "3.3.1"
+libc = "0.2"
+socket2 = "0.6.3"
+polling = "3.11"
+tempfile = "3"
+raft_rand = { package = "rand", version = "0.9.3" }
 trybuild = "1"
