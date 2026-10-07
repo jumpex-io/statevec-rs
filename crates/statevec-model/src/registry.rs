@@ -35,11 +35,18 @@ pub struct SchemaIdentity {
     pub event_schema_fingerprint: SchemaFingerprint,
 }
 
+/// Record kinds below this bound are found by direct index.
+const DENSE_RECORD_KINDS: usize = 1024;
+
 /// Registry of all schema definitions exported by one domain schema module.
 #[derive(Debug, Clone)]
 pub struct SchemaRegistry {
     schema_version: Version,
     record_defs: BTreeMap<RecordKind, RecordDefinition>,
+    /// Record definitions with kinds below `DENSE_RECORD_KINDS`, indexed by
+    /// kind for the per-record lookups of execution. Holds the same values as
+    /// `record_defs`; it is sized by the largest such kind present.
+    dense_record_defs: Box<[Option<RecordDefinition>]>,
     command_defs: BTreeMap<CommandKind, CommandDefinition>,
     event_defs: BTreeMap<EventKind, EventDefinition>,
     enum_defs: BTreeMap<&'static str, EnumDefinition>,
@@ -81,9 +88,21 @@ impl SchemaRegistry {
         let event_schema_fingerprint = fingerprint_event_defs(event_defs.values().copied());
         let types_schema_fingerprint = fingerprint_enum_defs(enum_defs.values().copied());
 
+        let dense_len = record_defs
+            .keys()
+            .filter(|kind| usize::from(**kind) < DENSE_RECORD_KINDS)
+            .map(|kind| usize::from(*kind) + 1)
+            .max()
+            .unwrap_or(0);
+        let mut dense_record_defs = vec![None; dense_len].into_boxed_slice();
+        for (kind, definition) in record_defs.range(..DENSE_RECORD_KINDS as RecordKind) {
+            dense_record_defs[usize::from(*kind)] = Some(*definition);
+        }
+
         Ok(Self {
             schema_version,
             record_defs,
+            dense_record_defs,
             command_defs,
             event_defs,
             enum_defs,
@@ -142,7 +161,12 @@ impl SchemaRegistry {
     }
 
     /// Returns a record definition by kind.
+    #[inline]
     pub fn try_get(&self, kind: RecordKind) -> Option<&RecordDefinition> {
+        let index = usize::from(kind);
+        if index < DENSE_RECORD_KINDS {
+            return self.dense_record_defs.get(index).and_then(Option::as_ref);
+        }
         self.record_defs.get(&kind)
     }
 

@@ -565,3 +565,19 @@ fn schema_registry_rejects_system_event_kind() {
 fn schema_registry_rejects_duplicate_enum_name() {
     let _ = SchemaRegistry::new(Version::new(1, 0), &[], &[], &[], &[ENUM_A, ENUM_B]);
 }
+
+#[test]
+fn record_lookup_answers_identically_for_low_high_and_absent_kinds() {
+    // RECORD_USER_MAX lies beyond the directly indexed kinds.
+    let registry = SchemaRegistry::with_records(Version::new(1, 0), &[RECORD_B, RECORD_USER_MAX, RECORD_A]);
+    let present = [RECORD_A.kind, RECORD_B.kind, RECORD_USER_MAX.kind];
+    for kind in (0..=2048).chain([RECORD_USER_MAX.kind - 1, RECORD_USER_MAX.kind, u16::MAX]) {
+        let found = registry.try_get(kind).map(|definition| (definition.kind, definition.name));
+        let expected = registry
+            .record_defs()
+            .find(|definition| definition.kind == kind)
+            .map(|definition| (definition.kind, definition.name));
+        assert_eq!(found, expected, "kind {kind}");
+        assert_eq!(found.is_some(), present.contains(&kind), "kind {kind}");
+    }
+}
