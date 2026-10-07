@@ -831,6 +831,8 @@ where
 mod ut_reference_time;
 #[cfg(test)]
 mod ut_transaction_position;
+#[cfg(test)]
+mod ut_record_handles;
 
 #[cfg(test)]
 mod tests {

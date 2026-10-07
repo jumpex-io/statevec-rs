@@ -675,6 +675,30 @@ pub trait TypedTxContext {
         P: AsRef<[u8]>,
         F: FnOnce(R::Access<'_>) -> T;
 
+    /// Resolves a generated record's unique key (UK 0) to its system id.
+    ///
+    /// A system id names one record for its whole life, so a handler that
+    /// reads and then writes or deletes the same record resolves its key once
+    /// and passes the id to [`TypedTxContext::with_read_typed`],
+    /// [`TypedTxContext::update_typed`] and [`TypedTxContext::delete_typed`].
+    /// Hosts without record handles, including the V1 host ABI, return an error.
+    fn resolve_typed_uk<R, P>(&self, uk: P) -> Result<Option<SysId>, Self::Error>
+    where
+        R: GeneratedRecordAccess,
+        P: AsRef<[u8]>;
+
+    /// Updates a generated record by system id; `None` when it does not exist,
+    /// including after deletion in this transaction.
+    fn update_typed<R, T, F>(&mut self, sys_id: SysId, f: F) -> Result<Option<T>, Self::Error>
+    where
+        R: GeneratedRecordAccess,
+        F: for<'b> FnOnce(&mut R::UpdateBuilder<'b>) -> T;
+
+    /// Deletes a generated record by system id; `false` when it does not exist.
+    fn delete_typed<R>(&mut self, sys_id: SysId) -> Result<bool, Self::Error>
+    where
+        R: GeneratedRecordAccess;
+
     /// Creates a generated record.
     fn create_typed<R, F>(&mut self, init: F) -> Result<RecordKey, Self::Error>
     where
@@ -804,6 +828,32 @@ impl<Ctx: TxContext + ?Sized> TypedTxContext for Ctx {
             return Ok(None);
         };
         TypedTxContext::with_read_typed::<R, T, F>(self, sys_id, f)
+    }
+
+    fn resolve_typed_uk<R, P>(&self, uk: P) -> Result<Option<SysId>, Self::Error>
+    where
+        R: GeneratedRecordAccess,
+        P: AsRef<[u8]>,
+    {
+        TxUkContext::resolve_uk_id(self, R::KIND, 0, uk.as_ref())
+    }
+
+    fn update_typed<R, T, F>(&mut self, sys_id: SysId, f: F) -> Result<Option<T>, Self::Error>
+    where
+        R: GeneratedRecordAccess,
+        F: for<'b> FnOnce(&mut R::UpdateBuilder<'b>) -> T,
+    {
+        TxWriteContext::update_raw(self, RecordKey { kind: R::KIND, sys_id }, |data| {
+            let mut builder = R::wrap_update(data);
+            f(&mut builder)
+        })
+    }
+
+    fn delete_typed<R>(&mut self, sys_id: SysId) -> Result<bool, Self::Error>
+    where
+        R: GeneratedRecordAccess,
+    {
+        TxWriteContext::delete_raw(self, RecordKey { kind: R::KIND, sys_id })
     }
 
     fn create_typed<R, F>(&mut self, init: F) -> Result<RecordKey, Self::Error>
@@ -946,6 +996,29 @@ impl TypedTxContext for dyn RuntimeHostContext + '_ {
             return RuntimeHostContextExt::with_read_typed_by_uk::<R, P, T, F>(self, uk, f);
         }
         Err(RuntimeHostError::new("RuntimeHostContext does not support secondary UK lookup yet"))
+    }
+
+    fn resolve_typed_uk<R, P>(&self, _uk: P) -> Result<Option<SysId>, Self::Error>
+    where
+        R: GeneratedRecordAccess,
+        P: AsRef<[u8]>,
+    {
+        Err(RuntimeHostError::new("RuntimeHostContext does not support record handles yet"))
+    }
+
+    fn update_typed<R, T, F>(&mut self, _sys_id: SysId, _f: F) -> Result<Option<T>, Self::Error>
+    where
+        R: GeneratedRecordAccess,
+        F: for<'b> FnOnce(&mut R::UpdateBuilder<'b>) -> T,
+    {
+        Err(RuntimeHostError::new("RuntimeHostContext does not support record handles yet"))
+    }
+
+    fn delete_typed<R>(&mut self, _sys_id: SysId) -> Result<bool, Self::Error>
+    where
+        R: GeneratedRecordAccess,
+    {
+        Err(RuntimeHostError::new("RuntimeHostContext does not support record handles yet"))
     }
 
     fn create_typed<R, F>(&mut self, init: F) -> Result<RecordKey, Self::Error>
