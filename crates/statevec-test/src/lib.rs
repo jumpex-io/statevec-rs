@@ -27,6 +27,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use statevec_api::{
     BizInvariantReadContext, CanonicalIndexCount, InvariantReadContextExt, RecordKey, ReferenceTimeUnavailable,
+    TxPositionUnavailable,
     RuntimeCommandRef, RuntimeHostContext, RuntimeHostContextExt, RuntimeHostError, RuntimePlugin,
     RuntimePluginError, TxReadContext, TxSysIdCreateContext, TxUkContext, TxWriteContext,
 };
@@ -182,6 +183,8 @@ impl<P> DerefMut for PluginTestHost<P> {
 pub struct TestHost {
     registry: SchemaRegistry,
     ref_tx_time_ns: Option<u64>,
+    tx_seq: Option<u64>,
+    next_tx_seq: u64,
     next_sys_id: SysId,
     records: BTreeMap<RecordKey, Vec<u8>>,
     uk_index: BTreeMap<(RecordKind, u8, Vec<u8>), SysId>,
@@ -196,6 +199,8 @@ impl TestHost {
         Self {
             registry,
             ref_tx_time_ns: None,
+            tx_seq: None,
+            next_tx_seq: 1,
             next_sys_id: 1,
             records: BTreeMap::new(),
             uk_index: BTreeMap::new(),
@@ -227,6 +232,12 @@ impl TestHost {
     /// This fixture input does not establish production clock or Raft behavior.
     pub fn set_ref_tx_time_ns(&mut self, ref_tx_time_ns: u64) {
         self.ref_tx_time_ns = Some(ref_tx_time_ns);
+    }
+
+    /// Sets the position assigned to the next [`transaction`](Self::transaction).
+    /// Every transaction, including a rolled-back one, consumes one position.
+    pub fn set_next_tx_seq(&mut self, tx_seq: u64) {
+        self.next_tx_seq = tx_seq;
     }
 
     /// Returns the number of materialized records.
@@ -462,8 +473,14 @@ impl TestHost {
         &mut self,
         operation: impl FnOnce(&mut Self) -> Result<T, E>,
     ) -> Result<T, E> {
+        // Like native execution, a refused transaction still consumes its position.
+        let tx_seq = self.next_tx_seq;
+        self.next_tx_seq = tx_seq.checked_add(1).expect("test transaction positions exhausted");
         let before = self.clone();
-        match catch_unwind(AssertUnwindSafe(|| operation(self))) {
+        self.tx_seq = Some(tx_seq);
+        let outcome = catch_unwind(AssertUnwindSafe(|| operation(self)));
+        self.tx_seq = None;
+        match outcome {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => {
                 *self = before;
@@ -497,6 +514,10 @@ impl TestHost {
 impl RuntimeHostContext for TestHost {
     fn ref_tx_time_ns(&self) -> Result<u64, ReferenceTimeUnavailable> {
         self.ref_tx_time_ns.ok_or(ReferenceTimeUnavailable)
+    }
+
+    fn tx_seq(&self) -> Result<u64, TxPositionUnavailable> {
+        self.tx_seq.ok_or(TxPositionUnavailable)
     }
 
     fn with_read_typed_raw(
@@ -606,6 +627,10 @@ impl TxReadContext for TestHost {
 
     fn ref_tx_time_ns(&self) -> Result<u64, ReferenceTimeUnavailable> {
         RuntimeHostContext::ref_tx_time_ns(self)
+    }
+
+    fn tx_seq(&self) -> Result<u64, TxPositionUnavailable> {
+        RuntimeHostContext::tx_seq(self)
     }
 
     fn with_read_raw<T>(
@@ -804,6 +829,8 @@ where
 
 #[cfg(test)]
 mod ut_reference_time;
+#[cfg(test)]
+mod ut_transaction_position;
 
 #[cfg(test)]
 mod tests {

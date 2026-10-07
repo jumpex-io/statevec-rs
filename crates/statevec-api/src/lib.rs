@@ -17,8 +17,10 @@ use statevec_model::{CommandDefinition, CommandKind, SchemaRegistry};
 mod business_code;
 mod plugin_abi_v1;
 mod reference_time;
+mod transaction_position;
 pub use business_code::BusinessRejectCode;
 pub use reference_time::ReferenceTimeUnavailable;
+pub use transaction_position::TxPositionUnavailable;
 mod throughput_probe;
 pub use plugin_abi_v1::{
     ExportedRuntimePluginV2Handle, RUNTIME_PLUGIN_ABI_VERSION_V2, RUNTIME_PLUGIN_ENTRY_V2_SYMBOL, RuntimeBytesMutRef,
@@ -163,6 +165,14 @@ pub trait RuntimeHostContext {
     /// Hosts without this input (including the V1 host ABI) fail explicitly.
     fn ref_tx_time_ns(&self) -> Result<u64, ReferenceTimeUnavailable> {
         Err(ReferenceTimeUnavailable)
+    }
+
+    /// Returns the executing transaction's replicated position (`tx_seq`).
+    /// Every transaction in one execution lineage, including a deterministic
+    /// refusal, has a unique, strictly increasing value that replay reproduces.
+    /// Values need not be dense. Hosts without this input fail explicitly.
+    fn tx_seq(&self) -> Result<u64, TxPositionUnavailable> {
+        Err(TxPositionUnavailable)
     }
 
     /// Reads a record by system id and passes its bytes to `f` when found.
@@ -553,6 +563,12 @@ pub trait TxReadContext {
         Err(ReferenceTimeUnavailable)
     }
 
+    /// Returns the executing transaction's replicated position; see
+    /// [`RuntimeHostContext::tx_seq`]. Unsupported hosts return an error.
+    fn tx_seq(&self) -> Result<u64, TxPositionUnavailable> {
+        Err(TxPositionUnavailable)
+    }
+
     /// Reads a record by key.
     fn with_read_raw<T>(&self, key: RecordKey, f: impl FnOnce(&[u8]) -> T) -> Result<Option<T>, Self::Error>;
     /// Iterates record keys for one record kind. An error may follow a partial
@@ -622,6 +638,16 @@ pub trait TypedTxContext {
     /// An unsupported host must return an error rather than synthesize a value.
     fn ref_tx_time_ns(&self) -> Result<u64, ReferenceTimeUnavailable> {
         Err(ReferenceTimeUnavailable)
+    }
+
+    /// Returns the executing transaction's unique replicated position.
+    ///
+    /// It strictly increases across the lineage's transactions, including
+    /// refusals, is reproduced by replay and need not be dense. Business code
+    /// may derive deterministic identities from it. An unsupported host must
+    /// return an error rather than synthesize a value.
+    fn tx_seq(&self) -> Result<u64, TxPositionUnavailable> {
+        Err(TxPositionUnavailable)
     }
 
     /// Reads a generated record by system id.
@@ -744,6 +770,10 @@ impl<Ctx: TxContext + ?Sized> TypedTxContext for Ctx {
 
     fn ref_tx_time_ns(&self) -> Result<u64, ReferenceTimeUnavailable> {
         TxReadContext::ref_tx_time_ns(self)
+    }
+
+    fn tx_seq(&self) -> Result<u64, TxPositionUnavailable> {
+        TxReadContext::tx_seq(self)
     }
 
     fn with_read_typed<R, T, F>(&self, sys_id: SysId, f: F) -> Result<Option<T>, Self::Error>
@@ -883,6 +913,10 @@ impl TypedTxContext for dyn RuntimeHostContext + '_ {
 
     fn ref_tx_time_ns(&self) -> Result<u64, ReferenceTimeUnavailable> {
         RuntimeHostContext::ref_tx_time_ns(self)
+    }
+
+    fn tx_seq(&self) -> Result<u64, TxPositionUnavailable> {
+        RuntimeHostContext::tx_seq(self)
     }
 
     fn with_read_typed<R, T, F>(&self, sys_id: SysId, f: F) -> Result<Option<T>, Self::Error>

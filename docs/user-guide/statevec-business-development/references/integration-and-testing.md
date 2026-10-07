@@ -117,6 +117,16 @@ microseconds. An unconfigured TestHost or legacy V1 host ABI returns
 execution failure; do not map it to a business refusal or substitute another
 clock. TestHost does not establish production assignment or replay behavior.
 
+`TypedTxContext::tx_seq()` returns the executing transaction's replicated
+position as `Result<u64, statevec::api::TxPositionUnavailable>`. Every
+transaction in an execution lineage, including a deterministic refusal, has a
+unique, strictly increasing value that replay reproduces; values need not be
+dense. Business code may derive deterministic identities from it instead of
+writing a shared counter record. TestHost assigns one position per
+`transaction` call, including rolled-back calls, starting at 1 or at
+`TestHost::set_next_tx_seq(value)`; outside a transaction, and on the legacy V1
+host ABI, it returns `TxPositionUnavailable`.
+
 The flight-booking command helper prints `kind:payload_hex` for inspecting
 generated payloads. Submission to a production cluster uses the platform
 client and its request format.
