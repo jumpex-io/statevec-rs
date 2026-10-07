@@ -134,6 +134,9 @@ where
 
     /// Runs a typed command with an explicit transaction reference time in
     /// nanoseconds, independent of the envelope's external time in microseconds.
+    ///
+    /// This supplies time through the in-memory test host. The V1 plugin ABI
+    /// has no time callback; its host adapter returns `ReferenceTimeUnavailable`.
     pub fn run_at<C>(&mut self, ref_tx_time_ns: u64, payload: impl AsRef<[u8]>) -> Result<(), RuntimePluginError>
     where
         C: GeneratedCommandAccess,
