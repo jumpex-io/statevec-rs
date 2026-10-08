@@ -517,6 +517,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "statevec-projector-api"
+version = "0.2.1"
+dependencies = [
+ "statevec-frame",
+ "statevec-model",
+]
+
+[[package]]
 name = "statevec-test"
 version = "0.2.1"
 dependencies = [

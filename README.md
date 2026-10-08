@@ -30,11 +30,13 @@ The flight-booking example covers inventory and reservations.
 | `statevec-ingress-client` | Bounded cluster client with manual, background and async driving |
 | `ingress-api` | Request/reply codecs and incremental frame readers |
 | `statevec-frame` | Client inputs, intent identity and application-result bindings |
+| `statevec-projector-api` | Complete committed events, record changes and projector checkpoint interfaces |
 
 Application crates usually depend on `statevec`, with `statevec-test` as a
 development dependency. Use the same StateVec release or Git revision for all
 these crates. Cluster client usage is covered in the
 [client guide](docs/user-guide/cluster-client.md).
+For application read models, see the [projector guide](docs/user-guide/projectors.md).
 
 ```rust
 use statevec::prelude::*;

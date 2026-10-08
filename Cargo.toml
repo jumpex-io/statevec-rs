@@ -8,6 +8,7 @@ members = [
     "crates/statevec-frame",
     "crates/ingress-api",
     "crates/statevec-ingress-client",
+    "crates/statevec-projector-api",
     "demo/bank",
     "demo/flight-booking",
 ]
@@ -31,6 +32,7 @@ statevec_test = { package = "statevec-test", version = "0.2.1", path = "crates/s
 statevec_frame = { package = "statevec-frame", version = "0.2.1", path = "crates/statevec-frame" }
 ingress_api = { package = "ingress-api", version = "0.2.1", path = "crates/ingress-api" }
 statevec_ingress_client = { package = "statevec-ingress-client", version = "0.2.1", path = "crates/statevec-ingress-client" }
+statevec_projector_api = { package = "statevec-projector-api", version = "0.2.1", path = "crates/statevec-projector-api" }
 
 # External
 proc-macro2 = "1"

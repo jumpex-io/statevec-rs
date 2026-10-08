@@ -1,0 +1,15 @@
+[package]
+name = "statevec-projector-api"
+version = "0.2.1"
+edition = "2024"
+rust-version = "1.91"
+description = "Committed business output and checkpoint interfaces for StateVec projectors."
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+statevec_model.workspace = true
+statevec_frame.workspace = true
