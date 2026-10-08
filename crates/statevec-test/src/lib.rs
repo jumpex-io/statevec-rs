@@ -28,7 +28,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use statevec_api::{
     BizInvariantReadContext, CanonicalIndexCount, InvariantReadContextExt, RecordKey, ReferenceTimeUnavailable,
     RuntimeCommandRef, RuntimeHostContext, RuntimeHostContextExt, RuntimeHostError, RuntimePlugin,
-    RuntimePluginError, TxReadContext, TxSysIdCreateContext, TxUkContext, TxWriteContext,
+    RuntimePluginError, TxPositionUnavailable, TxReadContext, TxSysIdCreateContext, TxUkContext, TxWriteContext,
 };
 use statevec_model::SchemaRegistry;
 use statevec_model::command::GeneratedCommandAccess;
@@ -206,6 +206,8 @@ impl<P> DerefMut for PluginTestHost<P> {
 pub struct TestHost {
     registry: SchemaRegistry,
     ref_tx_time_ns: Option<u64>,
+    tx_seq: Option<u64>,
+    next_tx_seq: u64,
     next_sys_id: SysId,
     records: BTreeMap<RecordKey, Vec<u8>>,
     uk_index: BTreeMap<(RecordKind, u8, Vec<u8>), SysId>,
@@ -220,6 +222,8 @@ impl TestHost {
         Self {
             registry,
             ref_tx_time_ns: None,
+            tx_seq: None,
+            next_tx_seq: 1,
             next_sys_id: 1,
             records: BTreeMap::new(),
             uk_index: BTreeMap::new(),
@@ -245,6 +249,13 @@ impl TestHost {
     /// Returns the schema registry used by this host.
     pub fn schema_registry(&self) -> &SchemaRegistry {
         &self.registry
+    }
+
+    /// Sets the next fixture transaction position. Call only between transactions.
+    /// Every transaction, including a rolled-back one, consumes one position.
+    pub fn set_next_tx_seq(&mut self, tx_seq: u64) {
+        assert!(self.tx_seq.is_none(), "cannot reset an active transaction position");
+        self.next_tx_seq = tx_seq;
     }
 
     /// Returns the number of materialized records.
@@ -499,19 +510,27 @@ impl TestHost {
         ref_tx_time_ns: Option<u64>,
         operation: impl FnOnce(&mut Self) -> Result<T, E>,
     ) -> Result<T, E> {
+        let tx_seq = self.next_tx_seq;
+        self.next_tx_seq = tx_seq.checked_add(1).expect("test transaction positions exhausted");
         let before = self.clone();
         self.ref_tx_time_ns = ref_tx_time_ns;
+        self.tx_seq = Some(tx_seq);
         match catch_unwind(AssertUnwindSafe(|| operation(self))) {
             Ok(Ok(value)) => {
                 self.ref_tx_time_ns = before.ref_tx_time_ns;
+                self.tx_seq = before.tx_seq;
                 Ok(value)
             }
             Ok(Err(error)) => {
+                let next_tx_seq = self.next_tx_seq;
                 *self = before;
+                self.next_tx_seq = next_tx_seq;
                 Err(error)
             }
             Err(panic) => {
+                let next_tx_seq = self.next_tx_seq;
                 *self = before;
+                self.next_tx_seq = next_tx_seq;
                 resume_unwind(panic)
             }
         }
@@ -538,6 +557,10 @@ impl TestHost {
 impl RuntimeHostContext for TestHost {
     fn ref_tx_time_ns_raw(&self) -> Result<u64, ReferenceTimeUnavailable> {
         self.ref_tx_time_ns.ok_or(ReferenceTimeUnavailable)
+    }
+
+    fn tx_seq_raw(&self) -> Result<u64, TxPositionUnavailable> {
+        self.tx_seq.ok_or(TxPositionUnavailable)
     }
 
     fn with_read_typed_raw(
@@ -647,6 +670,10 @@ impl TxReadContext for TestHost {
 
     fn ref_tx_time_ns_raw(&self) -> Result<u64, ReferenceTimeUnavailable> {
         self.ref_tx_time_ns.ok_or(ReferenceTimeUnavailable)
+    }
+
+    fn tx_seq_raw(&self) -> Result<u64, TxPositionUnavailable> {
+        self.tx_seq.ok_or(TxPositionUnavailable)
     }
 
     fn with_read_raw<T>(
@@ -842,6 +869,11 @@ where
 {
     InvariantReadContextExt::with_read_typed_by_uk::<R, P, T, F>(ctx, uk, f)
 }
+
+#[cfg(test)]
+mod ut_record_handles;
+#[cfg(test)]
+mod ut_transaction_position;
 
 #[cfg(test)]
 mod tests {

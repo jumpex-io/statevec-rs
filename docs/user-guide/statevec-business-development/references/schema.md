@@ -71,7 +71,7 @@ all feed the schema identity. Rust module paths do not.
 | `u32`, `i32` | 4 | yes | yes | yes |
 | `u64`, `i64` | 8 | yes | yes | yes |
 | `u128` | 16 | yes | yes | no |
-| `Decimal<S>` (`S <= 38`) | 16 (i128 mantissa) | yes | yes | no |
+| `Decimal<S>` (`S <= 38`) | 16 (i128 mantissa) | yes | yes | yes |
 | `FixedBytes<N>` | 2 + N | yes | yes | yes |
 | enum with `#[field(enum_u8)]` | 1 | yes | yes | yes |
 | `VarBytes` | variable | no | yes | no |
@@ -117,6 +117,10 @@ parser rejects it.
 - At most 3 per record, with ids contiguous from 0. Each needs `id = N`; with
   more than one, each also needs `name = "..."`.
 - Every UK field must be `immutable`. A key cannot change after creation.
+- Decimal keys encode the fixed-scale i128 mantissa as 16 big-endian bytes
+  with its sign bit flipped. Byte order matches signed value order within that
+  field's schema scale; the scale is preserved in IDL and schema identity.
+  Generated helpers and IDL-imported generic encoders produce the same bytes.
 - Generated helpers: `Order::uk(..)` encodes UK 0, `Order::uk_<name>(..)`
   encodes a named UK, and `Order::<NAME>_UK_ID` is its id. For
   `name = "by_external_id"`, use `Order::uk_by_external_id(..)`.
@@ -128,7 +132,7 @@ parser rejects it.
 
 - At most 2 per record, ids contiguous from 0, each with `name` and 1 to 3
   fields. The encoded key must be at most 64 bytes.
-- Indexes may use mutable fields. `u128`, `Decimal` and reserved fields cannot
+- Indexes may use mutable fields. `u128` and reserved fields cannot
   be indexed.
 - Generated helpers: `Order::index_<name>(..)`, prefix helpers
   `index_<name>_prefix1(..)` and `_prefix2(..)`, and `Order::<NAME>_INDEX_ID`.

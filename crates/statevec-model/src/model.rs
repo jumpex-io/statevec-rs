@@ -1019,6 +1019,20 @@ impl KeyBuilder {
         self.buf.extend_from_slice(&encoded);
     }
 
+    /// Appends an order-preserving signed `i128` component.
+    /// Decimal keys use the same encoding of their fixed-scale mantissa.
+    #[inline]
+    pub fn push_i128(&mut self, v: i128) {
+        self.buf.extend_from_slice(&((v as u128) ^ (1u128 << 127)).to_be_bytes());
+    }
+
+    /// Appends a fixed-scale decimal component. The owning schema fixes SCALE;
+    /// its identity distinguishes scales, which are not repeated in key bytes.
+    #[inline]
+    pub fn push_decimal<const SCALE: u8>(&mut self, v: Decimal<SCALE>) {
+        self.push_i128(v.mantissa());
+    }
+
     /// Appends raw bytes.
     #[inline]
     pub fn push_bytes(&mut self, bytes: &[u8]) {

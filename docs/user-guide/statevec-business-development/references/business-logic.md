@@ -138,8 +138,18 @@ currently platform-internal and are not exposed through this SDK.
 | `update_or_create_typed_by_uk::<R, _, _, _, _>(uk, update, create)` | Update or create |
 | `create_typed::<R, _>(create)` | Create a record with initialized immutable fields |
 | `delete_by_uk::<R, _>(uk)` | Delete by unique key |
+| `resolve_typed_uk::<R, _>(uk)` | Resolve UK 0 to the record's system id |
+| `with_read_typed::<R, _, _>(sys_id, read)` | Read by system id |
+| `update_typed::<R, _, _>(sys_id, update)` | Update by system id |
+| `delete_typed::<R>(sys_id)` | Delete by system id |
 | `emit_typed_event::<E>(payload)` | Emit a generated event |
 | `count_index_prefix_capped::<R, _>(id, prefix, cap)` | Count up to a threshold |
+
+Every by-key call resolves its unique key again. When a handler reads a record
+and later updates or deletes it in the same command, resolve the key once and
+use the system id, which names that record for its whole life; after deletion
+the id names no record. Native execution and TestHost support these handles;
+the V1 host ABI returns an error rather than resolving the key itself.
 
 Read and write calls return typed host errors. Propagate them into your error
 enum. Check an expected duplicate or missing record and return a business

@@ -6,7 +6,7 @@ use crate::model::{
     CanonicalIndexDefinition, CommandDefinition, CommandKind, EnumDefinition, EventDefinition, EventKind,
     FieldDefinition, FieldType, KeyBuilder, KeyBytes, MAX_CANONICAL_INDEX_KEY_BYTES, MAX_CANONICAL_INDEXES_PER_RECORD,
     MAX_UNIQUE_KEYS_PER_RECORD, PayloadFieldDefinition, RecordDefinition, RecordKind, SYSTEM_KIND_MIN, USER_KIND_MAX,
-    UniqueKeyBytes, UniqueKeyDefinition, Version, read_bool, read_i32_le, read_i64_le, read_u8, read_u16_le,
+    UniqueKeyBytes, UniqueKeyDefinition, Version, read_bool, read_i32_le, read_i64_le, read_i128_le, read_u8, read_u16_le,
     read_u32_le, read_u64_le, validate_decimal_scale_compat, validate_repeated_payload_compat,
     validate_semantic_compat,
 };
@@ -300,12 +300,15 @@ fn can_encode_key_fields_generic(def: &RecordDefinition, fields: &[&'static str]
             | FieldType::U64
             | FieldType::I32
             | FieldType::I64 => {}
+            FieldType::Decimal => {
+                if field.len != 16 { return false; }
+            }
             FieldType::FixedBytes => {
                 if field.len < 2 {
                     return false;
                 }
             }
-            FieldType::U128 | FieldType::VarBytes | FieldType::Decimal => return false,
+            FieldType::U128 | FieldType::VarBytes => return false,
         }
     }
     true
@@ -326,9 +329,10 @@ fn encoded_key_field_len(field: &FieldDefinition) -> Option<usize> {
         FieldType::U16 => Some(2),
         FieldType::U32 | FieldType::I32 => Some(4),
         FieldType::U64 | FieldType::I64 => Some(8),
+        FieldType::Decimal => (field.len == 16).then_some(16),
         // FixedBytes key encoding uses the padded payload bytes, not the inline u16 length prefix.
         FieldType::FixedBytes => usize::try_from(field.len).ok()?.checked_sub(2),
-        FieldType::U128 | FieldType::VarBytes | FieldType::Decimal => None,
+        FieldType::U128 | FieldType::VarBytes => None,
     }
 }
 
@@ -342,6 +346,7 @@ fn push_uk_field_bytes(builder: &mut KeyBuilder, field: &FieldDefinition, data: 
         FieldType::U64 => builder.push_u64(read_u64_le(data, offset).ok()?),
         FieldType::I32 => builder.push_i32(read_i32_le(data, offset).ok()?),
         FieldType::I64 => builder.push_i64(read_i64_le(data, offset).ok()?),
+        FieldType::Decimal => builder.push_i128(read_i128_le(data, offset).ok()?),
         FieldType::FixedBytes => {
             let padded_len = usize::try_from(field.len).ok()?;
             if padded_len < 2 {
@@ -352,7 +357,7 @@ fn push_uk_field_bytes(builder: &mut KeyBuilder, field: &FieldDefinition, data: 
             let bytes = data.get(start..end)?;
             builder.push_bytes(bytes);
         }
-        FieldType::U128 | FieldType::VarBytes | FieldType::Decimal => return None,
+        FieldType::U128 | FieldType::VarBytes => return None,
     }
     Some(())
 }

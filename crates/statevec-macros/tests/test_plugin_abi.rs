@@ -335,6 +335,36 @@ fn successful_callbacks_and_business_rejection_keep_distinct_dispositions() {
 }
 
 #[test]
+fn legacy_host_abi_reports_reference_time_unavailable_without_callbacks() {
+    let mut host = Host::new(RuntimeCallStatus::Success);
+    let mut raw = host.raw();
+    let adapter = unsafe { RuntimeHostContextV1Adapter::from_raw(&mut raw) };
+
+    let context = &adapter as &dyn RuntimeHostContext;
+    assert_eq!(
+        statevec_api::TypedTxContext::ref_tx_time_ns(context),
+        Err(statevec_api::ReferenceTimeUnavailable),
+        "the old ABI must not synthesize epoch zero or read a nonexistent vtable field"
+    );
+    assert_eq!(host.visits.get(), 0);
+}
+
+#[test]
+fn legacy_host_abi_reports_transaction_position_unavailable_without_callbacks() {
+    let mut host = Host::new(RuntimeCallStatus::Success);
+    let mut raw = host.raw();
+    let adapter = unsafe { RuntimeHostContextV1Adapter::from_raw(&mut raw) };
+
+    let context = &adapter as &dyn RuntimeHostContext;
+    assert_eq!(
+        statevec_api::TypedTxContext::tx_seq(context),
+        Err(statevec_api::TxPositionUnavailable),
+        "the old ABI must not synthesize a position or read a nonexistent vtable field"
+    );
+    assert_eq!(host.visits.get(), 0);
+}
+
+#[test]
 fn a_caught_visitor_panic_is_not_reentered_or_erased_by_host_success() {
     let mut host = Host::new(RuntimeCallStatus::Success);
     host.keys.push(8);

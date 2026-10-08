@@ -27,9 +27,7 @@ pub(crate) fn gen_uk_push(f: &ParsedField) -> proc_macro2::TokenStream {
         ParsedTypeKind::U128 => quote! {
             compile_error!("u128 is not supported in UK v1");
         },
-        ParsedTypeKind::Decimal { .. } => quote! {
-            compile_error!("Decimal is not supported in UK v1");
-        },
+        ParsedTypeKind::Decimal { .. } => quote! { __uk.push_decimal(acc.#ident()); },
         ParsedTypeKind::VarBytes => unreachable!("VarBytes rejected by classify_type"),
     }
 }
@@ -47,8 +45,9 @@ pub(crate) fn gen_uk_fn_arg(f: &ParsedField) -> proc_macro2::TokenStream {
         | ParsedTypeKind::U64
         | ParsedTypeKind::I32
         | ParsedTypeKind::I64
-        | ParsedTypeKind::EnumU8 => quote! { #ident: #ty },
-        ParsedTypeKind::U128 | ParsedTypeKind::Decimal { .. } => quote! {
+        | ParsedTypeKind::EnumU8
+        | ParsedTypeKind::Decimal { .. } => quote! { #ident: #ty },
+        ParsedTypeKind::U128 => quote! {
             compile_error!("this field type is not supported in UK v1");
         },
         ParsedTypeKind::VarBytes => unreachable!("VarBytes rejected by classify_type"),
@@ -74,9 +73,7 @@ pub(crate) fn gen_uk_arg_push(f: &ParsedField) -> proc_macro2::TokenStream {
         ParsedTypeKind::U128 => quote! {
             compile_error!("u128 is not supported in UK v1");
         },
-        ParsedTypeKind::Decimal { .. } => quote! {
-            compile_error!("Decimal is not supported in UK v1");
-        },
+        ParsedTypeKind::Decimal { .. } => quote! { __uk.push_decimal(#ident); },
         ParsedTypeKind::VarBytes => unreachable!("VarBytes rejected by classify_type"),
     }
 }

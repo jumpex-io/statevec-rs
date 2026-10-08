@@ -374,7 +374,7 @@ fn schema_registry_rejects_non_decimal_field_with_scale() {
 }
 
 #[test]
-fn decimal_field_is_not_generic_unique_key_eligible() {
+fn decimal_field_is_generic_unique_key_eligible_and_checks_payload_length() {
     let record = RecordDefinition {
         kind: 3,
         name: "DecimalRecord",
@@ -387,13 +387,17 @@ fn decimal_field_is_not_generic_unique_key_eligible() {
     };
     let registry = SchemaRegistry::new(Version::new(1, 0), &[record], &[], &[], &[]);
 
-    assert!(!registry.supports_uk_encoding(record.kind));
-    assert!(registry.encode_uk(record.kind, &[0u8; 16]).is_none());
+    assert!(registry.supports_uk_encoding(record.kind));
+    let mut expected = vec![0u8; 16];
+    expected[0] = 0x80;
+    assert_eq!(registry.encode_uk(record.kind, &[0u8; 16]).unwrap().as_slice(), expected);
+    for len in 0..16 {
+        assert!(registry.encode_uk(record.kind, &vec![0u8; len]).is_none());
+    }
 }
 
 #[test]
-#[should_panic(expected = "unsupported or oversized key fields")]
-fn decimal_field_is_rejected_from_canonical_index() {
+fn decimal_field_canonical_index_preserves_signed_order() {
     let record = RecordDefinition {
         kind: 3,
         name: "DecimalRecord",
@@ -404,7 +408,13 @@ fn decimal_field_is_rejected_from_canonical_index() {
         fields: DECIMAL_FIELDS_SCALE_2,
         reserved_fields: &[],
     };
-    let _ = SchemaRegistry::new(Version::new(1, 0), &[record], &[], &[], &[]);
+    let registry = SchemaRegistry::new(Version::new(1, 0), &[record], &[], &[], &[]);
+    let negative = registry.encode_canonical_index(record.kind, 0, &(-1i128).to_le_bytes()).unwrap();
+    let zero = registry.encode_canonical_index(record.kind, 0, &0i128.to_le_bytes()).unwrap();
+    let positive = registry.encode_canonical_index(record.kind, 0, &1i128.to_le_bytes()).unwrap();
+    assert!(negative < zero && zero < positive);
+    assert_eq!(negative.len(), 16);
+    assert!(registry.encode_canonical_index(record.kind, 0, &[0u8; 15]).is_none());
 }
 
 #[test]

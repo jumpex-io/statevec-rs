@@ -569,8 +569,9 @@ fn encoded_key_len(f: &ParsedField) -> usize {
         ParsedTypeKind::U16 => 2,
         ParsedTypeKind::U32 | ParsedTypeKind::I32 => 4,
         ParsedTypeKind::U64 | ParsedTypeKind::I64 => 8,
+        ParsedTypeKind::Decimal { .. } => 16,
         ParsedTypeKind::FixedBytes { n } => *n,
-        ParsedTypeKind::U128 | ParsedTypeKind::VarBytes | ParsedTypeKind::Decimal { .. } => 0,
+        ParsedTypeKind::U128 | ParsedTypeKind::VarBytes => 0,
     }
 }
 

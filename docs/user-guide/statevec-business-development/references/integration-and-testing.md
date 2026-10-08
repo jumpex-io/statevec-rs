@@ -137,6 +137,24 @@ client and its request format.
 
 ## Production integration
 
+### Transaction position
+
+`TypedTxContext::tx_seq()` exposes the executing transaction's replicated
+position. It increases within one execution lineage, including deterministic
+refusals, and replay reproduces it. Positions need not be dense and are not
+globally unique across independent clusters.
+
+`TestHost` assigns a position to each `transaction` or `transaction_at` call,
+starting at 1; `set_next_tx_seq` changes the next fixture position between calls.
+Rollback or panic preserves consumed positions. Nested calls restore the outer
+position and time, and later calls do not reuse a nested call's position.
+Outside a transaction the accessor returns `TxPositionUnavailable`.
+
+Custom raw hosts may provide `tx_seq_raw`; its default reports unavailability.
+Direct typed hosts use `tx_seq`. The V1 plugin ABI does not supply positions.
+
+### Runtime binding
+
 Keep schema and handlers in the application library. Shared handlers accept
 `TypedTxContext`; the production adapter supplies its transaction context,
 error mapping and runtime binding.
@@ -163,6 +181,10 @@ changes in custom context implementations, despite the patch version:
   context cannot supply it. The method has no default implementation.
 - Replace `PluginTestHost::with_ref_time` with `with_ref_ext_time_us`. Use
   `run_at`/`transaction_at` when a handler also requires transaction time.
+- Direct `TypedTxContext` implementations also implement `resolve_typed_uk`,
+  `update_typed` and `delete_typed` for record handles. Blanket raw-context
+  implementations forward to the existing key and record operations. The V1
+  plugin-host adapter refuses these operations explicitly.
 
 The [custom host example](../../../../crates/statevec-api/tests/test_runtime_context.rs)
 implements explicit unavailability. The plugin ABI version and layout are

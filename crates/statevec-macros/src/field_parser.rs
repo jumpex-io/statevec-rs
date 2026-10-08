@@ -474,7 +474,7 @@ pub(crate) fn classify_type(ty: &Type, explicit_enum_u8: bool) -> syn::Result<(P
                 let n = parse_usize_const_arg(ty, last, "FixedBytes")?;
                 return Ok((ParsedTypeKind::FixedBytes { n }, 2 + n, true));
             }
-            "Decimal" => return Ok((ParsedTypeKind::Decimal { scale: parse_decimal_scale(ty, last)? }, 16, false)),
+            "Decimal" => return Ok((ParsedTypeKind::Decimal { scale: parse_decimal_scale(ty, last)? }, 16, true)),
             "VarBytes" => {
                 return Err(syn::Error::new(
                     ty.span(),
