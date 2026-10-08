@@ -565,3 +565,39 @@ fn schema_registry_rejects_system_event_kind() {
 fn schema_registry_rejects_duplicate_enum_name() {
     let _ = SchemaRegistry::new(Version::new(1, 0), &[], &[], &[], &[ENUM_A, ENUM_B]);
 }
+
+#[test]
+fn record_lookup_answers_identically_for_low_high_and_absent_kinds() {
+    let definitions = [
+        RECORD_B,
+        RECORD_USER_MAX,
+        RECORD_A,
+        RecordDefinition { kind: 1023, name: "LastLowKind", ..RECORD_A },
+        RecordDefinition { kind: 1024, name: "FirstHighKind", ..RECORD_B },
+    ];
+    let registry = SchemaRegistry::with_records(Version::new(1, 0), &definitions);
+    for registry in [registry.clone(), registry] {
+        for kind in (0..=2048).chain([RECORD_USER_MAX.kind - 1, RECORD_USER_MAX.kind, u16::MAX]) {
+            let found = registry.try_get(kind).map(|definition| (definition.kind, definition.name));
+            let expected = definitions
+                .iter()
+                .find(|definition| definition.kind == kind)
+                .map(|definition| (definition.kind, definition.name));
+            assert_eq!(found, expected, "kind {kind}");
+        }
+    }
+}
+
+#[test]
+fn record_lookup_without_low_kinds_preserves_absence() {
+    let empty = SchemaRegistry::with_records(Version::new(1, 0), &[]);
+    let high_only = SchemaRegistry::with_records(Version::new(1, 0), &[RECORD_USER_MAX]);
+    for kind in [0, 1, 1023, 1024, RECORD_USER_MAX.kind, u16::MAX] {
+        assert!(empty.try_get(kind).is_none(), "empty registry: kind {kind}");
+        assert_eq!(
+            high_only.try_get(kind).map(|definition| definition.kind),
+            (kind == RECORD_USER_MAX.kind).then_some(kind),
+            "high-only registry: kind {kind}"
+        );
+    }
+}
