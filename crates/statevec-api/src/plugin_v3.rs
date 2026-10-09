@@ -12,6 +12,7 @@ mod failure;
 mod status;
 mod core_failure;
 mod core_status;
+pub mod ffi;
 
 pub use failure::{AccessFailure, SchemaFailure, StorageFailure};
 pub use status::{StatusDecodeFailure, SvStatus};
@@ -24,3 +25,7 @@ mod tests;
 #[cfg(test)]
 #[path = "ut_plugin_v3_core_status.rs"]
 mod core_tests;
+
+#[cfg(test)]
+#[path = "ut_plugin_v3_layout.rs"]
+mod layout_tests;
