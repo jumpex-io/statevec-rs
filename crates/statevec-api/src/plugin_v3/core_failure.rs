@@ -134,6 +134,12 @@ impl From<AccessFailure> for TxFailure {
     }
 }
 
+impl From<ExecutionFailure> for TxFailure {
+    fn from(source: ExecutionFailure) -> Self {
+        Self::Execution(source)
+    }
+}
+
 impl From<crate::ReferenceTimeUnavailable> for TxFailure {
     fn from(_: crate::ReferenceTimeUnavailable) -> Self {
         Self::Execution(ExecutionFailure::ReferenceTimeUnavailable)

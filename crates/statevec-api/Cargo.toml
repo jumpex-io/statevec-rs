@@ -19,3 +19,7 @@ test-case = "3.3.1"
 
 [features]
 throughput-probe = []
+
+[[example]]
+name = "core_v3_minimal"
+crate-type = ["cdylib"]
