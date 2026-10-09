@@ -12,6 +12,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fmt;
 
+pub use crate::idl_limits::{BoundedSchemaIdlError, SchemaIdlLimits, SchemaIdlResource};
+
 struct JsonWriter {
     buf: String,
     indent: usize,

@@ -10,6 +10,7 @@
 
 /// Schema IDL JSON generation and parsing.
 pub mod idl;
+mod idl_limits;
 /// Core record, command, event, field, and accessor model types.
 pub mod model;
 /// Schema registry and stable schema fingerprint calculation.
@@ -22,6 +23,8 @@ pub mod runtime_release;
 pub mod system_schema_metadata;
 #[cfg(test)]
 mod ut_idl;
+#[cfg(test)]
+mod ut_idl_limits;
 #[cfg(test)]
 mod ut_model;
 #[cfg(test)]

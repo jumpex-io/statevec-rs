@@ -1,7 +1,7 @@
 // Copyright 2026 Jumpex Technology.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::idl::{SchemaIdlError, parse_fixed_bytes_capacity};
+use crate::idl::{SchemaIdlError, SchemaIdlLimits, parse_fixed_bytes_capacity};
 use crate::registry::SchemaRegistry;
 use crate::{
     CanonicalIndexDefinition, CommandDefinition, EnumDefinition, EnumVariantDefinition, EventDefinition,
@@ -503,6 +503,32 @@ fn idl_json_round_trips_into_host_owned_registry() {
         registry.encode_canonical_index(REC_DEF.kind, 0, &record_bytes).unwrap(),
     );
     assert!(imported.try_get_event(EVT_DEF.kind).unwrap().inline_response);
+}
+
+enum IdlRepresentation {
+    Display,
+    Canonical,
+}
+
+#[test_case::test_case(IdlRepresentation::Display; "display_idl")]
+#[test_case::test_case(IdlRepresentation::Canonical; "canonical_idl")]
+fn bounded_idl_preserves_complete_schema_and_canonical_bytes(representation: IdlRepresentation) {
+    let registry = SchemaRegistry::new(
+        Version::new(1, 0),
+        &[REC_WITH_RESERVED_DEF, DECIMAL_REC_DEF, SEMANTIC_REC_DEF],
+        &[CMD_DEF, DECIMAL_CMD_DEF],
+        &[EVT_DEF, SEMANTIC_EVT_DEF, REPEATED_EVT_DEF],
+        &[TEST_ENUM],
+    );
+    let bytes = match representation {
+        IdlRepresentation::Display => registry.to_idl_json().into_bytes(),
+        IdlRepresentation::Canonical => registry.to_canonical_idl_bytes(),
+    };
+
+    let imported = SchemaRegistry::from_idl_bytes_with_limits(&bytes, SchemaIdlLimits::default()).unwrap();
+
+    assert_eq!(imported.identity(), registry.identity());
+    assert_eq!(imported.to_canonical_idl_bytes(), registry.to_canonical_idl_bytes());
 }
 
 #[test_case::test_case("/records/0/fields/0/type", serde_json::json!("i64"); "record_type")]
