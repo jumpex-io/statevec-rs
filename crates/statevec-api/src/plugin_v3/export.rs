@@ -353,6 +353,9 @@ unsafe extern "C" fn destroy<T>(out: *mut *mut c_void) -> SvStatus {
 #[macro_export]
 macro_rules! export_core_plugin_v3 {
     ($module:ident) => {
+        #[cfg(panic = "abort")]
+        compile_error!("StateVec Core plugins require panic = \"unwind\"");
+
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn statevec_core_plugin_entry_v3(
             out_bytes: u64,

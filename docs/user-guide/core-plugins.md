@@ -24,6 +24,12 @@ Export the unit module with `statevec_api::export_core_plugin_v3!(MyModule)`.
 The SDK implements the C tables, borrowed arguments, typed status conversion,
 panic boundaries and allocation-matched destructors. You do not write C glue.
 
+Build the plugin with `panic = "unwind"` (Rust's default). The export macro
+rejects `panic = "abort"`: aborting would terminate the node before the host
+could retire and replace the failed instance. This does not contain process
+abort, allocation abort or native memory corruption; plugins remain trusted
+in-process code.
+
 The configured revision must commit every execution-relevant setting, after
 normalization. Do not read side files or mutable global settings during
 execution. Live and snapshot-candidate runtime instances can coexist; an engine
