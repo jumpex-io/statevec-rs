@@ -58,7 +58,10 @@ pub struct SvHeader {
     pub abi_major: u32,
     pub kind: u32,
     pub table_bytes: u64,
+    /// Interfaces implemented by this table's exporter, in its kind's namespace.
     pub provided_caps: u64,
+    /// Interfaces the exporter needs from its counterpart. These may be zero;
+    /// they do not substitute for the exporter's mandatory provided interfaces.
     pub required_caps: u64,
 }
 
@@ -114,9 +117,11 @@ pub struct SvKey { pub kind: u16, pub reserved16: u16, pub reserved32: u32, pub 
 #[derive(Debug, Clone, Copy)]
 pub struct SvWalk { pub tag: u32, pub reserved: u32, pub count: u64 }
 
-pub type SvReadVisitor = unsafe extern "C" fn(*mut c_void, SvBytes) -> SvStatus;
-pub type SvWriteVisitor = unsafe extern "C" fn(*mut c_void, SvKey, SvMutBytes) -> SvStatus;
-pub type SvKeyVisitor = unsafe extern "C" fn(*mut c_void, SvKey, *mut u32) -> SvStatus;
+// C callers can pass NULL. Preserve it as a valid Rust value at ABI ingress;
+// adapters must return AbiFailure::NullPointer before borrowing or invoking it.
+pub type SvReadVisitor = Option<unsafe extern "C" fn(*mut c_void, SvBytes) -> SvStatus>;
+pub type SvWriteVisitor = Option<unsafe extern "C" fn(*mut c_void, SvKey, SvMutBytes) -> SvStatus>;
+pub type SvKeyVisitor = Option<unsafe extern "C" fn(*mut c_void, SvKey, *mut u32) -> SvStatus>;
 
 #[repr(C)]
 pub struct SvTxV3 {
@@ -149,7 +154,7 @@ pub struct SvCandidateChange {
     pub after: SvBytes,
 }
 
-pub type SvChangeVisitor = unsafe extern "C" fn(*mut c_void, *const SvCandidateChange) -> SvStatus;
+pub type SvChangeVisitor = Option<unsafe extern "C" fn(*mut c_void, *const SvCandidateChange) -> SvStatus>;
 
 #[repr(C)]
 pub struct SvCandidateV3 {
