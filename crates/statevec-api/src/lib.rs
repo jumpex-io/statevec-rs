@@ -16,6 +16,7 @@ use statevec_model::{CommandDefinition, CommandKind, SchemaRegistry};
 
 mod business_code;
 mod plugin_abi_v1;
+pub mod plugin_v3;
 mod transaction_position;
 pub use transaction_position::TxPositionUnavailable;
 pub use business_code::BusinessRejectCode;
