@@ -22,6 +22,10 @@ pub struct SvStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusDecodeFailure {
+    UnknownTag { tag: u32 },
+    NonzeroSuccessCause { cause: u32 },
+    IllegalReturn { operation: super::CoreOperation, tag: u32 },
+    UnknownOperation { raw: u32 },
     UnexpectedTag { expected: u32, actual: u32 },
     UnknownCause { tag: u32, cause: u32 },
     UnknownStorageCause { raw: u64 },
@@ -172,10 +176,10 @@ impl SvStatus {
             Err(StatusDecodeFailure::UnexpectedTag { expected, actual: self.tag })
         }
     }
-    fn unknown_cause(self) -> StatusDecodeFailure {
+    pub(super) fn unknown_cause(self) -> StatusDecodeFailure {
         StatusDecodeFailure::UnknownCause { tag: self.tag, cause: self.cause }
     }
-    fn require_zero(self, slot: u8) -> Result<(), StatusDecodeFailure> {
+    pub(super) fn require_zero(self, slot: u8) -> Result<(), StatusDecodeFailure> {
         let value = self.detail[usize::from(slot)];
         if value == 0 {
             Ok(())
@@ -191,16 +195,16 @@ impl SvStatus {
             Err(StatusDecodeFailure::DetailOutOfRange { slot, value, maximum })
         }
     }
-    fn u8(self, slot: u8) -> Result<u8, StatusDecodeFailure> {
+    pub(super) fn u8(self, slot: u8) -> Result<u8, StatusDecodeFailure> {
         self.bounded(slot, u8::MAX.into()).map(|v| v as u8)
     }
     fn u16(self, slot: u8) -> Result<u16, StatusDecodeFailure> {
         self.bounded(slot, u16::MAX.into()).map(|v| v as u16)
     }
-    fn u32(self, slot: u8) -> Result<u32, StatusDecodeFailure> {
+    pub(super) fn u32(self, slot: u8) -> Result<u32, StatusDecodeFailure> {
         self.bounded(slot, u32::MAX.into()).map(|v| v as u32)
     }
-    fn usize(self, slot: u8) -> Result<usize, StatusDecodeFailure> {
+    pub(super) fn usize(self, slot: u8) -> Result<usize, StatusDecodeFailure> {
         self.bounded(slot, usize::MAX as u64).map(|v| v as usize)
     }
 }

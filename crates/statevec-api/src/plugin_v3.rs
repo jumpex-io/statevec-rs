@@ -3,18 +3,24 @@
 
 //! Typed V3 core failure transport under construction.
 //!
-//! This module currently supplies the business, static-schema and access error
-//! portions of the ABI. It does not export a loadable plugin or an execution
-//! adapter. Bootstrap, host-resource and instance-lifecycle causes are separate
-//! pending parts of V3; callers must not interpret an unimplemented tag as a
-//! business rejection or success. The legacy plugin ABI remains unchanged.
+//! This module supplies typed Core causes and operation-specific status decoding.
+//! It does not yet export a loadable plugin or an execution adapter. In particular,
+//! a status is not proof that speculation was discarded or that an instance is
+//! reusable. The legacy plugin ABI remains unchanged.
 
 mod failure;
 mod status;
+mod core_failure;
+mod core_status;
 
 pub use failure::{AccessFailure, SchemaFailure, StorageFailure};
 pub use status::{StatusDecodeFailure, SvStatus};
+pub use core_failure::{AbiFailure, ConfigureFailure, CoreFailure, CoreOperation, CreateFailure, ExecutionFailure, HostFailure, ResourceFailure, TxFailure};
 
 #[cfg(test)]
 #[path = "ut_plugin_v3_status.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ut_plugin_v3_core_status.rs"]
+mod core_tests;
