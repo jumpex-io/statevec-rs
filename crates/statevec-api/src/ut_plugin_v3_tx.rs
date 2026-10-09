@@ -208,8 +208,7 @@ unsafe extern "C" fn create(
     kind: u16,
     supplied: u32,
     id: u64,
-    visit: SvWriteVisitor,
-    context: *mut c_void,
+    input: SvBytes,
     out: *mut SvKey,
 ) -> SvStatus {
     let host = unsafe { host(raw) };
@@ -218,23 +217,11 @@ unsafe extern "C" fn create(
     } else {
         host.records.borrow().keys().copied().max().unwrap_or(0) + 1
     };
-    let mut data = vec![0; 2];
     let key = wire_key(RecordKey { kind, sys_id: id });
-    let status = unsafe {
-        visit.unwrap()(
-            context,
-            key,
-            SvMutBytes {
-                ptr: data.as_mut_ptr(),
-                len: data.len() as u64,
-            },
-        )
-    };
-    if status.is_success() {
-        host.records.borrow_mut().insert(id, data);
-        unsafe { out.write(key) };
-    }
-    status
+    let data = unsafe { bytes(input) }.expect("fixture raw create input").to_vec();
+    host.records.borrow_mut().insert(id, data);
+    unsafe { out.write(key) };
+    SvStatus::SUCCESS
 }
 unsafe extern "C" fn update(
     raw: *mut c_void,
@@ -463,6 +450,18 @@ fn malformed_read_is_latched_even_if_host_reports_success(fault: Fault, expected
     );
     assert_eq!(host.reads.get(), 1);
     assert_eq!(tx.finish(Ok(())), SvStatus::from(&expected));
+}
+
+#[test]
+fn visitor_create_draft_host_is_rejected_before_reading_callbacks() {
+    let host = Host::default();
+    let mut table = table(&host);
+    table.h.provided_caps &= !CORE_RAW_CREATE_CAPABILITY;
+    table.create = None;
+    // SAFETY: the fixture still provides a complete readable header/table.
+    let failure = unsafe { PluginTx::from_raw(&table) }.err().expect("old create ABI must refuse");
+    assert_eq!(failure, AbiFailure::UnsupportedCapabilities { required: CORE_RAW_CREATE_CAPABILITY });
+    assert_eq!(host.reads.get(), 0);
 }
 
 #[test_case(Fault::ShortTable; "short table")]

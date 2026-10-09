@@ -9,7 +9,9 @@ use statevec_model::SchemaIdentity;
 
 pub const CORE_ABI_MAJOR: u32 = 3;
 pub const CORE_KIND: u32 = 1;
-pub const CORE_BASE_CAPABILITIES: u64 = 0x1f;
+/// Required to distinguish raw create bytes from the unreleased visitor draft.
+pub const CORE_RAW_CREATE_CAPABILITY: u64 = 1 << 6;
+pub const CORE_BASE_CAPABILITIES: u64 = 0x1f | CORE_RAW_CREATE_CAPABILITY;
 pub const CORE_CANDIDATE_CAPABILITY: u64 = 1 << 5;
 pub const CORE_CAPABILITIES: u64 = CORE_BASE_CAPABILITIES | CORE_CANDIDATE_CAPABILITY;
 pub const CORE_ENTRY_SYMBOL: &std::ffi::CStr = c"statevec_core_plugin_entry_v3";
@@ -134,7 +136,7 @@ pub struct SvTxV3 {
     pub resolve_uk: Option<unsafe extern "C" fn(*const c_void, u16, u8, SvBytes, *mut u32, *mut u64) -> SvStatus>,
     pub for_each_key: Option<unsafe extern "C" fn(*const c_void, u16, SvKeyVisitor, *mut c_void, *mut SvWalk) -> SvStatus>,
     pub count_prefix: Option<unsafe extern "C" fn(*const c_void, u16, u8, SvBytes, u64, *mut SvWalk) -> SvStatus>,
-    pub create: Option<unsafe extern "C" fn(*mut c_void, u16, u32, u64, SvWriteVisitor, *mut c_void, *mut SvKey) -> SvStatus>,
+    pub create: Option<unsafe extern "C" fn(*mut c_void, u16, u32, u64, SvBytes, *mut SvKey) -> SvStatus>,
     pub update: Option<unsafe extern "C" fn(*mut c_void, SvKey, SvWriteVisitor, *mut c_void, *mut u32) -> SvStatus>,
     pub update_uk: Option<unsafe extern "C" fn(*mut c_void, u16, u8, SvBytes, SvWriteVisitor, *mut c_void, *mut u32) -> SvStatus>,
     pub delete_record: Option<unsafe extern "C" fn(*mut c_void, SvKey, *mut u32) -> SvStatus>,

@@ -77,38 +77,25 @@ impl<'call> PluginTx<'call> {
         data: Vec<u8>,
     ) -> Result<RecordKey, ExecutionFailure> {
         self.failure.current()?;
-        let mut call = WriteCall::new(|actual: RecordKey, bytes: &mut [u8]| {
-            if actual.kind != kind || requested.is_some_and(|id| id != actual.sys_id) {
-                return Err(abi(AbiFailure::InvalidHandle));
-            }
-            if bytes.len() != data.len() {
-                return Err(abi(AbiFailure::Length {
-                    actual: data.len() as u64,
-                    maximum: bytes.len() as u64,
-                }));
-            }
-            bytes.copy_from_slice(&data);
-            Ok(actual)
-        });
         let mut out = wire_key(RecordKey { kind: 0, sys_id: 0 });
-        // SAFETY: the visitor/call record and input live until this synchronous
-        // operation returns; the host supplies one exclusive record loan.
+        // SAFETY: the exact input lives until this synchronous call returns.
+        // The host copies through native create; this facade does not invent
+        // another allocation-cursor or padding policy.
         let status = unsafe {
             (self.table.create.unwrap())(
                 self.table.context,
                 kind,
                 u32::from(requested.is_some()),
                 requested.unwrap_or(0),
-                call.callback(),
-                (&mut call as *mut WriteCall<_, RecordKey>).cast(),
+                SvBytes::borrowed(&data),
                 &mut out,
             )
         };
-        let actual = call.finish(status, 1, &self.failure)?;
+        self.failure.check(status)?;
         let out = key(out)
             .map_err(abi)
             .inspect_err(|source| self.failure.remember(source))?;
-        if actual != Some(out) {
+        if out.kind != kind || requested.is_some_and(|id| id != out.sys_id) {
             let source = abi(AbiFailure::InvalidHandle);
             self.failure.remember(&source);
             return Err(source);
