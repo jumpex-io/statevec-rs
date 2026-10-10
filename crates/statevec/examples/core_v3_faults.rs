@@ -6,7 +6,7 @@ use statevec::prelude::*;
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-static CALLS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+static CALLS: [AtomicU64; 7] = [const { AtomicU64::new(0) }; 7];
 
 #[unsafe(no_mangle)]
 pub extern "C" fn core_fixture_call_count(slot: u32) -> u64 {
@@ -210,4 +210,8 @@ impl CoreRuntime for Runtime {
         Ok(())
     }
 }
-statevec::api::export_core_plugin_v3!(Module);
+// Only this qualification fixture uses a raw wrapper around the standard
+// exporter. It deliberately violates checked callback contracts, never Rust
+// memory validity. All ordinary calls and handles use the real SDK adapters.
+#[path = "support/core_fault_callbacks.rs"]
+mod raw_faults;
