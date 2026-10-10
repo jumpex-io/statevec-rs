@@ -1,8 +1,8 @@
 # Core plugin authoring (experimental)
 
 Core V3 supplies a safe Rust authoring API and a generated C export. The matching
-host's transaction and recovery integration is still being implemented; building
-a library does not yet provide a supported way to run a production node.
+host is still undergoing qualification; building a library does not yet provide
+a supported way to run a production node.
 
 The [minimal example](../../crates/statevec-api/examples/core_v3_minimal.rs) builds
 without any private StateVec crate:
@@ -21,6 +21,10 @@ these interfaces from `statevec_api::plugin_v3`:
   `TX_INVARIANTS = None` or a candidate-rule function. The declaration is required.
 
 Export the unit module with `statevec_api::export_core_plugin_v3!(MyModule)`.
+Invoke this macro in the final `cdylib` crate, even if the implementation lives
+in another library crate. The macro checks the panic strategy of the crate where
+it expands; exporting through an intermediate `rlib` cannot check the final
+plugin's build settings.
 The SDK implements the C tables, borrowed arguments, typed status conversion,
 panic boundaries and allocation-matched destructors. You do not write C glue.
 
@@ -31,9 +35,16 @@ abort, allocation abort or native memory corruption; plugins remain trusted
 in-process code.
 
 The configured revision must commit every execution-relevant setting, after
-normalization. Do not read side files or mutable global settings during
-execution. Live and snapshot-candidate runtime instances can coexist; an engine
-can create and discard instances repeatedly.
+normalization. Event `inline_response` (`inlineResponse` in IDL) is part of this
+commitment: changing whether an event appears in client replies requires a new
+revision, even when its fields are unchanged. Schema identity excludes this
+delivery policy, and the host does not hash it separately into the execution
+profile. Exporting the full IDL preserves the policy but does not bind it to an
+existing root.
+
+Do not read side files or mutable global settings during execution. Live and
+snapshot-candidate runtime instances can coexist; an engine can create and
+discard instances repeatedly.
 
 `PluginTx` implements the existing typed/raw record, unique-key, index-count,
 supplied-id and event interfaces. Its error is `ExecutionFailure`, preserving
