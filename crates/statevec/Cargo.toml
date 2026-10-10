@@ -27,5 +27,9 @@ crate-type = ["cdylib"]
 name = "core_v3_faults"
 crate-type = ["cdylib"]
 
+[[example]]
+name = "core_v3_exchange"
+crate-type = ["cdylib"]
+
 [features]
 throughput-probe = ["statevec_api/throughput-probe"]
