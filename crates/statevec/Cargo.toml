@@ -23,5 +23,9 @@ serde_json.workspace = true
 name = "core_v3_bank"
 crate-type = ["cdylib"]
 
+[[example]]
+name = "core_v3_faults"
+crate-type = ["cdylib"]
+
 [features]
 throughput-probe = ["statevec_api/throughput-probe"]
