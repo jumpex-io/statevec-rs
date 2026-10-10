@@ -120,6 +120,22 @@ fn bounded_idl_prescan_precedes_document_decode(
     assert_limit(SchemaRegistry::from_idl_bytes_with_limits(bytes, limits).unwrap_err(), resource, limit, observed);
 }
 
+#[test]
+fn oversized_named_schema_refuses_before_any_name_promotion() {
+    const COMMANDS: &[crate::CommandDefinition] = &[crate::CommandDefinition {
+        kind: 1, name: "promotion_boundary", version: 1, fields: &[],
+    }];
+    let registry = SchemaRegistry::new(Version::new(1, 0), &[], COMMANDS, &[], &[]);
+    let bytes = registry.to_canonical_idl_bytes();
+    let count = json_nodes(&serde_json::from_slice(&bytes).unwrap());
+    let before = crate::idl::NAME_PROMOTIONS.with(|count| count.get());
+    let limits = SchemaIdlLimits { max_nodes: count - 1, ..Default::default() };
+    assert_limit(SchemaRegistry::from_idl_bytes_with_limits(&bytes, limits).unwrap_err(), SchemaIdlResource::Nodes, count - 1, count);
+    assert_eq!(crate::idl::NAME_PROMOTIONS.with(|count| count.get()), before, "resource scan must precede process-resident name promotion");
+    assert_eq!(SchemaRegistry::from_idl_bytes_with_limits(&bytes, SchemaIdlLimits::default()).unwrap().identity(), registry.identity());
+    assert!(crate::idl::NAME_PROMOTIONS.with(|count| count.get()) > before, "accepted named schema exercises the real promotion site");
+}
+
 #[test_case(b"0", SchemaIdlLimits { max_bytes: 0, ..SchemaIdlLimits::default() }, SchemaIdlResource::Bytes; "no_bytes")]
 #[test_case(b"{}", SchemaIdlLimits { max_depth: 0, ..SchemaIdlLimits::default() }, SchemaIdlResource::Depth; "no_containers")]
 #[test_case(b"{}", SchemaIdlLimits { max_nodes: 0, ..SchemaIdlLimits::default() }, SchemaIdlResource::Nodes; "no_values")]

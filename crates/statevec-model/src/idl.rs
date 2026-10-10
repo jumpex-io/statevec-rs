@@ -753,7 +753,14 @@ fn parse_fingerprint(label: &'static str, value: &str) -> Result<SchemaFingerpri
     Ok(out)
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static NAME_PROMOTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn leak_string(value: impl Into<String>) -> &'static str {
+    #[cfg(test)]
+    NAME_PROMOTIONS.with(|count| count.set(count.get() + 1));
     Box::leak(value.into().into_boxed_str())
 }
 
