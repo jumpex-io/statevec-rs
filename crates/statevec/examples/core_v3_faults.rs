@@ -59,17 +59,36 @@ mod counters {
 use counters::*;
 
 struct Module;
-struct Configured(SchemaRegistry);
+struct Configured {
+    schema: SchemaRegistry,
+    fault: LifecycleFault,
+    creates: AtomicU64,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LifecycleFault {
+    None,
+    SuccessorCreate,
+    PoisonedRetire,
+    CandidateRetire,
+    ConfiguredRetire,
+}
 struct Runtime {
     poisoned: Cell<bool>,
+    fault: LifecycleFault,
+    ordinal: u64,
 }
 impl CoreModule for Module {
     type Configured = Configured;
     fn configure(&self, config: CoreConfig<'_>) -> Result<Configured, ConfigureFailure> {
-        if config.bytes != b"{}" {
-            return Err(ConfigureFailure::Invalid { code: 1 });
-        }
-        Ok(Configured(registry()))
+        let fault = match config.bytes {
+            b"{}" => LifecycleFault::None,
+            b"{\"fault\":\"successor_create\"}" => LifecycleFault::SuccessorCreate,
+            b"{\"fault\":\"poisoned_retire\"}" => LifecycleFault::PoisonedRetire,
+            b"{\"fault\":\"candidate_retire\"}" => LifecycleFault::CandidateRetire,
+            b"{\"fault\":\"configured_retire\"}" => LifecycleFault::ConfiguredRetire,
+            _ => return Err(ConfigureFailure::Invalid { code: 1 }),
+        };
+        Ok(Configured { schema: registry(), fault, creates: AtomicU64::new(0) })
     }
 }
 impl ConfiguredCore for Configured {
@@ -78,19 +97,39 @@ impl ConfiguredCore for Configured {
         CoreMetadata {
             name: "unwind-fixture",
             revision: "core-unwind-fixture-v1",
-            schema: &self.0,
+            schema: &self.schema,
         }
     }
     fn create_instance(&self) -> Result<Runtime, CreateFailure> {
         CALLS[0].fetch_add(1, Ordering::Relaxed);
+        let ordinal = self.creates.fetch_add(1, Ordering::Relaxed) + 1;
+        if self.fault == LifecycleFault::SuccessorCreate && ordinal > 1 {
+            return Err(CreateFailure::Resource(ResourceFailure::Os { code: 12 }));
+        }
         Ok(Runtime {
             poisoned: Cell::new(false),
+            fault: self.fault,
+            ordinal,
         })
     }
 }
 impl Drop for Runtime {
     fn drop(&mut self) {
         CALLS[4].fetch_add(1, Ordering::Relaxed);
+        if (self.fault == LifecycleFault::PoisonedRetire && self.poisoned.get())
+            || (self.fault == LifecycleFault::CandidateRetire && self.ordinal == 2)
+        {
+            panic!("deliberate Core instance retirement failure");
+        }
+    }
+}
+impl Drop for Configured {
+    fn drop(&mut self) {
+        // Metadata-only bootstrap inspection still retires normally. The
+        // selected failure requires a real instance to have been constructed.
+        if self.fault == LifecycleFault::ConfiguredRetire && self.creates.load(Ordering::Relaxed) > 0 {
+            panic!("deliberate Core configured retirement failure");
+        }
     }
 }
 impl Runtime {
