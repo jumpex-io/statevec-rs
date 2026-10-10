@@ -107,7 +107,6 @@ impl CallFailure {
         self.0.get().map_or(Ok(()), |status| decode(status))
     }
     pub(super) fn check(&self, status: SvStatus) -> Result<(), ExecutionFailure> {
-        self.current()?;
         let result = decode(status);
         if let Err(
             source @ (ExecutionFailure::PluginPanicked
@@ -117,12 +116,15 @@ impl CallFailure {
         {
             self.remember(source);
         }
+        // A callback can finish after a nested scalar call recorded an
+        // ordinary error. Observe its unusability before consulting that latch.
+        self.current()?;
         result
     }
     pub(super) fn remember(&self, source: &ExecutionFailure) {
-        if self.0.get().is_none() {
-            self.0.set(Some(source.into()));
-        }
+        // Share final-return precedence: first unusability wins over ordinary
+        // failures, and a later failure never replaces an earlier unusability.
+        self.0.set(Some(self.finish_status(source.into())));
     }
     pub(super) fn finish(&self, result: Result<(), TxFailure>) -> SvStatus {
         self.finish_status(result.map_or_else(|source| (&source).into(), |()| SvStatus::SUCCESS))

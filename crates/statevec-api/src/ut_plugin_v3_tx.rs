@@ -514,3 +514,39 @@ fn read_visitor_panic_is_not_hidden_by_host_success() {
     );
     assert_eq!(tx.finish(Ok(())).tag, 7);
 }
+
+#[derive(Clone, Copy)]
+enum ScalarFailure {
+    Time,
+    Position,
+}
+
+unsafe extern "C" fn ordinary_scalar_failure(_: *const c_void, _: *mut u64) -> SvStatus {
+    SvStatus::from(&ExecutionFailure::Host(HostFailure::Resource(ResourceFailure::Os { code: 5 })))
+}
+
+#[test_case(ScalarFailure::Time; "time failure before visitor panic")]
+#[test_case(ScalarFailure::Position; "position failure before visitor panic")]
+fn nested_scalar_error_cannot_mask_later_visitor_unusability(scalar: ScalarFailure) {
+    let host = Host::default();
+    host.records.borrow_mut().insert(1, Vec::new());
+    let mut table = table(&host);
+    match scalar {
+        ScalarFailure::Time => table.time_ns = Some(ordinary_scalar_failure),
+        ScalarFailure::Position => table.tx_seq = Some(ordinary_scalar_failure),
+    }
+    let tx = unsafe { PluginTx::from_raw(&table).unwrap() };
+    let key = RecordKey { kind: 7, sys_id: 1 };
+
+    let result: Result<Option<()>, _> = tx.with_read_raw(key, |_| {
+        assert!(match scalar {
+            ScalarFailure::Time => tx.ref_tx_time_ns_raw().is_err(),
+            ScalarFailure::Position => tx.tx_seq_raw().is_err(),
+        });
+        panic!("visitor fails after handling an ordinary scalar error");
+    });
+    assert_eq!(result, Err(ExecutionFailure::PluginPanicked));
+    assert_eq!(tx.with_read_raw(key, |_| ()), Err(ExecutionFailure::PluginPanicked));
+    assert_eq!(host.reads.get(), 1, "unusable scope never calls the host again");
+    assert_eq!(tx.finish(Ok(())), SvStatus::from(&ExecutionFailure::PluginPanicked));
+}
