@@ -130,7 +130,10 @@ pub unsafe fn configure<M: CoreModule>(
         let (name, revision, idl, schema) = (
             metadata.name.to_owned(),
             metadata.revision.to_owned(),
-            metadata.schema.to_canonical_idl_bytes(),
+            // Canonical IDL is an identity projection: it strips delivery
+            // metadata such as inlineResponse. The host needs the full schema
+            // to reproduce native replies as well as canonical execution.
+            metadata.schema.to_idl_json().into_bytes(),
             metadata.schema.identity(),
         );
         let maximum = statevec_model::idl::SchemaIdlLimits::default().max_bytes;

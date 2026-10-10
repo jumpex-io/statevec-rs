@@ -15,5 +15,13 @@ statevec_api.workspace = true
 statevec_macros.workspace = true
 statevec_model.workspace = true
 
+[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[[example]]
+name = "core_v3_bank"
+crate-type = ["cdylib"]
+
 [features]
 throughput-probe = ["statevec_api/throughput-probe"]

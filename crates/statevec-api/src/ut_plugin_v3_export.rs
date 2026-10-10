@@ -32,8 +32,26 @@ impl CoreModule for Module {
     fn configure(&self, config: CoreConfig<'_>) -> Result<Bound, super::super::ConfigureFailure> {
         self.counts.configure.fetch_add(1, Ordering::Relaxed);
         Ok(Bound {
-            schema: statevec_model::SchemaRegistry::with_records(
+            schema: statevec_model::SchemaRegistry::new(
                 statevec_model::Version::new(1, 2),
+                &[],
+                &[],
+                &[
+                    statevec_model::EventDefinition {
+                        kind: 7,
+                        name: "Inline",
+                        version: 1,
+                        fields: &[],
+                        inline_response: true,
+                    },
+                    statevec_model::EventDefinition {
+                        kind: 8,
+                        name: "Projected",
+                        version: 1,
+                        fields: &[],
+                        inline_response: false,
+                    },
+                ],
                 &[],
             ),
             counts: self.counts.clone(),
@@ -170,6 +188,11 @@ fn immutable_metadata_and_independent_instances_come_from_one_binding() {
         statevec_model::SchemaRegistry::from_idl_bytes_with_limits(schema, Default::default())
             .unwrap();
     assert_eq!(SvSchemaIdentity::from(restored.identity()), metadata.schema);
+    assert!(
+        restored.try_get_event(7).unwrap().inline_response,
+        "module metadata must preserve delivery policy outside canonical identity"
+    );
+    assert!(!restored.try_get_event(8).unwrap().inline_response);
     assert_eq!(fixture.create(), SvStatus::SUCCESS);
     let mut second = std::ptr::null_mut();
     assert_eq!(

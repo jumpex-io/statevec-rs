@@ -452,6 +452,8 @@ dependencies = [
 name = "statevec"
 version = "0.2.1"
 dependencies = [
+ "serde",
+ "serde_json",
  "statevec-api",
  "statevec-macros",
  "statevec-model",
