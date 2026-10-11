@@ -423,22 +423,25 @@ fn immediate_idle_eof_cannot_reset_reconnect_backoff() {
         let ClientResult::Connect { operation_id, .. } = client.drive(ClientEvent::Drive) else {
             panic!("due idle connection")
         };
-        client.drive(ClientEvent::Connected { operation_id, result: Ok(()) });
-        client.drive(ClientEvent::Read {
+        assert!(matches!(client.drive(ClientEvent::Connected { operation_id, result: Ok(()) }), ClientResult::Waiting { .. }));
+        assert!(matches!(client.drive(ClientEvent::Read {
             operation_id,
             result: Err(ingress_api::stream_batch::ReadFailure::Io {
                 source: std::io::ErrorKind::UnexpectedEof.into(),
             }),
-        });
+        }), ClientResult::ConnectionFault { .. }));
         assert!(matches!(client.drive(ClientEvent::Drive), ClientResult::Close { .. }));
-        client.drive(ClientEvent::Closed { operation_id });
+        assert!(matches!(client.drive(ClientEvent::Closed { operation_id }), ClientResult::Waiting { .. }));
         waiting_until(&mut client, now + delay);
         now += delay;
     }
 }
 
 #[derive(Clone, Copy)]
-enum BackoffRecovery { Pending, Applied }
+enum BackoffRecovery {
+    Pending,
+    Applied,
+}
 
 #[test_case(BackoffRecovery::Pending; "pending work retains its base retry")]
 #[test_case(BackoffRecovery::Applied; "qualified reply resets idle backoff")]
@@ -448,12 +451,14 @@ fn idle_backoff_does_not_penalize_accepted_work(recovery: BackoffRecovery) {
     let ClientResult::Connect { operation_id, .. } = client.drive(ClientEvent::Drive) else {
         panic!("initial connection")
     };
-    client.drive(ClientEvent::Connected { operation_id, result: Err(std::io::ErrorKind::ConnectionRefused.into()) });
+    assert!(matches!(client.drive(ClientEvent::Connected {
+        operation_id, result: Err(std::io::ErrorKind::ConnectionRefused.into()),
+    }), ClientResult::ConnectionFailed { .. }));
     clock.set(INITIAL_TIME + RETRY);
     let ClientResult::Connect { operation_id, .. } = client.drive(ClientEvent::Drive) else {
         panic!("retry after idle failure")
     };
-    client.drive(ClientEvent::Connected { operation_id, result: Ok(()) });
+    assert!(matches!(client.drive(ClientEvent::Connected { operation_id, result: Ok(()) }), ClientResult::Waiting { .. }));
     client.try_submit(batch(1)).unwrap();
     if matches!(recovery, BackoffRecovery::Applied) {
         let (_, request) = take_write(&mut client);
@@ -461,12 +466,12 @@ fn idle_backoff_does_not_penalize_accepted_work(recovery: BackoffRecovery) {
         receive(&mut client, operation_id, completed(&request));
         assert!(matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::Applied { .. }))));
     }
-    client.drive(ClientEvent::Read {
+    assert!(matches!(client.drive(ClientEvent::Read {
         operation_id,
         result: Err(ingress_api::stream_batch::ReadFailure::Io { source: std::io::ErrorKind::UnexpectedEof.into() }),
-    });
+    }), ClientResult::ConnectionFault { .. }));
     assert!(matches!(client.drive(ClientEvent::Drive), ClientResult::Close { .. }));
-    client.drive(ClientEvent::Closed { operation_id });
+    assert!(matches!(client.drive(ClientEvent::Closed { operation_id }), ClientResult::Waiting { .. }));
     waiting_until(&mut client, INITIAL_TIME + RETRY * 2);
 }
 

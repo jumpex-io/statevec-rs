@@ -201,6 +201,36 @@ fn ready(driver: &mut BatchDriverWorker<ScriptIo>, client: &mut BatchClient) {
 }
 
 #[test]
+fn driver_eof_before_first_write_preserves_non_admission_proof() {
+    let clock = Clock::new();
+    let mut client = client(&clock);
+    let first = bytes();
+    let second = bytes();
+    let (mut driver, _) = driver(&[first.clone(), second.clone()]);
+    driver.step(&mut client).unwrap(); // Connect.
+    driver.step(&mut client).unwrap(); // Connected, before the first read/write poll.
+    assert!(matches!(client.status(), ClientStatus::Batch { connected: true, .. }));
+    first.lock().unwrap().eof = true;
+    let handle = client.try_submit(batch(1)).unwrap();
+    drain(&mut driver, &mut client);
+    assert_eq!(first.lock().unwrap().writes, 0);
+    assert_eq!(first.lock().unwrap().drops, 1, "real driver must return zero-write proof after disposing the socket");
+
+    clock.set(INITIAL_TIME + RETRY);
+    drain(&mut driver, &mut client);
+    let received = requests(&second);
+    assert_eq!(received.len(), 1);
+    assert_eq!(received[0].batch().commitment_v1(), handle.intent);
+    enqueue(&second, reply(&received[0], ReplyDisposition::Refused(BatchSubmitRefusal::TooLarge)));
+    ready(&mut driver, &mut client);
+    drain(&mut driver, &mut client);
+    assert!(matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::NotAdmitted { handle: returned, .. })) if returned == handle));
+    driver.stop(&mut client).unwrap();
+    drain(&mut driver, &mut client);
+    assert!(driver.is_quiescent());
+}
+
+#[test]
 fn manual_driver_decodes_short_request_and_retains_duplicate_coalesced_terminal() {
     let clock = Clock::new();
     let mut client = client(&clock);

@@ -476,6 +476,119 @@ fn stop_disposes_partial_write_before_closed_and_keeps_the_original_uncertain_ba
     );
 }
 
+#[derive(Clone, Copy)]
+enum LostWrite {
+    EofBeforeWrite,
+    ZeroWriteFailure,
+    PartialWriteFailure,
+}
+
+#[test_case(LostWrite::EofBeforeWrite, InputCustody::Submit; "fresh EOF before write")]
+#[test_case(LostWrite::ZeroWriteFailure, InputCustody::Submit; "fresh zero write failure")]
+#[test_case(LostWrite::PartialWriteFailure, InputCustody::Submit; "partial write stays uncertain")]
+#[test_case(LostWrite::EofBeforeWrite, InputCustody::Import; "import EOF stays uncertain")]
+#[test_case(LostWrite::ZeroWriteFailure, InputCustody::Import; "import zero write stays uncertain")]
+fn zero_write_return_preserves_only_genuine_first_send_refusal(cut: LostWrite, custody: InputCustody) {
+    let clock = Clock::new();
+    let mut client = client(&clock);
+    let connection = connect(&mut client);
+    let (mut port, device) = bind(&client, connection);
+    let handle = match custody {
+        InputCustody::Submit => client.try_submit(batch(1)),
+        InputCustody::Import => client.try_import(batch(1), None),
+    }
+    .unwrap();
+    let first = dispatch(&mut client, &mut port);
+    match cut {
+        LostWrite::EofBeforeWrite => device.borrow_mut().read_error = Some(io::ErrorKind::UnexpectedEof),
+        LostWrite::ZeroWriteFailure => device.borrow_mut().write_error = Some(io::ErrorKind::BrokenPipe),
+        LostWrite::PartialWriteFailure => {
+            device.borrow_mut().write_chunk = 1;
+            assert!(matches!(port.poll(), Poll::Ready(None)));
+            assert!(matches!(port.poll(), Poll::Ready(None)));
+            assert_eq!(device.borrow().outgoing.len(), 1);
+            device.borrow_mut().write_error = Some(io::ErrorKind::BrokenPipe);
+        }
+    }
+    assert!(matches!(client.drive(next_event(&mut port)), ClientResult::ConnectionFault { .. }));
+    assert!(matches!(client.drive(ClientEvent::Drive), ClientResult::Close { .. }));
+    assert!(matches!(client.drive(port.close()), ClientResult::Waiting { .. }));
+    assert_eq!(device.borrow().drops, 1);
+    assert_eq!(device.borrow().outgoing.len(), usize::from(matches!(cut, LostWrite::PartialWriteFailure)));
+
+    clock.set(INITIAL_TIME + RETRY);
+    let ClientResult::Connect { operation_id, .. } = client.drive(ClientEvent::Drive) else {
+        panic!("retry connection")
+    };
+    assert!(matches!(client.drive(ClientEvent::Connected { operation_id, result: Ok(()) }), ClientResult::Waiting { .. }));
+    let (mut port, device) = bind(&client, operation_id);
+    let retried = dispatch(&mut client, &mut port);
+    assert!(retried.context().request_id > first.context().request_id, "zero write cannot recycle request IDs");
+    assert_eq!(wire(retried.batch()), wire(first.batch()));
+    assert!(matches!(client.drive(next_event(&mut port)), ClientResult::Waiting { .. }));
+    enqueue(&device, reply(&retried, ReplyDisposition::Refused(BatchSubmitRefusal::TooLarge)));
+    port.ready(true, false);
+    assert!(matches!(client.drive(next_event(&mut port)), ClientResult::Waiting { .. }));
+    if matches!(custody, InputCustody::Submit) && !matches!(cut, LostWrite::PartialWriteFailure) {
+        assert!(matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::NotAdmitted {
+            handle: returned, batch: original, ..
+        })) if returned == handle && wire(&original) == wire(first.batch())), "zero-write attempt must not destroy first actual-send refusal proof");
+    } else {
+        assert!(matches!(client.poll_event(), Some(BatchEvent::Progress(BatchProgress::Problem { .. }))));
+        assert!(matches!(client.status(), ClientStatus::Batch { occupied: 1, .. }));
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ObservedDelivery {
+    WriteReturn,
+    QualifiedReply,
+}
+
+#[test_case(ObservedDelivery::WriteReturn; "written cannot be undone")]
+#[test_case(ObservedDelivery::QualifiedReply; "reply cannot be undone")]
+fn late_zero_write_receipt_cannot_erase_observed_delivery(observation: ObservedDelivery) {
+    let clock = Clock::new();
+    let mut client = client(&clock);
+    let connection = connect(&mut client);
+    let (mut port, device) = bind(&client, connection);
+    client.try_submit(batch(1)).unwrap();
+    let first = dispatch(&mut client, &mut port);
+    let written = next_event(&mut port);
+    assert!(!device.borrow().outgoing.is_empty());
+    match observation {
+        ObservedDelivery::WriteReturn => {
+            assert!(matches!(client.drive(written), ClientResult::Waiting { .. }));
+        }
+        ObservedDelivery::QualifiedReply => {
+            enqueue(&device, reply(&first, ReplyDisposition::IngressAdmitted(entry())));
+            port.ready(true, false);
+            assert!(matches!(client.drive(next_event(&mut port)), ClientResult::Waiting { .. }));
+            assert!(matches!(client.poll_event(), Some(BatchEvent::Progress(BatchProgress::IngressAdmitted { .. }))));
+        }
+    }
+    device.borrow_mut().read_error = Some(io::ErrorKind::UnexpectedEof);
+    port.ready(true, false);
+    assert!(matches!(client.drive(next_event(&mut port)), ClientResult::ConnectionFault { .. }));
+    assert!(matches!(client.drive(ClientEvent::Drive), ClientResult::Close { .. }));
+    assert!(matches!(port.close(), ClientEvent::Closed { operation_id } if operation_id == connection));
+    // Faulty/delayed physical feedback cannot contradict already joined evidence.
+    assert!(matches!(client.drive(ClientEvent::ClosedUnwritten {
+        operation_id: connection, request_id: first.context().request_id,
+    }), ClientResult::Waiting { .. }));
+
+    clock.set(INITIAL_TIME + RETRY);
+    let ClientResult::Connect { operation_id, .. } = client.drive(ClientEvent::Drive) else {
+        panic!("retry connection")
+    };
+    assert!(matches!(client.drive(ClientEvent::Connected { operation_id, result: Ok(()) }), ClientResult::Waiting { .. }));
+    let (_, retried) = take_write(&mut client);
+    write_return(&mut client, operation_id, &retried);
+    receive(&mut client, operation_id, reply(&retried, ReplyDisposition::Refused(BatchSubmitRefusal::TooLarge)));
+    assert!(matches!(client.poll_event(), Some(BatchEvent::Progress(BatchProgress::Problem { .. }))));
+    assert!(matches!(client.status(), ClientStatus::Batch { occupied: 1, .. }));
+}
+
 #[test]
 fn busy_or_wrong_connection_write_is_returned_whole_and_never_queued() {
     let clock = Clock::new();

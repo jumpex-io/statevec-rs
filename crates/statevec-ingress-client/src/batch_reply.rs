@@ -66,7 +66,7 @@ impl IngressClientOwner {
         else {
             unreachable!("non-yielding write publication")
         };
-        let Some(BatchSlot::Pending { attempt, submit_route, submit_transmissions, .. }) = slot else {
+        let Some(BatchSlot::Pending { attempt, submit_route, submit_transmissions, delivery, .. }) = slot else {
             unreachable!("eligible slot")
         };
         if submit {
@@ -75,6 +75,7 @@ impl IngressClientOwner {
             let first = submit_route.map_or(request_id, |(_, first, _)| first);
             *submit_route = Some((operation_id, first, request_id));
             *submit_transmissions = (*submit_transmissions + 1).min(2);
+            delivery.dispatch(operation_id, request_id);
             *attempt = BatchAttempt::Awaiting { operation_id, deadline };
         } else {
             *attempt = BatchAttempt::Querying { operation_id, request_id, deadline };
@@ -104,6 +105,9 @@ impl IngressClientOwner {
             }
             _ => None,
         };
+        if returned_deadline.is_some() {
+            self.observe_submit_write(operation_id, request_id);
+        }
         let now = self.checked_batch_time(sample);
         if let Ok(now) = now {
             self.expire_batches(now);
@@ -236,6 +240,7 @@ impl IngressClientOwner {
             self.suspend_batch(ClientFailure::BatchReply { source });
             return self.batch_effect();
         }
+        self.observe_submit_write(operation_id, reply.binding.context.request_id);
         let ClientState::Batch { retry_millis, idle_reconnect_millis, .. } = &mut self.state;
         *idle_reconnect_millis = *retry_millis;
         self.reduce_batch_reply(reply, query, current_exchange, now);
@@ -256,7 +261,7 @@ impl IngressClientOwner {
         let ClientState::Batch { slot, unavailable_replies, unavailable_reply_limit, .. } = &mut self.state;
         let next_unavailable = (*unavailable_replies + 1).min(*unavailable_reply_limit);
         let unavailable_limit = *unavailable_reply_limit;
-        let Some(BatchSlot::Pending { handle, committed, attempt, submit_transmissions, .. }) = slot else {
+        let Some(BatchSlot::Pending { handle, committed, attempt, delivery, .. }) = slot else {
             return;
         };
         let handle = *handle;
@@ -284,8 +289,8 @@ impl IngressClientOwner {
         // qualified admission/pending reply and no confirmed committed history.
         let first_reply = current_exchange
             && !query
-            && *submit_transmissions == 1
-            && matches!(attempt, BatchAttempt::Awaiting { .. })
+            && matches!((delivery, &*attempt), (SubmitDelivery::Sole { operation_id, request_id, .. }, BatchAttempt::Awaiting { operation_id: awaiting, .. })
+                if operation_id == awaiting && *request_id == reply.binding.context.request_id)
             && committed.is_none();
         // Only ending the current exchange arms a new observation interval.
         // A late Submit reply cannot replace an outstanding query or refresh it.

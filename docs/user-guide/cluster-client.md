@@ -67,6 +67,18 @@ returns the result or the complete original input and releases the local slot.
 was not admitted under the client's proof rules. `OutcomeUnknown` cannot prove
 that execution did not happen.
 
+A dispatch is not itself proof that bytes reached the socket. The physical
+worker can return `WriteUnwritten`, or `ClosedUnwritten` after disposing the
+socket, for an exact connection/request whose entire frame has zero written
+bytes. Only that certified attempt can be excluded from delivery history. A
+later sole actual Submit can then use an exact permanent refusal to prove
+`NotAdmitted`. Partial writes, ordinary errors/`Closed`, imported uncertainty
+and earlier possibly delivered requests remain uncertain. Request IDs are
+never reused, and a delayed zero-write observation cannot undo an acknowledged
+write or qualified reply. Custom drivers without this evidence remain
+conservative. Local stop and lifetime expiry still return `OutcomeUnknown`;
+neither is a server refusal.
+
 For an uncertain original, preserve its payloads and any known commitment, then
 use `try_import` in a fresh session. Do not invent a new sequence or submit a
 different command to replace an uncertain original. A clock failure stops the
