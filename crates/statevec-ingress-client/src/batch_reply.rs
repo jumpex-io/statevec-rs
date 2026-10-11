@@ -236,6 +236,8 @@ impl IngressClientOwner {
             self.suspend_batch(ClientFailure::BatchReply { source });
             return self.batch_effect();
         }
+        let ClientState::Batch { retry_millis, idle_reconnect_millis, .. } = &mut self.state;
+        *idle_reconnect_millis = *retry_millis;
         self.reduce_batch_reply(reply, query, current_exchange, now);
         self.batch_effect()
     }
@@ -504,7 +506,7 @@ impl IngressClientOwner {
 
     fn require_batch_close(&mut self, operation_id: u64, now: Option<MonotonicMillis>) {
         let next_peer = self.next_batch_peer();
-        let ClientState::Batch { connection, slot, retry_millis, last_now, .. } = &mut self.state;
+        let ClientState::Batch { connection, .. } = &self.state;
         let (BatchConnection::Connecting { operation_id: current, .. }
         | BatchConnection::Connected { operation_id: current, .. }
         | BatchConnection::Switching { operation_id: current, .. }) = connection
@@ -516,13 +518,14 @@ impl IngressClientOwner {
         }
         // A missing sample has already stopped the session in checked_batch_time.
         let Some(now) = now else { return };
-        let retry_at = match now.checked_add(*retry_millis) {
+        let retry_at = match self.next_reconnect_at(now) {
             Ok(due) => due,
             Err(source) => {
                 self.stop_batches(ClientFailure::InvalidTime { source });
                 return;
             }
         };
+        let ClientState::Batch { connection, slot, last_now, .. } = &mut self.state;
         *connection = BatchConnection::CloseRequired { operation_id, retry: Some((retry_at, next_peer)) };
         for slot in slot.iter_mut() {
             if let BatchSlot::Pending { attempt, submit_route, .. } = slot {

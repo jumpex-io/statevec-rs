@@ -23,6 +23,8 @@ enum ClientState {
         maximum_commands: u32,
         maximum_frame_bytes: u32,
         retry_millis: u64,
+        // Idle connection failures back off; accepted batch retry timing is unchanged.
+        idle_reconnect_millis: u64,
         operation_millis: u64,
         lifetime_millis: u64,
         unavailable_reply_limit: u32,

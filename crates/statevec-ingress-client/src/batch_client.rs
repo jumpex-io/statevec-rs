@@ -363,6 +363,7 @@ impl IngressClientOwner {
                 maximum_commands,
                 maximum_frame_bytes,
                 retry_millis,
+                idle_reconnect_millis: retry_millis,
                 operation_millis,
                 lifetime_millis,
                 unavailable_reply_limit,
@@ -685,7 +686,7 @@ impl IngressClientOwner {
             self.expire_batches(now);
         }
         let next_peer = self.next_batch_peer();
-        let ClientState::Batch { connection, retry_millis, .. } = &mut self.state;
+        let ClientState::Batch { connection, .. } = &mut self.state;
         // Failure returns physical custody, including after Stop/timeout. A bad
         // clock has already made retry None, but cannot retain that resource.
         let retry_peer = match connection {
@@ -711,13 +712,14 @@ impl IngressClientOwner {
             Err(_) => return ClientResult::ConnectionFailed { operation_id, source, next_wake: None },
         };
         if let Some(peer) = retry_peer {
-            let retry_at = match now.checked_add(*retry_millis) {
+            let retry_at = match self.next_reconnect_at(now) {
                 Ok(due) => due,
                 Err(time_failure) => {
                     self.stop_batches(ClientFailure::InvalidTime { source: time_failure });
                     return ClientResult::ConnectionFailed { operation_id, source, next_wake: None };
                 }
             };
+            let ClientState::Batch { connection, .. } = &mut self.state;
             *connection = BatchConnection::Disconnected { retry_at, peer };
         }
         ClientResult::ConnectionFailed { operation_id, source, next_wake: self.batch_deadline() }

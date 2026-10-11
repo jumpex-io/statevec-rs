@@ -386,14 +386,15 @@ fn routing_terms_never_authorize_retries_or_filter_exact_old_term_history() {
 
 #[test_case(1; "one configured peer")]
 #[test_case(32; "maximum configured endpoints")]
-fn failed_connections_visit_each_peer_once_with_positive_retry_intervals(count: u64) {
+fn failed_idle_connections_rotate_with_capped_exponential_backoff(count: u64) {
     let clock = Clock::new();
     let peers = (1..=count)
         .map(|id| (id, SocketAddr::from(([127, 0, 0, 1], 12000 + id as u16))))
         .collect();
     let mut client = construct(&clock, idle_start(), peers, (RETRY, OPERATION, LIFETIME)).unwrap();
-    for visit in 0..count + 2 {
-        let now = INITIAL_TIME + RETRY * visit;
+    let mut now = INITIAL_TIME;
+    let mut delay = RETRY;
+    for visit in 0..count + 12 {
         clock.set(now);
         let effect = client.drive(ClientEvent::Drive);
         let ClientResult::Connect { operation_id, peer_id, .. } = effect else {
@@ -402,11 +403,71 @@ fn failed_connections_visit_each_peer_once_with_positive_retry_intervals(count: 
         assert_eq!(peer_id, visit % count + 1);
         assert!(matches!(client.drive(ClientEvent::Connected {
             operation_id, result: Err(std::io::ErrorKind::ConnectionRefused.into()),
-        }), ClientResult::ConnectionFailed { next_wake: Some(due), .. } if due.get() == now + RETRY));
-        waiting_until(&mut client, now + RETRY);
-        clock.set(now + RETRY - 1);
-        waiting_until(&mut client, now + RETRY);
+        }), ClientResult::ConnectionFailed { next_wake: Some(due), .. } if due.get() == now + delay),
+        "idle retry must back off, including without pending work");
+        waiting_until(&mut client, now + delay);
+        clock.set(now + delay - 1);
+        waiting_until(&mut client, now + delay);
+        now += delay;
+        delay = (delay * 2).min(5_000);
     }
+}
+
+#[test]
+fn immediate_idle_eof_cannot_reset_reconnect_backoff() {
+    let clock = Clock::new();
+    let mut client = client(&clock);
+    let mut now = INITIAL_TIME;
+    for delay in [RETRY, RETRY * 2, RETRY * 4, RETRY * 8] {
+        clock.set(now);
+        let ClientResult::Connect { operation_id, .. } = client.drive(ClientEvent::Drive) else {
+            panic!("due idle connection")
+        };
+        client.drive(ClientEvent::Connected { operation_id, result: Ok(()) });
+        client.drive(ClientEvent::Read {
+            operation_id,
+            result: Err(ingress_api::stream_batch::ReadFailure::Io {
+                source: std::io::ErrorKind::UnexpectedEof.into(),
+            }),
+        });
+        assert!(matches!(client.drive(ClientEvent::Drive), ClientResult::Close { .. }));
+        client.drive(ClientEvent::Closed { operation_id });
+        waiting_until(&mut client, now + delay);
+        now += delay;
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BackoffRecovery { Pending, Applied }
+
+#[test_case(BackoffRecovery::Pending; "pending work retains its base retry")]
+#[test_case(BackoffRecovery::Applied; "qualified reply resets idle backoff")]
+fn idle_backoff_does_not_penalize_accepted_work(recovery: BackoffRecovery) {
+    let clock = Clock::new();
+    let mut client = client(&clock);
+    let ClientResult::Connect { operation_id, .. } = client.drive(ClientEvent::Drive) else {
+        panic!("initial connection")
+    };
+    client.drive(ClientEvent::Connected { operation_id, result: Err(std::io::ErrorKind::ConnectionRefused.into()) });
+    clock.set(INITIAL_TIME + RETRY);
+    let ClientResult::Connect { operation_id, .. } = client.drive(ClientEvent::Drive) else {
+        panic!("retry after idle failure")
+    };
+    client.drive(ClientEvent::Connected { operation_id, result: Ok(()) });
+    client.try_submit(batch(1)).unwrap();
+    if matches!(recovery, BackoffRecovery::Applied) {
+        let (_, request) = take_write(&mut client);
+        write_return(&mut client, operation_id, &request);
+        receive(&mut client, operation_id, completed(&request));
+        assert!(matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::Applied { .. }))));
+    }
+    client.drive(ClientEvent::Read {
+        operation_id,
+        result: Err(ingress_api::stream_batch::ReadFailure::Io { source: std::io::ErrorKind::UnexpectedEof.into() }),
+    });
+    assert!(matches!(client.drive(ClientEvent::Drive), ClientResult::Close { .. }));
+    client.drive(ClientEvent::Closed { operation_id });
+    waiting_until(&mut client, INITIAL_TIME + RETRY * 2);
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -34,6 +34,14 @@ async delivery. The client owns retry, reconciliation and endpoint rotation.
 Driver diagnostics report consumed faults; keep driving the same client rather
 than turning every diagnostic into an application stop.
 
+With no pending batch, consecutive connection failures use capped exponential
+backoff starting at `retry_millis`, doubling up to `max(retry_millis, 5000)`.
+An immediate EOF after a successful TCP handshake does not reset it; a valid,
+fully correlated batch reply does. Connection establishment remains eager,
+because local batch admission requires a connected session. Pending batches
+retain the configured retry interval and their original lifetime; this idle
+backoff adds no retry authority, random source or new application timeout.
+
 The default TCP worker enables kernel keepalive (5 seconds idle, 1 second
 between probes, 3 probes) and, on Linux, a 5-second `TCP_USER_TIMEOUT` for
 unacknowledged or zero-window-buffered data. Healthy idle connections have no
