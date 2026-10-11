@@ -6,7 +6,9 @@ use statevec::prelude::*;
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-static CALLS: [AtomicU64; 7] = [const { AtomicU64::new(0) }; 7];
+// Existing slots 0..7 retain their meaning; 7..10 report the last raw walk's
+// visitor count, disposition and delivered count.
+static CALLS: [AtomicU64; 10] = [const { AtomicU64::new(0) }; 10];
 
 #[unsafe(no_mangle)]
 pub extern "C" fn core_fixture_call_count(slot: u32) -> u64 {
@@ -96,7 +98,7 @@ impl ConfiguredCore for Configured {
     fn metadata(&self) -> CoreMetadata<'_> {
         CoreMetadata {
             name: "unwind-fixture",
-            revision: "core-unwind-fixture-v1",
+            revision: "core-unwind-fixture-v2",
             schema: &self.schema,
         }
     }
