@@ -1,9 +1,15 @@
 //! Mechanical custody of one partial whole-batch frame, not client/server admission.
 use std::io::{self, Read};
 
+#[cfg(test)]
+#[path = "ut_stream_batch_reader.rs"]
+mod tests;
+
 use super::{
     FrameFailure, HEADER_BYTES, Reply, Request, decode_reply, decode_request, reply_frame_len, request_frame_len,
 };
+
+const INITIAL_BODY_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamDirection {
@@ -36,6 +42,7 @@ pub enum ReadProgress<T = StreamFrame> {
 pub enum ReadFailure {
     Frame { source: FrameFailure },
     Io { source: io::Error },
+    Allocation { requested: usize, source: std::collections::TryReserveError },
     InvalidReadCount { observed: usize, offered: usize },
     EmptyCommandLimit,
     Closed,
@@ -52,6 +59,7 @@ impl std::error::Error for ReadFailure {
         match self {
             Self::Frame { source } => Some(source),
             Self::Io { source } => Some(source),
+            Self::Allocation { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -59,7 +67,7 @@ impl std::error::Error for ReadFailure {
 
 enum PartialFrame {
     Header { bytes: [u8; HEADER_BYTES], filled: usize },
-    Body { bytes: Vec<u8>, filled: usize },
+    Body { bytes: Vec<u8>, filled: usize, length: usize },
     Closed,
 }
 
@@ -69,6 +77,9 @@ enum PartialFrame {
 /// preserve partial bytes. Any other error is terminal: the caller retires the
 /// connection, never scans for a new magic or retries on a fresh decoder.
 /// No body is allocated until the complete header passes its total-byte bound.
+/// Initially reserve at most 64 KiB; grow fallibly as received bytes fill the
+/// buffer, never from the header's declared length alone. The configured limit
+/// still bounds the complete frame; callers must choose an affordable limit.
 /// Runnable and Frame retain read readiness across scheduling yields. Only
 /// WouldBlock requests an external readable notification; this is not a Future
 /// and does not register a waker on behalf of its caller.
@@ -137,7 +148,12 @@ impl FrameReader {
     fn read_once(&mut self, reader: &mut impl Read) -> Result<ReadProgress<Vec<u8>>, ReadFailure> {
         let (bytes, filled) = match &mut self.partial {
             PartialFrame::Header { bytes, filled } => (bytes.as_mut_slice(), filled),
-            PartialFrame::Body { bytes, filled } => (bytes.as_mut_slice(), filled),
+            PartialFrame::Body { bytes, filled, length } => {
+                if *filled == bytes.len() {
+                    grow_body(bytes, bytes.len().saturating_mul(2).min(*length))?;
+                }
+                (bytes.as_mut_slice(), filled)
+            }
             PartialFrame::Closed => return Err(ReadFailure::Closed),
         };
         let offered = bytes.len() - *filled;
@@ -166,11 +182,13 @@ impl FrameReader {
                     StreamDirection::Replies => reply_frame_len(bytes, self.maximum_frame_bytes),
                 }
                 .map_err(|source| ReadFailure::Frame { source })?;
-                let mut body = vec![0; length];
+                let mut body = Vec::new();
+                grow_body(&mut body, length.min(INITIAL_BODY_BYTES))?;
                 body[..HEADER_BYTES].copy_from_slice(bytes);
-                self.partial = PartialFrame::Body { bytes: body, filled: HEADER_BYTES };
+                self.partial = PartialFrame::Body { bytes: body, filled: HEADER_BYTES, length };
                 Ok(ReadProgress::Runnable)
             }
+            PartialFrame::Body { filled, length, .. } if filled < length => Ok(ReadProgress::Runnable),
             PartialFrame::Body { .. } => {
                 let PartialFrame::Body { bytes, .. } = std::mem::replace(&mut self.partial, Self::header()) else {
                     unreachable!("complete body")
@@ -180,4 +198,11 @@ impl FrameReader {
             PartialFrame::Closed => Err(ReadFailure::Closed),
         }
     }
+}
+
+fn grow_body(bytes: &mut Vec<u8>, length: usize) -> Result<(), ReadFailure> {
+    bytes.try_reserve_exact(length - bytes.len())
+        .map_err(|source| ReadFailure::Allocation { requested: length, source })?;
+    bytes.resize(length, 0);
+    Ok(())
 }

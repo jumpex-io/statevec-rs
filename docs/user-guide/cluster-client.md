@@ -43,6 +43,14 @@ client owner. Socket-option failure refuses that connection with its typed
 option and I/O cause rather than silently disabling reclamation. Other
 platforms use keepalive without the Linux user timeout.
 
+The shared frame reader validates the complete header before allocating, then
+starts with at most 64 KiB and grows fallibly only as bytes arrive. Receiving a
+header cannot reserve the entire declared frame. The configured maximum still
+limits a complete frame and must fit the application's memory budget; this is
+not a process-wide memory cap, nor protection from an unaffordable fully
+received/decoded frame. Allocation failure retires the connection without
+discarding the client's original batch or proving it was not admitted.
+
 ## Outcomes and recovery
 
 Progress events leave the batch in client custody. Consuming a terminal event

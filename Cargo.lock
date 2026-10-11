@@ -225,6 +225,7 @@ version = "0.2.1"
 dependencies = [
  "serde",
  "statevec-frame",
+ "test-case",
 ]
 
 [[package]]
