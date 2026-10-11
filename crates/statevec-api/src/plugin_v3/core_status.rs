@@ -62,13 +62,13 @@ impl SvStatus {
     fn decode_abi(self) -> Result<AbiFailure, StatusDecodeFailure> {
         let used = match self.cause {
             1 | 10..=14 => 0,
-            2 | 7..=9 | 100 | 101 | 103 | 106 | 107 => 1,
+            2 | 7..=9 | 100 | 101 | 103 | 106 | 107 | 110 => 1,
             3..=6 | 15 | 102 | 104 | 105 | 109 => 2,
             108 => 3,
             _ => return Err(self.unknown_cause()),
         };
         self.zero_from(used)?;
-        Ok(match self.cause {
+        let failure = match self.cause {
             1 => AbiFailure::NullPointer,
             2 => AbiFailure::Alignment { required: self.usize(0)? },
             3 => AbiFailure::Length { actual: self.detail[0], maximum: self.detail[1] },
@@ -98,13 +98,47 @@ impl SvStatus {
             107 => AbiFailure::Status(StatusDecodeFailure::InvalidBusinessCode { raw: self.u32(0)? }),
             108 => AbiFailure::Status(StatusDecodeFailure::DetailOutOfRange { slot: self.u8(0)?, value: self.detail[1], maximum: self.detail[2] }),
             109 => AbiFailure::Status(StatusDecodeFailure::NonzeroUnusedDetail { slot: self.u8(0)?, value: self.detail[1] }),
+            110 => AbiFailure::Status(StatusDecodeFailure::NoncanonicalNestedFailure { cause: self.u32(0)? }),
             _ => unreachable!(),
-        })
+        };
+        if let AbiFailure::Status(nested) = failure {
+            let canonical = match nested {
+                StatusDecodeFailure::UnknownTag { tag } => tag > 11,
+                StatusDecodeFailure::NonzeroSuccessCause { cause } => cause != 0,
+                StatusDecodeFailure::IllegalReturn { operation, tag } => tag <= 11 && !operation.permits(tag),
+                StatusDecodeFailure::UnknownOperation { raw } => CoreOperation::from_code(raw).is_none(),
+                StatusDecodeFailure::UnexpectedTag { expected, actual } => expected != actual,
+                StatusDecodeFailure::UnknownCause { tag, cause } => unknown_core_cause(tag, cause),
+                StatusDecodeFailure::UnknownStorageCause { raw } => !(1..=12).contains(&raw),
+                StatusDecodeFailure::InvalidBusinessCode { raw } => !(1..60000).contains(&raw),
+                StatusDecodeFailure::DetailOutOfRange { slot, value, maximum } => slot < 3 && value > maximum,
+                StatusDecodeFailure::NonzeroUnusedDetail { slot, value } => slot < 3 && value != 0,
+                StatusDecodeFailure::NoncanonicalNestedFailure { .. } => true,
+            };
+            if !canonical {
+                return Err(StatusDecodeFailure::NoncanonicalNestedFailure { cause: self.cause });
+            }
+        }
+        Ok(failure)
     }
 
     fn zero_from(self, first: u8) -> Result<(), StatusDecodeFailure> {
         for slot in first..3 { self.require_zero(slot)?; }
         Ok(())
+    }
+}
+
+fn unknown_core_cause(tag: u32, cause: u32) -> bool {
+    match tag {
+        2 => !(1..=7).contains(&cause),
+        3 => !(1..=13).contains(&cause),
+        4 | 11 => !(1..=2).contains(&cause),
+        5..=8 => cause != 0,
+        9 => !matches!(cause, 1..=15 | 100..=110),
+        10 => !(1..=4).contains(&cause),
+        // Success and business returns have dedicated cause diagnostics;
+        // other tags fail before any cause can be classified.
+        _ => false,
     }
 }
 
@@ -196,6 +230,7 @@ impl From<&AbiFailure> for SvStatus {
                 StatusDecodeFailure::InvalidBusinessCode { raw } => (107, [raw.into(), 0, 0]),
                 StatusDecodeFailure::DetailOutOfRange { slot, value, maximum } => (108, [slot.into(), value, maximum]),
                 StatusDecodeFailure::NonzeroUnusedDetail { slot, value } => (109, [slot.into(), value, 0]),
+                StatusDecodeFailure::NoncanonicalNestedFailure { cause } => (110, [cause.into(), 0, 0]),
             },
         };
         Self { tag: 9, cause, detail }

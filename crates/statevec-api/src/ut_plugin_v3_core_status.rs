@@ -66,11 +66,36 @@ fn execution_categories_are_distinct_and_have_no_payload(failure: ExecutionFailu
 #[test_case(AbiFailure::Status(StatusDecodeFailure::InvalidBusinessCode { raw: 60000 }), 107, [60000, 0, 0]; "invalid business")]
 #[test_case(AbiFailure::Status(StatusDecodeFailure::DetailOutOfRange { slot: 2, value: 256, maximum: 255 }), 108, [2, 256, 255]; "detail range")]
 #[test_case(AbiFailure::Status(StatusDecodeFailure::NonzeroUnusedDetail { slot: 1, value: u64::MAX }), 109, [1, u64::MAX, 0]; "unused detail")]
+#[test_case(AbiFailure::Status(StatusDecodeFailure::NoncanonicalNestedFailure { cause: 108 }), 110, [108, 0, 0]; "contradictory nested failure")]
 fn abi_causes_match_independent_records(failure: AbiFailure, cause: u32, detail: [u64; 3]) {
     let expected = SvStatus { tag: 9, cause, detail };
 
     assert_eq!(SvStatus::from(&failure), expected);
     assert_eq!(expected.decode_for(CoreOperation::RunTx), Ok(Some(CoreFailure::Transaction(TxFailure::Execution(ExecutionFailure::AbiContract(failure))))));
+}
+
+#[test_case(100, [9, 0, 0]; "known tag")]
+#[test_case(101, [0, 0, 0]; "zero success cause")]
+#[test_case(102, [5, 7, 0]; "permitted panic")]
+#[test_case(102, [5, 99, 0]; "unknown tag is not illegal return")]
+#[test_case(103, [9, 0, 0]; "known operation")]
+#[test_case(104, [2, 2, 0]; "matching tags")]
+#[test_case(105, [3, 1, 0]; "known storage cause")]
+#[test_case(105, [99, 1, 0]; "unknown tag has no cause vocabulary")]
+#[test_case(106, [12, 0, 0]; "known storage category")]
+#[test_case(107, [1, 0, 0]; "valid business code")]
+#[test_case(108, [3, 256, 255]; "nonexistent detail slot")]
+#[test_case(108, [2, 255, 255]; "in range detail")]
+#[test_case(109, [3, 1, 0]; "nonexistent unused slot")]
+#[test_case(109, [1, 0, 0]; "zero unused detail")]
+fn contradictory_nested_failure_is_an_abi_refusal(cause: u32, detail: [u64; 3]) {
+    let wire = SvStatus { tag: 9, cause, detail };
+    let failure = wire.decode_for(CoreOperation::RunTx).expect_err("contradictory nested failure is not canonical");
+    assert_eq!(failure, StatusDecodeFailure::NoncanonicalNestedFailure { cause });
+    let report = SvStatus::from(&AbiFailure::Status(failure));
+    assert_eq!(report.decode_for(CoreOperation::RunTx), Ok(Some(CoreFailure::Transaction(
+        TxFailure::Execution(ExecutionFailure::AbiContract(AbiFailure::Status(failure)))
+    ))), "the rejection itself must round-trip");
 }
 
 // Independent wire records, one canonical representative of every Core tag.

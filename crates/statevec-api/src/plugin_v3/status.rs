@@ -32,6 +32,8 @@ pub enum StatusDecodeFailure {
     InvalidBusinessCode { raw: u32 },
     DetailOutOfRange { slot: u8, value: u64, maximum: u64 },
     NonzeroUnusedDetail { slot: u8, value: u64 },
+    /// The nested failure's fields fit their widths but contradict its cause.
+    NoncanonicalNestedFailure { cause: u32 },
 }
 
 impl SvStatus {
