@@ -7,6 +7,21 @@ impl SvStatus {
     /// Decode the entire status, then check its meaning against the operation
     /// actually invoked. This does not determine instance reusability.
     pub fn decode_for(self, operation: CoreOperation) -> Result<Option<CoreFailure>, StatusDecodeFailure> {
+        let failure = self.decode_fields()?;
+        if let Some(CoreFailure::Transaction(TxFailure::Execution(
+            ExecutionFailure::AbiContract(AbiFailure::Status(nested)),
+        ))) = failure {
+            self.check_nested_status(nested)?;
+        }
+        if failure.is_some() && !operation.permits(self.tag) {
+            return Err(StatusDecodeFailure::IllegalReturn { operation, tag: self.tag });
+        }
+        Ok(failure)
+    }
+
+    // Decode representation only. Nested diagnostics consult this same cause
+    // decoder without recursively validating a diagnostic about a diagnostic.
+    fn decode_fields(self) -> Result<Option<CoreFailure>, StatusDecodeFailure> {
         let failure = match self.tag {
             0 => {
                 if self.cause != 0 {
@@ -44,9 +59,6 @@ impl SvStatus {
             11 => CoreFailure::Construction(CreateFailure::Resource(self.decode_resource()?)),
             tag => return Err(StatusDecodeFailure::UnknownTag { tag }),
         };
-        if !operation.permits(self.tag) {
-            return Err(StatusDecodeFailure::IllegalReturn { operation, tag: self.tag });
-        }
         Ok(Some(failure))
     }
 
@@ -101,44 +113,37 @@ impl SvStatus {
             110 => AbiFailure::Status(StatusDecodeFailure::NoncanonicalNestedFailure { cause: self.u32(0)? }),
             _ => unreachable!(),
         };
-        if let AbiFailure::Status(nested) = failure {
-            let canonical = match nested {
-                StatusDecodeFailure::UnknownTag { tag } => tag > 11,
-                StatusDecodeFailure::NonzeroSuccessCause { cause } => cause != 0,
-                StatusDecodeFailure::IllegalReturn { operation, tag } => tag <= 11 && !operation.permits(tag),
-                StatusDecodeFailure::UnknownOperation { raw } => CoreOperation::from_code(raw).is_none(),
-                StatusDecodeFailure::UnexpectedTag { expected, actual } => expected != actual,
-                StatusDecodeFailure::UnknownCause { tag, cause } => unknown_core_cause(tag, cause),
-                StatusDecodeFailure::UnknownStorageCause { raw } => !(1..=12).contains(&raw),
-                StatusDecodeFailure::InvalidBusinessCode { raw } => !(1..60000).contains(&raw),
-                StatusDecodeFailure::DetailOutOfRange { slot, value, maximum } => slot < 3 && value > maximum,
-                StatusDecodeFailure::NonzeroUnusedDetail { slot, value } => slot < 3 && value != 0,
-                StatusDecodeFailure::NoncanonicalNestedFailure { .. } => true,
-            };
-            if !canonical {
-                return Err(StatusDecodeFailure::NoncanonicalNestedFailure { cause: self.cause });
-            }
-        }
         Ok(failure)
+    }
+
+    fn check_nested_status(self, nested: StatusDecodeFailure) -> Result<(), StatusDecodeFailure> {
+        let canonical = match nested {
+            StatusDecodeFailure::UnknownTag { tag } => tag > 11,
+            StatusDecodeFailure::NonzeroSuccessCause { cause } => cause != 0,
+            StatusDecodeFailure::IllegalReturn { operation, tag } => tag <= 11 && !operation.permits(tag),
+            StatusDecodeFailure::UnknownOperation { raw } => CoreOperation::from_code(raw).is_none(),
+            StatusDecodeFailure::UnexpectedTag { expected, actual } => expected != actual,
+            StatusDecodeFailure::UnknownCause { tag, cause } => {
+                let raw = Self { tag, cause, detail: [0; 3] };
+                raw.decode_fields() == Err(StatusDecodeFailure::UnknownCause { tag, cause })
+            }
+            StatusDecodeFailure::UnknownStorageCause { raw } => !(1..=12).contains(&raw),
+            StatusDecodeFailure::InvalidBusinessCode { raw } => !(1..60000).contains(&raw),
+            StatusDecodeFailure::DetailOutOfRange { slot, value, maximum } => slot < 3 && value > maximum,
+            StatusDecodeFailure::NonzeroUnusedDetail { slot, value } => slot < 3 && value != 0,
+            // Includes 110 itself: rejecting a malformed 110 record must
+            // still produce a canonical, round-trippable failure report.
+            StatusDecodeFailure::NoncanonicalNestedFailure { cause } => (100..=110).contains(&cause),
+        };
+        if !canonical {
+            return Err(StatusDecodeFailure::NoncanonicalNestedFailure { cause: self.cause });
+        }
+        Ok(())
     }
 
     fn zero_from(self, first: u8) -> Result<(), StatusDecodeFailure> {
         for slot in first..3 { self.require_zero(slot)?; }
         Ok(())
-    }
-}
-
-fn unknown_core_cause(tag: u32, cause: u32) -> bool {
-    match tag {
-        2 => !(1..=7).contains(&cause),
-        3 => !(1..=13).contains(&cause),
-        4 | 11 => !(1..=2).contains(&cause),
-        5..=8 => cause != 0,
-        9 => !matches!(cause, 1..=15 | 100..=110),
-        10 => !(1..=4).contains(&cause),
-        // Success and business returns have dedicated cause diagnostics;
-        // other tags fail before any cause can be classified.
-        _ => false,
     }
 }
 

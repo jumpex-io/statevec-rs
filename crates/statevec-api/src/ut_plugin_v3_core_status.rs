@@ -67,6 +67,8 @@ fn execution_categories_are_distinct_and_have_no_payload(failure: ExecutionFailu
 #[test_case(AbiFailure::Status(StatusDecodeFailure::DetailOutOfRange { slot: 2, value: 256, maximum: 255 }), 108, [2, 256, 255]; "detail range")]
 #[test_case(AbiFailure::Status(StatusDecodeFailure::NonzeroUnusedDetail { slot: 1, value: u64::MAX }), 109, [1, u64::MAX, 0]; "unused detail")]
 #[test_case(AbiFailure::Status(StatusDecodeFailure::NoncanonicalNestedFailure { cause: 108 }), 110, [108, 0, 0]; "contradictory nested failure")]
+#[test_case(AbiFailure::Status(StatusDecodeFailure::NoncanonicalNestedFailure { cause: 100 }), 110, [100, 0, 0]; "first nested diagnostic")]
+#[test_case(AbiFailure::Status(StatusDecodeFailure::NoncanonicalNestedFailure { cause: 110 }), 110, [110, 0, 0]; "contradictory diagnostic report")]
 fn abi_causes_match_independent_records(failure: AbiFailure, cause: u32, detail: [u64; 3]) {
     let expected = SvStatus { tag: 9, cause, detail };
 
@@ -82,12 +84,18 @@ fn abi_causes_match_independent_records(failure: AbiFailure, cause: u32, detail:
 #[test_case(104, [2, 2, 0]; "matching tags")]
 #[test_case(105, [3, 1, 0]; "known storage cause")]
 #[test_case(105, [99, 1, 0]; "unknown tag has no cause vocabulary")]
+#[test_case(105, [9, 105, 0]; "known nested unknown cause")]
+#[test_case(105, [9, 110, 0]; "known nested diagnostic cause")]
 #[test_case(106, [12, 0, 0]; "known storage category")]
 #[test_case(107, [1, 0, 0]; "valid business code")]
 #[test_case(108, [3, 256, 255]; "nonexistent detail slot")]
 #[test_case(108, [2, 255, 255]; "in range detail")]
 #[test_case(109, [3, 1, 0]; "nonexistent unused slot")]
 #[test_case(109, [1, 0, 0]; "zero unused detail")]
+#[test_case(110, [0, 0, 0]; "zero is not a nested diagnostic")]
+#[test_case(110, [99, 0, 0]; "before nested diagnostic vocabulary")]
+#[test_case(110, [111, 0, 0]; "after nested diagnostic vocabulary")]
+#[test_case(110, [u32::MAX as u64, 0, 0]; "unknown nested diagnostic")]
 fn contradictory_nested_failure_is_an_abi_refusal(cause: u32, detail: [u64; 3]) {
     let wire = SvStatus { tag: 9, cause, detail };
     let failure = wire.decode_for(CoreOperation::RunTx).expect_err("contradictory nested failure is not canonical");
@@ -96,6 +104,28 @@ fn contradictory_nested_failure_is_an_abi_refusal(cause: u32, detail: [u64; 3]) 
     assert_eq!(report.decode_for(CoreOperation::RunTx), Ok(Some(CoreFailure::Transaction(
         TxFailure::Execution(ExecutionFailure::AbiContract(AbiFailure::Status(failure)))
     ))), "the rejection itself must round-trip");
+}
+
+#[test]
+fn nested_unknown_cause_agrees_with_the_actual_decoder() {
+    // Exercise both public decoding paths across the current cause vocabulary
+    // and its gaps, including diagnostics about other nested diagnostics.
+    for tag in (0..=12).chain([u32::MAX]) {
+        for cause in (0..=111).chain([u32::MAX]) {
+            let raw = SvStatus { tag, cause, detail: [0; 3] };
+            let failure = StatusDecodeFailure::UnknownCause { tag, cause };
+            let report = SvStatus::from(&AbiFailure::Status(failure));
+            let actual = report.decode_for(CoreOperation::RunTx);
+            let expected = if raw.decode_for(CoreOperation::RunTx) == Err(failure) {
+                Ok(Some(CoreFailure::Transaction(TxFailure::Execution(
+                    ExecutionFailure::AbiContract(AbiFailure::Status(failure)),
+                ))))
+            } else {
+                Err(StatusDecodeFailure::NoncanonicalNestedFailure { cause: 105 })
+            };
+            assert_eq!(actual, expected, "tag={tag}, cause={cause}");
+        }
+    }
 }
 
 // Independent wire records, one canonical representative of every Core tag.
