@@ -13,7 +13,7 @@ categories.workspace = true
 [dependencies]
 ingress_api.workspace = true
 statevec_frame = { package = "statevec-frame", version = "0.2.1", path = "../statevec-frame" }
-socket2.workspace = true
+socket2 = { workspace = true, features = ["all"] }
 polling.workspace = true
 libc.workspace = true
 

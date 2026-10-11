@@ -1,6 +1,45 @@
 // OS resources only. No connect timeout, route selection or retry policy.
 use polling::{Event as SocketEvent, Events, Poller};
-use socket2::{Domain, Protocol, Socket, Type};
+use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
+
+#[derive(Debug)]
+enum ClientSocketOption {
+    Keepalive,
+    #[cfg(target_os = "linux")]
+    UserTimeout,
+}
+
+#[derive(Debug)]
+struct ClientSocketConfigurationFailure {
+    option: ClientSocketOption,
+    source: io::Error,
+}
+
+impl std::fmt::Display for ClientSocketConfigurationFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "client socket {:?}: {}", self.option, self.source)
+    }
+}
+
+impl std::error::Error for ClientSocketConfigurationFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { Some(&self.source) }
+}
+
+fn configure_client_liveness(socket: &Socket) -> io::Result<()> {
+    let failure = |option, source: io::Error| {
+        io::Error::new(source.kind(), ClientSocketConfigurationFailure { option, source })
+    };
+    let keepalive = TcpKeepalive::new()
+        .with_time(Duration::from_secs(5))
+        .with_interval(Duration::from_secs(1))
+        .with_retries(3);
+    socket.set_tcp_keepalive(&keepalive)
+        .map_err(|source| failure(ClientSocketOption::Keepalive, source))?;
+    #[cfg(target_os = "linux")]
+    socket.set_tcp_user_timeout(Some(Duration::from_secs(5)))
+        .map_err(|source| failure(ClientSocketOption::UserTimeout, source))?;
+    Ok(())
+}
 
 pub struct BatchTcpWorker {
     poller: std::sync::Arc<Poller>,
@@ -35,6 +74,7 @@ impl BatchConnectIo for BatchTcpWorker {
         let socket = Socket::new(Domain::for_address(address), Type::STREAM, Some(Protocol::TCP))?;
         socket.set_nonblocking(true)?;
         socket.set_tcp_nodelay(true)?;
+        configure_client_liveness(&socket)?;
         match socket.connect(&address.into()) {
             Ok(()) => (),
             Err(source) if source.kind() == io::ErrorKind::WouldBlock => (),

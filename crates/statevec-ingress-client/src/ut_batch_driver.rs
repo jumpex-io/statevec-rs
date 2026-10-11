@@ -345,6 +345,21 @@ fn partial_reply_is_discarded_on_reconnect_but_a_latched_terminal_survives() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn client_socket_arms_kernel_liveness_before_connect_returns() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut worker = BatchTcpWorker::new().unwrap();
+    let stream = worker.connect(listener.local_addr().unwrap()).unwrap();
+    let socket = socket2::SockRef::from(&stream);
+
+    assert!(socket.keepalive().unwrap(), "a silently lost peer must not retain an idle socket indefinitely");
+    assert_eq!(socket.tcp_keepalive_time().unwrap(), Duration::from_secs(5));
+    assert_eq!(socket.tcp_keepalive_interval().unwrap(), Duration::from_secs(1));
+    assert_eq!(socket.tcp_keepalive_retries().unwrap(), 3);
+    assert_eq!(socket.tcp_user_timeout().unwrap(), Some(Duration::from_secs(5)), "buffered writes also need a kernel bound");
+}
+
+#[test]
 fn os_nonblocking_connect_and_scoped_readiness_registration_use_real_socket() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let clock = Clock::new();

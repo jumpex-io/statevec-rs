@@ -34,6 +34,15 @@ async delivery. The client owns retry, reconciliation and endpoint rotation.
 Driver diagnostics report consumed faults; keep driving the same client rather
 than turning every diagnostic into an application stop.
 
+The default TCP worker enables kernel keepalive (5 seconds idle, 1 second
+between probes, 3 probes) and, on Linux, a 5-second `TCP_USER_TIMEOUT` for
+unacknowledged or zero-window-buffered data. Healthy idle connections have no
+application idle expiry. These physical bounds do not prove delivery or
+non-admission; operation/lifetime budgets and reconciliation remain with the
+client owner. Socket-option failure refuses that connection with its typed
+option and I/O cause rather than silently disabling reclamation. Other
+platforms use keepalive without the Linux user timeout.
+
 ## Outcomes and recovery
 
 Progress events leave the batch in client custody. Consuming a terminal event
