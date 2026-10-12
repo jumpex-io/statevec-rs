@@ -386,7 +386,24 @@ fn client_socket_arms_kernel_liveness_before_connect_returns() {
     assert_eq!(socket.tcp_keepalive_time().unwrap(), Duration::from_secs(5));
     assert_eq!(socket.tcp_keepalive_interval().unwrap(), Duration::from_secs(1));
     assert_eq!(socket.tcp_keepalive_retries().unwrap(), 3);
-    assert_eq!(socket.tcp_user_timeout().unwrap(), Some(Duration::from_secs(5)), "buffered writes also need a kernel bound");
+    assert_eq!(socket.tcp_user_timeout().unwrap(), Some(Duration::from_secs(8)), "all three idle probes need a response window");
+}
+
+#[test_case::test_case(Duration::from_millis(7999); "before last probe window")]
+#[test_case::test_case(Duration::from_micros(8_000_001); "fractional millisecond")]
+#[test_case::test_case(Duration::from_millis(u64::from(u32::MAX) + 1); "kernel integer overflow")]
+fn client_kernel_budget_rejects_incoherent_values(timeout: Duration) {
+    assert!(matches!(BatchTcpWorker::with_tcp_user_timeout(timeout), Err(e) if e.kind() == io::ErrorKind::InvalidInput));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn client_kernel_budget_is_configurable_without_changing_owner_deadlines() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let budget = Duration::from_secs(30);
+    let mut worker = BatchTcpWorker::with_tcp_user_timeout(budget).unwrap();
+    let stream = worker.connect(listener.local_addr().unwrap()).unwrap();
+    assert_eq!(socket2::SockRef::from(&stream).tcp_user_timeout().unwrap(), Some(budget));
 }
 
 #[test]

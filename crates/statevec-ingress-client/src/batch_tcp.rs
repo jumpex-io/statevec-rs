@@ -25,7 +25,7 @@ impl std::error::Error for ClientSocketConfigurationFailure {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { Some(&self.source) }
 }
 
-fn configure_client_liveness(socket: &Socket) -> io::Result<()> {
+fn configure_client_liveness(socket: &Socket, user_timeout: Duration) -> io::Result<()> {
     let failure = |option, source: io::Error| {
         io::Error::new(source.kind(), ClientSocketConfigurationFailure { option, source })
     };
@@ -36,18 +36,34 @@ fn configure_client_liveness(socket: &Socket) -> io::Result<()> {
     socket.set_tcp_keepalive(&keepalive)
         .map_err(|source| failure(ClientSocketOption::Keepalive, source))?;
     #[cfg(target_os = "linux")]
-    socket.set_tcp_user_timeout(Some(Duration::from_secs(5)))
+    socket.set_tcp_user_timeout(Some(user_timeout))
         .map_err(|source| failure(ClientSocketOption::UserTimeout, source))?;
+    #[cfg(not(target_os = "linux"))]
+    let _ = user_timeout;
     Ok(())
 }
 
 pub struct BatchTcpWorker {
     poller: std::sync::Arc<Poller>,
+    tcp_user_timeout: Duration,
 }
 
 impl BatchTcpWorker {
     pub fn new() -> io::Result<Self> {
-        Ok(Self { poller: std::sync::Arc::new(Poller::new()?) })
+        Self::with_tcp_user_timeout(Duration::from_secs(8))
+    }
+
+    /// Linux physical unacknowledged/zero-window budget, independent of the
+    /// owner's operation deadline. At least 5s + 3 * 1s permits three idle probes.
+    /// Other platforms retain keepalive without this Linux-only timeout.
+    pub fn with_tcp_user_timeout(timeout: Duration) -> io::Result<Self> {
+        if timeout < Duration::from_secs(8)
+            || timeout.as_millis() > u128::from(u32::MAX)
+            || timeout.subsec_nanos() % 1_000_000 != 0
+        {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        Ok(Self { poller: std::sync::Arc::new(Poller::new()?), tcp_user_timeout: timeout })
     }
 
     /// Coalesced physical wake, including notification before wait registers.
@@ -74,7 +90,7 @@ impl BatchConnectIo for BatchTcpWorker {
         let socket = Socket::new(Domain::for_address(address), Type::STREAM, Some(Protocol::TCP))?;
         socket.set_nonblocking(true)?;
         socket.set_tcp_nodelay(true)?;
-        configure_client_liveness(&socket)?;
+        configure_client_liveness(&socket, self.tcp_user_timeout)?;
         match socket.connect(&address.into()) {
             Ok(()) => (),
             Err(source) if source.kind() == io::ErrorKind::WouldBlock => (),

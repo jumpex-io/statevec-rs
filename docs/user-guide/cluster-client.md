@@ -43,13 +43,23 @@ retain the configured retry interval and their original lifetime; this idle
 backoff adds no retry authority, random source or new application timeout.
 
 The default TCP worker enables kernel keepalive (5 seconds idle, 1 second
-between probes, 3 probes) and, on Linux, a 5-second `TCP_USER_TIMEOUT` for
-unacknowledged or zero-window-buffered data. Healthy idle connections have no
+between probes, 3 probes) and, on Linux, an 8-second `TCP_USER_TIMEOUT` for
+unacknowledged or zero-window-buffered data. Linux also uses that timeout
+instead of the keepalive probe count: the default permits probes at 5, 6 and
+7 seconds before expiry at about 8 seconds. `BatchTcpWorker::with_tcp_user_timeout`
+accepts a longer physical budget (whole milliseconds, at least 8 seconds).
+It is not derived from the owner's operation budget; TCP acknowledgements
+and an application reply measure different progress. Healthy idle connections have no
 application idle expiry. These physical bounds do not prove delivery or
 non-admission; operation/lifetime budgets and reconciliation remain with the
 client owner. Socket-option failure refuses that connection with its typed
 option and I/O cause rather than silently disabling reclamation. Other
 platforms use keepalive without the Linux user timeout.
+
+On Linux with `unshare`, `ip` and `iptables`, the opt-in kernel regression is
+`cargo nextest run -p statevec-ingress-client --test tcp_liveness --run-ignored only`.
+It drops a probe, checks continued use, then bounds sustained packet loss inside
+a disposable user/network namespace; it never modifies host firewall rules.
 
 The shared frame reader validates the complete header before allocating, then
 starts with at most 64 KiB and grows fallibly only as bytes arrive. Receiving a
