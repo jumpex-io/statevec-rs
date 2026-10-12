@@ -72,7 +72,7 @@ pub mod event {
 pub use model::*;
 
 /// Stable schema identity and registry types.
-pub use registry::{SchemaFingerprint, SchemaIdentity, SchemaRegistry};
+pub use registry::{RecordEnumError, SchemaFingerprint, SchemaIdentity, SchemaRegistry};
 pub use reserved_bytes::{EngineSchemaInvariantProfile, ReservedBytesZeroError, validate_reserved_bytes_zero};
 pub use runtime_release::CoreRuntimeReleaseId;
 pub use system_schema_metadata::{

@@ -14,6 +14,52 @@ fn encode_uk(data: &[u8]) -> KeyBytes {
     uk
 }
 
+#[test_case::test_case(1, true; "first_variant")]
+#[test_case::test_case(7, true; "sparse_variant")]
+#[test_case::test_case(0, false; "zero_not_declared")]
+#[test_case::test_case(3, false; "gap_between_variants")]
+#[test_case::test_case(255, false; "outside_variants")]
+fn record_enum_validation_checks_declared_discriminants(value: u8, valid: bool) {
+    static FIELDS: &[FieldDefinition] = &[FieldDefinition {
+        name: "status",
+        ty: FieldType::EnumU8,
+        len: 1,
+        enum_type_name: Some("Status"),
+        ..RECORD_FIELDS_A[0]
+    }];
+    let definition = RecordDefinition {
+        kind: 1,
+        name: "StatusRecord",
+        data_size: 1,
+        version: 1,
+        unique_keys: &[],
+        canonical_indexes: &[],
+        fields: FIELDS,
+        reserved_fields: &[],
+    };
+    let enums = [EnumDefinition {
+        name: "Status",
+        variants: &[
+            EnumVariantDefinition { name: "First", discriminant: 1 },
+            EnumVariantDefinition { name: "Later", discriminant: 7 },
+        ],
+    }];
+    let registry = SchemaRegistry::new(Version::new(1, 0), &[definition], &[], &[], &enums);
+    let expected = if valid { Ok(()) } else {
+        Err(crate::RecordEnumError::InvalidValue { kind: 1, field_index: 1, value })
+    };
+    assert_eq!(registry.validate_record_enums(&definition, &[value]), expected);
+    assert_eq!(
+        registry.validate_record_enums(&definition, &[]),
+        Err(crate::RecordEnumError::PayloadTooShort { kind: 1, required: 1, actual: 0 }),
+    );
+    let missing = SchemaRegistry::with_records(Version::new(1, 0), &[definition]);
+    assert_eq!(
+        missing.validate_record_enums(&definition, &[value]),
+        Err(crate::RecordEnumError::MissingDefinition { kind: 1, field_index: 1 }),
+    );
+}
+
 static RECORD_FIELDS_A: &[FieldDefinition] = &[FieldDefinition {
     name: "id",
     field_index: 1,
