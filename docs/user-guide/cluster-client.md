@@ -23,6 +23,15 @@ contiguous stream range. Construction validates the complete batch; a refusal
 returns the original input. The caller provides the service's frame and command
 limits, which are not negotiated over the connection.
 
+Check request/reply codec versions, frame limits in both directions and command
+counts against the deployed service before rollout. A header or limit rejection
+before full decoding closes the socket without a correlated `Refused` reply.
+Repeated reconnects do not repair this configuration mismatch; the original
+batch may ultimately return `OutcomeUnknown`. A connection close is not proof
+of `NotAdmitted`, including when the service closes excess connections at its
+capacity limit. Size application connection pools for each node's ingress cap,
+including failover concentration; healthy idle connections still occupy slots.
+
 Construct `BatchClient::bounded` with the cluster, genesis and execution-profile
 identities from the deployment configuration, a fresh session incarnation, the
 stream identity, endpoints and time budgets. A client holds one batch at a time.
@@ -59,6 +68,11 @@ client owner. Socket-option failure refuses that connection with its typed
 option and I/O cause rather than silently disabling reclamation. Other
 platforms use keepalive without the Linux user timeout.
 
+`BatchBackground::spawn` uses the default physical timeout. To change it,
+construct `BatchTcpWorker::with_tcp_user_timeout` and pass the worker and its
+notifier to `BatchBackground::spawn_with_io`. Increasing `operation_millis`
+alone does not change the socket option.
+
 On Linux with `unshare`, `ip` and `iptables`, the opt-in kernel regression is
 `cargo nextest run -p statevec-ingress-client --test tcp_liveness --run-ignored only`.
 It drops a probe, checks continued use, then bounds sustained packet loss inside
@@ -90,7 +104,13 @@ and earlier possibly delivered requests remain uncertain. Request IDs are
 never reused, and a delayed zero-write observation cannot undo an acknowledged
 write or qualified reply. Custom drivers without this evidence remain
 conservative. Local stop and lifetime expiry still return `OutcomeUnknown`;
-neither is a server refusal.
+neither is a server refusal, even if no send was observed.
+
+For a Submit without known commitment, `InternalFailure` without a node `Failed`
+observation suspends the batch and publishes a problem rather than automatically
+settling or replaying it. Correct the reported environment/configuration problem,
+retain the original intent, and use the uncertain-original recovery path below.
+Do not interpret the refusal name as proof that no earlier attempt was admitted.
 
 For an uncertain original, preserve its payloads and any known commitment, then
 use `try_import` in a fresh session. Do not invent a new sequence or submit a

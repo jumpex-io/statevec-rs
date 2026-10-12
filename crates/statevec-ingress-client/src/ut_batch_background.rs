@@ -803,6 +803,119 @@ fn os_background_wakes_on_publication_and_async_consumes_a_real_frame() {
     assert_eq!(peer.read(&mut [0]).unwrap(), 0);
 }
 
+fn accept_os_peer(listener: &std::net::TcpListener) -> std::net::TcpStream {
+    let deadline = Instant::now() + HARNESS_TIMEOUT;
+    loop {
+        match listener.accept() {
+            Ok((peer, _)) => {
+                peer.set_read_timeout(Some(HARNESS_TIMEOUT)).unwrap();
+                peer.set_write_timeout(Some(HARNESS_TIMEOUT)).unwrap();
+                return peer;
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                assert!(Instant::now() < deadline, "default driver must reach the real listener");
+                std::thread::yield_now();
+            }
+            Err(error) => panic!("peer accept: {error:?}"),
+        }
+    }
+}
+
+fn read_os_request(peer: &mut std::net::TcpStream) -> Request {
+    let mut reader = stream_batch::FrameReader::new(
+        stream_batch::StreamDirection::Requests,
+        FRAME_LIMIT as usize,
+        COMMAND_LIMIT as usize,
+    )
+    .unwrap();
+    loop {
+        match reader.poll_bytes(peer).unwrap() {
+            stream_batch::ReadProgress::Frame(bytes) => {
+                return stream_batch::decode_request(&bytes, FRAME_LIMIT as usize, COMMAND_LIMIT as usize)
+                    .unwrap();
+            }
+            stream_batch::ReadProgress::Runnable => (),
+            other => panic!("complete request before the fixture read deadline: {other:?}"),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OsPeerFault {
+    Eof,
+    InvalidHeader,
+}
+
+#[test_case(OsPeerFault::Eof; "peer_eof")]
+#[test_case(OsPeerFault::InvalidHeader; "malformed_frame")]
+fn default_background_retires_peer_fault_then_completes_same_batch(fault: OsPeerFault) {
+    // Default OS transport and background, with only owner time injected.
+    // Retained DriveRejected would prevent the old socket's close or the retry.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let clock = Clock::new();
+    let owner =
+        construct(&clock, idle_start(), vec![(1, listener.local_addr().unwrap())], (RETRY, OPERATION, LIFETIME))
+            .unwrap();
+    let background = BatchBackground::spawn(owner).unwrap();
+    let mut peer = accept_os_peer(&listener);
+    let deadline = Instant::now() + HARNESS_TIMEOUT;
+    let mut original = batch(1);
+    let handle = loop {
+        match background.try_submit(original) {
+            Ok(handle) => break handle,
+            Err(refused) if matches!(refused.reason, ClientFailure::NotConnected) => original = refused.batch,
+            Err(refused) => panic!("local admission: {refused:?}"),
+        }
+        assert!(Instant::now() < deadline, "driver must bind the accepted connection");
+        std::thread::yield_now();
+    };
+    let request = read_os_request(&mut peer);
+
+    match fault {
+        OsPeerFault::Eof => peer.shutdown(std::net::Shutdown::Write).unwrap(),
+        OsPeerFault::InvalidHeader => {
+            let mut wire =
+                stream_batch::encode_reply(&completed(&request), FRAME_LIMIT as usize, COMMAND_LIMIT as usize)
+                    .unwrap();
+            wire[0] = b'?';
+            // Only the rejected header; unread body bytes would allow TCP RST
+            // instead of the EOF used here to observe physical close.
+            peer.write_all(&wire[..stream_batch::HEADER_BYTES]).unwrap();
+        }
+    }
+    assert_eq!(
+        peer.read(&mut [0]).unwrap(),
+        0,
+        "owner must consume the fault and retire the exact socket"
+    );
+    assert!(matches!(background.take_driver_error(), Some(ClientFailure::BatchRead { .. })));
+    assert!(background.poll_event().unwrap().is_none(), "connection failure cannot settle the original intent");
+
+    clock.set(INITIAL_TIME + RETRY);
+    let mut recovered = accept_os_peer(&listener);
+    let retry = read_os_request(&mut recovered);
+    assert_eq!(retry.batch(), request.batch());
+    assert_ne!(retry.context().request_id, request.context().request_id);
+    let reply = stream_batch::encode_reply(&completed(&retry), FRAME_LIMIT as usize, COMMAND_LIMIT as usize)
+        .unwrap();
+    recovered.write_all(&reply).unwrap();
+    let deadline = Instant::now() + HARNESS_TIMEOUT;
+    loop {
+        if let Some(event) = background.poll_event().unwrap() {
+            assert!(
+                matches!(event, BatchEvent::Terminal(BatchTerminal::Applied { handle: actual, .. }) if actual == handle)
+            );
+            break;
+        }
+        assert!(Instant::now() < deadline, "recovered reply must progress without an unrelated wake");
+        std::thread::yield_now();
+    }
+    let (client, error) = background.shutdown().unwrap();
+    assert!(error.is_none(), "unexpected invariant/driver fault: {error:?}");
+    assert!(matches!(client.status(), ClientStatus::Batch { occupied: 0, stopped: true, .. }));
+}
+
 #[test]
 fn clock_fail_stop_finishes_background_and_delivers_terminal_before_async_eof() {
     let clock = Clock::new();
