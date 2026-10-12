@@ -45,18 +45,76 @@ fn record_enum_validation_checks_declared_discriminants(value: u8, valid: bool) 
         ],
     }];
     let registry = SchemaRegistry::new(Version::new(1, 0), &[definition], &[], &[], &enums);
-    let expected = if valid { Ok(()) } else {
-        Err(crate::RecordEnumError::InvalidValue { kind: 1, field_index: 1, value })
-    };
-    assert_eq!(registry.validate_record_enums(&definition, &[value]), expected);
+    let expected =
+        if valid { Ok(()) } else { Err(crate::RecordValueError::InvalidValue { kind: 1, field_index: 1, value }) };
+    assert_eq!(registry.validate_record_values(&definition, &[value]), expected);
     assert_eq!(
-        registry.validate_record_enums(&definition, &[]),
-        Err(crate::RecordEnumError::PayloadTooShort { kind: 1, required: 1, actual: 0 }),
+        registry.validate_record_values(&definition, &[]),
+        Err(crate::RecordValueError::PayloadTooShort { kind: 1, required: 1, actual: 0 }),
     );
     let missing = SchemaRegistry::with_records(Version::new(1, 0), &[definition]);
     assert_eq!(
-        missing.validate_record_enums(&definition, &[value]),
-        Err(crate::RecordEnumError::MissingDefinition { kind: 1, field_index: 1 }),
+        missing.validate_record_values(&definition, &[value]),
+        Err(crate::RecordValueError::MissingDefinition { kind: 1, field_index: 1 }),
+    );
+}
+
+// A FixedBytes<4> field encodes a u16 length prefix plus four capacity bytes.
+#[test_case::test_case(0, None; "empty")]
+#[test_case::test_case(4, None; "at_capacity")]
+#[test_case::test_case(5, Some(crate::RecordValueError::FixedBytesLength { kind: 1, field_index: 1, len: 5, capacity: 4 }); "one_past_capacity")]
+#[test_case::test_case(u16::MAX, Some(crate::RecordValueError::FixedBytesLength { kind: 1, field_index: 1, len: u16::MAX, capacity: 4 }); "u16_max")]
+fn record_value_validation_checks_fixed_bytes_length(len: u16, expected: Option<crate::RecordValueError>) {
+    static FIELDS: &[FieldDefinition] = &[FieldDefinition {
+        name: "tag",
+        ty: FieldType::FixedBytes,
+        len: 6,
+        rust_type_name: "FixedBytes<4>",
+        ..RECORD_FIELDS_A[0]
+    }];
+    let definition = RecordDefinition {
+        kind: 1,
+        name: "TagRecord",
+        data_size: 6,
+        version: 1,
+        unique_keys: &[],
+        canonical_indexes: &[],
+        fields: FIELDS,
+        reserved_fields: &[],
+    };
+    let registry = SchemaRegistry::with_records(Version::new(1, 0), &[definition]);
+    let mut data = [0; 6];
+    data[..2].copy_from_slice(&len.to_le_bytes());
+
+    assert_eq!(registry.validate_record_values(&definition, &data), expected.map_or(Ok(()), Err));
+}
+
+#[test_case::test_case(1, 0, 6; "shorter_than_length_prefix")]
+#[test_case::test_case(6, 1, 6; "span_past_data_size")]
+#[test_case::test_case(u32::MAX, 1, 6; "span_end_overflow")]
+fn record_value_validation_refuses_fixed_bytes_layout_outside_record(len: u32, offset: u32, data_size: u32) {
+    let fields: &'static [FieldDefinition] = Box::leak(Box::new([FieldDefinition {
+        name: "tag",
+        ty: FieldType::FixedBytes,
+        len,
+        offset,
+        ..RECORD_FIELDS_A[0]
+    }]));
+    let definition = RecordDefinition {
+        kind: 1,
+        name: "TagRecord",
+        data_size,
+        version: 1,
+        unique_keys: &[],
+        canonical_indexes: &[],
+        fields,
+        reserved_fields: &[],
+    };
+    let registry = SchemaRegistry::with_records(Version::new(1, 0), &[definition]);
+
+    assert_eq!(
+        registry.validate_record_values(&definition, &[0; 6]),
+        Err(crate::RecordValueError::FieldLayout { kind: 1, field_index: 1, offset, len }),
     );
 }
 
