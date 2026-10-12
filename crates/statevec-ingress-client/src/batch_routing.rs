@@ -1,9 +1,16 @@
 // Same owner and state: these routing facts cannot mint slot retry authority.
 impl IngressClientOwner {
     fn next_reconnect_at(&mut self, now: MonotonicMillis) -> Result<MonotonicMillis, ClockReadFailure> {
-        let ClientState::Batch { slot, retry_millis, idle_reconnect_millis, .. } = &mut self.state;
+        let ClientState::Batch { slot, connection, retry_millis, idle_reconnect_millis, .. } = &mut self.state;
         if matches!(slot, Some(BatchSlot::Pending { .. })) {
             return now.checked_add(*retry_millis);
+        }
+        // A stable transport also retires old idle failures without a business
+        // reply. Immediate EOF must retain backoff; no extra polling is needed.
+        if matches!(connection, BatchConnection::Connected { connected_at, .. }
+            if now.get().checked_sub(connected_at.get()).is_some_and(|age| age >= (*retry_millis).max(5_000)))
+        {
+            *idle_reconnect_millis = *retry_millis;
         }
         let due = now.checked_add(*idle_reconnect_millis)?;
         *idle_reconnect_millis = idle_reconnect_millis.saturating_mul(2).min((*retry_millis).max(5_000));
@@ -14,7 +21,7 @@ impl IngressClientOwner {
         let ClientState::Batch { unavailable_replies, unavailable_reply_limit, connection, .. } = &mut self.state;
         *unavailable_replies = unavailable;
         if unavailable >= *unavailable_reply_limit {
-            if let BatchConnection::Connected { operation_id, peer, write } = *connection {
+            if let BatchConnection::Connected { operation_id, peer, write, .. } = *connection {
                 *connection = BatchConnection::Switching { operation_id, peer, write };
             }
         }

@@ -443,6 +443,41 @@ enum BackoffRecovery {
     Applied,
 }
 
+#[test_case(4_999, RETRY * 2; "short connection keeps backoff")]
+#[test_case(5_000, RETRY; "stable window resets backoff")]
+#[test_case(3_600_000, RETRY; "healthy idle hour resets backoff")]
+fn stable_idle_connection_retires_old_failure_backoff(connected_for: u64, delay: u64) {
+    let clock = Clock::new();
+    let mut client = client(&clock);
+    let ClientResult::Connect { operation_id, .. } = client.drive(ClientEvent::Drive) else {
+        panic!("initial connection")
+    };
+    assert!(matches!(client.drive(ClientEvent::Connected {
+        operation_id, result: Err(std::io::ErrorKind::ConnectionRefused.into()),
+    }), ClientResult::ConnectionFailed { .. }));
+    let connected_at = INITIAL_TIME + RETRY;
+    clock.set(connected_at);
+    let ClientResult::Connect { operation_id, .. } = client.drive(ClientEvent::Drive) else {
+        panic!("retry after idle failure")
+    };
+    assert!(matches!(client.drive(ClientEvent::Connected { operation_id, result: Ok(()) }), ClientResult::Waiting { .. }));
+
+    // No business request or reply occurred while the connection stayed up.
+    clock.set(connected_at + connected_for);
+    assert!(matches!(client.drive(ClientEvent::Read {
+        operation_id,
+        result: Err(ingress_api::stream_batch::ReadFailure::Io { source: std::io::ErrorKind::UnexpectedEof.into() }),
+    }), ClientResult::ConnectionFault { .. }));
+    assert!(matches!(client.drive(ClientEvent::Drive), ClientResult::Close { .. }));
+    assert!(matches!(client.drive(ClientEvent::Closed { operation_id }), ClientResult::Waiting { .. }));
+    let due = connected_at + connected_for + delay;
+    waiting_until(&mut client, due);
+    clock.set(due - 1);
+    waiting_until(&mut client, due);
+    clock.set(due);
+    assert!(matches!(client.drive(ClientEvent::Drive), ClientResult::Connect { .. }));
+}
+
 #[test_case(BackoffRecovery::Pending; "pending work retains its base retry")]
 #[test_case(BackoffRecovery::Applied; "qualified reply resets idle backoff")]
 fn idle_backoff_does_not_penalize_accepted_work(recovery: BackoffRecovery) {

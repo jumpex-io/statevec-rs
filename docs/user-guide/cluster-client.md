@@ -37,7 +37,10 @@ than turning every diagnostic into an application stop.
 With no pending batch, consecutive connection failures use capped exponential
 backoff starting at `retry_millis`, doubling up to `max(retry_millis, 5000)`.
 An immediate EOF after a successful TCP handshake does not reset it; a valid,
-fully correlated batch reply does. Connection establishment remains eager,
+fully correlated batch reply does. A connection held for at least
+`max(retry_millis, 5000)` also retires old idle backoff when it closes, even
+without a business reply. The owner's monotonic connection timestamp decides
+this; no background timer or new retry authority is added. Connection establishment remains eager,
 because local batch admission requires a connected session. Pending batches
 retain the configured retry interval and their original lifetime; this idle
 backoff adds no retry authority, random source or new application timeout.

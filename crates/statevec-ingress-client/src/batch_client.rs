@@ -262,6 +262,7 @@ enum BatchConnection {
     Connected {
         operation_id: u64,
         peer: usize,
+        connected_at: MonotonicMillis,
         // At most one physical frame write, even if its slot already settled.
         write: Option<(NonZeroU64, MonotonicMillis)>,
     },
@@ -675,7 +676,7 @@ impl IngressClientOwner {
             ClientEvent::Connected { operation_id, result: Ok(()) } => {
                 if let BatchConnection::Connecting { operation_id: pending, peer, .. } = connection {
                     if operation_id == *pending {
-                        *connection = BatchConnection::Connected { operation_id, peer: *peer, write: None };
+                        *connection = BatchConnection::Connected { operation_id, peer: *peer, connected_at: now, write: None };
                     }
                 }
             }
