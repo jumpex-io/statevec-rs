@@ -50,7 +50,7 @@ between probes, 3 probes) and, on Linux, an 8-second `TCP_USER_TIMEOUT` for
 unacknowledged or zero-window-buffered data. Linux also uses that timeout
 instead of the keepalive probe count: the default permits probes at 5, 6 and
 7 seconds before expiry at about 8 seconds. `BatchTcpWorker::with_tcp_user_timeout`
-accepts a longer physical budget (whole milliseconds, at least 8 seconds).
+accepts a longer physical budget (whole milliseconds in `8000..=2147483647`).
 It is not derived from the owner's operation budget; TCP acknowledgements
 and an application reply measure different progress. Healthy idle connections have no
 application idle expiry. These physical bounds do not prove delivery or

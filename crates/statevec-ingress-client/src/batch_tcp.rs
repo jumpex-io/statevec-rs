@@ -55,10 +55,11 @@ impl BatchTcpWorker {
 
     /// Linux physical unacknowledged/zero-window budget, independent of the
     /// owner's operation deadline. At least 5s + 3 * 1s permits three idle probes.
+    /// Whole milliseconds must fit Linux's signed socket-option integer.
     /// Other platforms retain keepalive without this Linux-only timeout.
     pub fn with_tcp_user_timeout(timeout: Duration) -> io::Result<Self> {
         if timeout < Duration::from_secs(8)
-            || timeout.as_millis() > u128::from(u32::MAX)
+            || timeout.as_millis() > i32::MAX as u128
             || timeout.subsec_nanos() % 1_000_000 != 0
         {
             return Err(io::ErrorKind::InvalidInput.into());

@@ -391,16 +391,16 @@ fn client_socket_arms_kernel_liveness_before_connect_returns() {
 
 #[test_case::test_case(Duration::from_millis(7999); "before last probe window")]
 #[test_case::test_case(Duration::from_micros(8_000_001); "fractional millisecond")]
-#[test_case::test_case(Duration::from_millis(u64::from(u32::MAX) + 1); "kernel integer overflow")]
+#[test_case::test_case(Duration::from_millis(i32::MAX as u64 + 1); "kernel signed integer overflow")]
 fn client_kernel_budget_rejects_incoherent_values(timeout: Duration) {
     assert!(matches!(BatchTcpWorker::with_tcp_user_timeout(timeout), Err(e) if e.kind() == io::ErrorKind::InvalidInput));
 }
 
-#[test]
 #[cfg(target_os = "linux")]
-fn client_kernel_budget_is_configurable_without_changing_owner_deadlines() {
+#[test_case::test_case(Duration::from_secs(30); "ordinary physical budget")]
+#[test_case::test_case(Duration::from_millis(i32::MAX as u64); "largest kernel budget")]
+fn client_kernel_budget_is_configurable_without_changing_owner_deadlines(budget: Duration) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let budget = Duration::from_secs(30);
     let mut worker = BatchTcpWorker::with_tcp_user_timeout(budget).unwrap();
     let stream = worker.connect(listener.local_addr().unwrap()).unwrap();
     assert_eq!(socket2::SockRef::from(&stream).tcp_user_timeout().unwrap(), Some(budget));
