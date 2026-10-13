@@ -7,6 +7,19 @@ use ProjectorAbiFailure as A;
 use ProjectorFailure as F;
 use ProjectorStatusDecodeFailure as D;
 
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+#[test]
+fn c11_record_change_layout_agrees_with_the_public_contract() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/projector_record_layout.c");
+    let result = std::process::Command::new("cc")
+        .args(["-std=c11", "-Wpadded", "-Werror", "-fsyntax-only"])
+        .arg(fixture)
+        .output()
+        .expect("the Linux ABI gate requires a C11 compiler");
+    assert!(result.status.success(), "C11 ABI assertions: {}", String::from_utf8_lossy(&result.stderr));
+}
+
 #[test_case(size_of::<SvProjectorV1>(), 112; "plugin_table")]
 #[test_case(size_of::<SvProjectorHostV1>(), 184; "host_table")]
 #[test_case(size_of::<SvProjectorId>(), 136; "id")]
