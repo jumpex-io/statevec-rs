@@ -181,7 +181,7 @@ impl<'io> ProjectorServices<'io> {
     }
 }
 
-/// Synchronous entry shared by the eventual worker exporter and loaded delivery
+/// Synchronous entry shared by the generated worker exporter and loaded delivery
 /// fixtures. It owns all host borrows outside author code and joins every scoped
 /// service before releasing forgotten loans/replies. It does not configure or
 /// start a product node and does not implement latest-state delivery yet.

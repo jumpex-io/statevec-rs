@@ -134,16 +134,31 @@ created with `services.spawn()`, not to unscoped threads or static storage. All
 those services are joined before the enclosing host borrow ends.
 
 The unsafe `with_host` entry is for an integration that already owns a validated
-host table and keeps its callback resources alive. The
-`projector_v1_delivery` cdylib example demonstrates this transport boundary using
-only public SDK crates. It is a conformance consumer, not a durable database
-example or a configured product exporter. Configure/prepare/start, generated
-worker lifecycle and the official Node adapter remain a separate integration.
+host table, startup binding and callback resources that remain alive through all
+actual joins. Application authors normally use the generated exporter instead.
+
+## Export a configured continuous-history worker
+
+Implement `ProjectorModule` to check configuration, `ConfiguredProjector` to
+prepare application resources, and `PreparedProjector` to report the actual
+recovery offset and consume frames in `run`. Export the module with
+`statevec_projector_api::export_projector_plugin_v1!`. The generated V1 table
+owns configure/prepare/start, failure observation, explicit stop, actual worker
+and scoped-service joins, and explicit destruction. A failed thread spawn leaves
+the prepared value with its caller; a successful spawn transfers it once.
+
+The `projector_v1_delivery` cdylib example exports such a module using only public
+SDK crates, alongside a low-level transport conformance probe. Its temporary JSON
+report proves loaded delivery; it is not a durable business database or an offset
+store. Your application must still persist effects and the complete offset at
+its own durability boundary. The official Node adapter that wires this exporter
+into product configuration and shell lifecycle is a later integration phase.
 
 `LatestState` is reserved for rebuilding on every startup with no saved offset;
 the native delivery-phase integration rejects it until rebuild qualification.
-The V1 raw tables, scoped delivery and status codecs are available, but a configured dynamic worker
-and the default file store are not enabled by this release's groundwork alone.
+The V1 raw tables, scoped delivery, status codecs and configured continuous-history
+exporter are available. Latest-state workers and the default file offset store
+remain pending; their planned APIs are not implementation evidence.
 
 This SDK contains no projector database, checkpoint file format, network
 subscription protocol, or Raft implementation. Local substitutes may implement
