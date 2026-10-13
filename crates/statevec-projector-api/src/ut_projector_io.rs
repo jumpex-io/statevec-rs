@@ -7,10 +7,10 @@ struct Fixture {
     stopped: AtomicBool, delivered: AtomicBool, offers: AtomicU64, releases: AtomicU64,
     frame_releases: AtomicU64, retain_frame: bool, fail_frame: bool, fail_reply: bool,
     receives: AtomicU64, fail_stop: bool, info_failure: Option<ProjectorFailure>, bad_frame: bool,
-    changes: bool, inactive_image: bool,
+    changes: bool, inactive_image: bool, calls: std::sync::Mutex<Vec<(u8, u32)>>,
 }
 impl Fixture {
-    fn new() -> Self { Self { stopped: AtomicBool::new(false), delivered: AtomicBool::new(false), offers: AtomicU64::new(0), releases: AtomicU64::new(0), frame_releases: AtomicU64::new(0), retain_frame: false, fail_frame: false, fail_reply: false, receives: AtomicU64::new(0), fail_stop: false, info_failure: None, bad_frame: false, changes: false, inactive_image: false } }
+    fn new() -> Self { Self { stopped: AtomicBool::new(false), delivered: AtomicBool::new(false), offers: AtomicU64::new(0), releases: AtomicU64::new(0), frame_releases: AtomicU64::new(0), retain_frame: false, fail_frame: false, fail_reply: false, receives: AtomicU64::new(0), fail_stop: false, info_failure: None, bad_frame: false, changes: false, inactive_image: false, calls: std::sync::Mutex::new(Vec::new()) } }
     fn table(&self) -> SvProjectorHostV1 {
         SvProjectorHostV1 {
             h: SvHeader { abi_major: 1, kind: PROJECTOR_HOST_KIND, table_bytes: std::mem::size_of::<SvProjectorHostV1>() as u64, provided_caps: 0x3f, required_caps: 0x3f }, context: (self as *const Self).cast_mut().cast(),
@@ -29,13 +29,15 @@ unsafe extern "C" fn receive(raw: *mut c_void, _: u64, tag: *mut u32, cookie: *m
 }
 unsafe extern "C" fn stop(raw: *mut c_void) -> SvStatus {
     let f = unsafe { fixture(raw) };
+    f.calls.lock().unwrap().push((0, 0));
     if f.fail_stop { return (&ProjectorFailure::HostPanicked).into(); }
     f.stopped.store(true, Ordering::SeqCst); SvStatus::SUCCESS
 }
 unsafe extern "C" fn stopping(raw: *const c_void, out: *mut u32) -> SvStatus { unsafe { out.write(u32::from(fixture(raw).stopped.load(Ordering::SeqCst))); } SvStatus::SUCCESS }
-unsafe extern "C" fn notify(_: *mut c_void, kind: u32, observation: *const SvProjectorFailureObservation) -> SvStatus {
+unsafe extern "C" fn notify(raw: *mut c_void, kind: u32, observation: *const SvProjectorFailureObservation) -> SvStatus {
     if observation.is_null() { return (&ProjectorAbiFailure::NullPointer).into(); }
     let value = unsafe { *observation };
+    unsafe { fixture(raw) }.calls.lock().unwrap().push((kind as u8, value.slot));
     if kind == 2 && (value.slot != 0 || value.reserved != 0 || value.cause != SvStatus::SUCCESS) {
         return (&ProjectorAbiFailure::InvalidHandle).into();
     }
@@ -158,6 +160,30 @@ fn finished_notification_uses_canonical_zero_observation() {
     let completion = unsafe { with_host(&fixture.table(), "history", |_| Ok(())) }.unwrap();
     assert_eq!(completion.joined, 1);
     assert_eq!(completion.notification_failure, SvStatus::SUCCESS);
+}
+
+#[test]
+fn failure_revokes_receive_before_notifying_host() {
+    let fixture = Fixture::new();
+    let cause = ProjectorFailure::Application { code: 17 };
+    let completion = unsafe { with_host(&fixture.table(), "history", |_| Err(cause)) }.unwrap();
+    assert_eq!(completion.run_failure, (&cause).into());
+    let calls = fixture.calls.lock().unwrap();
+    assert_eq!(&calls[..2], &[(0, 0), (1, 1)], "stop_receive must precede the failure wake");
+}
+
+#[test]
+fn multiple_service_panics_join_all_but_notify_the_service_slot_once() {
+    let fixture = Fixture::new();
+    let completion = unsafe { with_host(&fixture.table(), "history", |io| {
+        let services = io.split().services;
+        for _ in 0..2 { services.spawn(|_| panic!("scoped service failure"))?; }
+        Ok(())
+    }) }.unwrap();
+    assert_eq!(completion.failed_service_joins, 2);
+    assert_eq!(completion.joined, 1);
+    assert_eq!(fixture.calls.lock().unwrap().iter().filter(|&&call| call == (1, 5)).count(), 1);
+    assert!(completion.decode(None).is_ok());
 }
 
 #[test_case::test_case(0; "insert_zero")]

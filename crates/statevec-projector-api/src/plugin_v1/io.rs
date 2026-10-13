@@ -45,15 +45,15 @@ impl ScopeData {
             };
             if *place == SvStatus::SUCCESS { *place = status; true } else { false }
         };
-        if first && slot != 6 {
-            let observation = SvProjectorFailureObservation { slot, reserved: 0, cause: status };
-            // SAFETY: checked table and live scope; notification is synchronous.
-            if let Err(failure) = call(unsafe { self.table.notify.unwrap()(self.table.context, 1, &observation) }, Op::Notify) { self.record(6, failure); }
-        }
         if first && matches!(slot, 1..=4) {
             // Revoke acquisition using the same physical stop latch. Preserve
             // this release kind's first cause if the consequent wake also fails.
             if let Err(failure) = self.stop() { self.record(slot, failure); }
+        }
+        if first && slot != 6 {
+            let observation = SvProjectorFailureObservation { slot, reserved: 0, cause: status };
+            // SAFETY: checked table and live scope; wake only after stop_receive.
+            if let Err(failure) = call(unsafe { self.table.notify.unwrap()(self.table.context, 1, &observation) }, Op::Notify) { self.record(6, failure); }
         }
     }
     pub fn release_frame(&self) {
@@ -151,11 +151,15 @@ impl<'io> ProjectorServices<'io> {
                 Err(payload) => {
                     std::mem::forget(payload);
                     let mut completion = host.completion.lock().unwrap_or_else(|e| e.into_inner());
+                    let first = completion.failed_service_joins == 0;
                     completion.failed_service_joins += 1;
                     completion.service_join_failure = SvStatus::from(&super::ProjectorCallFailure::ServiceJoinPanicked);
                     let observation = SvProjectorFailureObservation { slot: 5, reserved: 0, cause: completion.service_join_failure };
                     drop(completion);
-                    if let Err(cause) = call(unsafe { host.table.notify.unwrap()(host.table.context, 1, &observation) }, Op::Notify) { host.record(6, cause); }
+                    if let Err(failure) = host.stop() { host.record(1, failure); }
+                    if first {
+                        if let Err(cause) = call(unsafe { host.table.notify.unwrap()(host.table.context, 1, &observation) }, Op::Notify) { host.record(6, cause); }
+                    }
                 }
             }
             if let Err(failure) = host.stop() { host.record(1, failure); }
