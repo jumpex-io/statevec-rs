@@ -85,9 +85,9 @@ impl TransactionView<'_> {
         let key = RecordKey { kind: raw.key.kind, sys_id: raw.key.sys_id };
         let after = unsafe { bytes(raw.after)? };
         match raw.operation {
-            1 => Ok(RecordChangeView::Insert { key, revision: raw.revision, after }),
-            2 => Ok(RecordChangeView::Update { key, revision: raw.revision, after }),
-            3 if after.is_empty() && raw.after.ptr.is_null() => Ok(RecordChangeView::Delete { key, revision: raw.revision }),
+            0 => Ok(RecordChangeView::Insert { key, revision: raw.revision, after }),
+            1 => Ok(RecordChangeView::Update { key, revision: raw.revision, after }),
+            2 if after.is_empty() && raw.after.ptr.is_null() => Ok(RecordChangeView::Delete { key, revision: raw.revision }),
             actual => Err(A::Flag { actual }.into()),
         }
     }

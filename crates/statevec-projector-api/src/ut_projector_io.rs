@@ -7,9 +7,10 @@ struct Fixture {
     stopped: AtomicBool, delivered: AtomicBool, offers: AtomicU64, releases: AtomicU64,
     frame_releases: AtomicU64, retain_frame: bool, fail_frame: bool, fail_reply: bool,
     receives: AtomicU64, fail_stop: bool, info_failure: Option<ProjectorFailure>, bad_frame: bool,
+    changes: bool,
 }
 impl Fixture {
-    fn new() -> Self { Self { stopped: AtomicBool::new(false), delivered: AtomicBool::new(false), offers: AtomicU64::new(0), releases: AtomicU64::new(0), frame_releases: AtomicU64::new(0), retain_frame: false, fail_frame: false, fail_reply: false, receives: AtomicU64::new(0), fail_stop: false, info_failure: None, bad_frame: false } }
+    fn new() -> Self { Self { stopped: AtomicBool::new(false), delivered: AtomicBool::new(false), offers: AtomicU64::new(0), releases: AtomicU64::new(0), frame_releases: AtomicU64::new(0), retain_frame: false, fail_frame: false, fail_reply: false, receives: AtomicU64::new(0), fail_stop: false, info_failure: None, bad_frame: false, changes: false } }
     fn table(&self) -> SvProjectorHostV1 {
         SvProjectorHostV1 {
             h: SvHeader { abi_major: 1, kind: PROJECTOR_HOST_KIND, table_bytes: std::mem::size_of::<SvProjectorHostV1>() as u64, provided_caps: 0x3f, required_caps: 0x3f }, context: (self as *const Self).cast_mut().cast(),
@@ -45,6 +46,7 @@ unsafe extern "C" fn info(raw: *mut c_void, _: u64, out: *mut SvFrameInfo) -> Sv
     if let Some(cause) = f.info_failure { return (&cause).into(); }
     let mut frame = SvFrameInfo::default();
     frame.reserved = u32::from(f.bad_frame);
+    frame.transaction_count = u64::from(f.changes);
     frame.position.manifest = 1; frame.position.raft_index = 1; frame.position.raft_term = 1; frame.peer_id = 1;
     frame.cut.bytes[..8].copy_from_slice(b"SVCUT002");
     frame.cut.bytes[136..140].copy_from_slice(&1u32.to_le_bytes());
@@ -72,9 +74,23 @@ unsafe extern "C" fn release_reply(raw: *mut c_void, cookie: *mut u64) -> SvStat
     if fail { (&ProjectorFailure::HostPanicked).into() } else { SvStatus::SUCCESS }
 }
 macro_rules! unused { ($name:ident($($ty:ty),*)) => { unsafe extern "C" fn $name($(_: $ty),*) -> SvStatus { (&ProjectorAbiFailure::InvalidHandle).into() } }; }
-unused!(transaction(*mut c_void, u64, u64, *mut SvTransactionInfo));
+unsafe extern "C" fn transaction(_: *mut c_void, _: u64, _: u64, out: *mut SvTransactionInfo) -> SvStatus {
+    let mut tx: SvTransactionInfo = unsafe { std::mem::zeroed() };
+    tx.result_digest_profile = 1;
+    tx.result_digest = SvBytes::borrowed(&[0; 16]);
+    tx.change_count = 3;
+    unsafe { out.write(tx); }
+    SvStatus::SUCCESS
+}
 unused!(event(*mut c_void, u64, u64, u64, *mut SvEvent));
-unused!(change(*mut c_void, u64, u64, u64, *mut SvRecordChange));
+unsafe extern "C" fn change(_: *mut c_void, _: u64, _: u64, index: u64, out: *mut SvRecordChange) -> SvStatus {
+    unsafe { out.write(SvRecordChange {
+        key: SvKey { kind: 1, reserved16: 0, reserved32: 0, sys_id: 7 },
+        revision: 9, operation: index as u32, reserved: 0,
+        after: if index == 2 { SvBytes::EMPTY } else { SvBytes::borrowed(&[42]) },
+    }); }
+    SvStatus::SUCCESS
+}
 unused!(state_info(*mut c_void, u64, *mut SvStateInfo));
 unused!(state_next(*mut c_void, u64, *mut u32, *mut SvStateRecord));
 unused!(finish_state(*mut c_void, *mut u64, *mut SvRebuildCut));
@@ -140,6 +156,26 @@ fn finished_notification_uses_canonical_zero_observation() {
     let completion = unsafe { with_host(&fixture.table(), "history", |_| Ok(())) }.unwrap();
     assert_eq!(completion.joined, 1);
     assert_eq!(completion.notification_failure, SvStatus::SUCCESS);
+}
+
+#[test_case::test_case(0; "insert_zero")]
+#[test_case::test_case(1; "update_one")]
+#[test_case::test_case(2; "delete_two")]
+fn record_change_decodes_literal_abi_operation_values(index: usize) {
+    let fixture = Fixture { changes: true, ..Fixture::new() };
+    let completion = unsafe { with_host(&fixture.table(), "history", |io| {
+        let mut source = io.split().source;
+        let Delivery::Frame(loan) = source.try_next()? else { panic!("mechanical frame") };
+        let view = loan.view();
+        let tx = view.transaction(0)?;
+        let change = tx.change(index)?;
+        assert!(matches!((index, change),
+            (0, RecordChangeView::Insert { after: [42], .. }) |
+            (1, RecordChangeView::Update { after: [42], .. }) |
+            (2, RecordChangeView::Delete { .. })), "literal ABI operation {index}: {change:?}");
+        Ok(())
+    }) }.unwrap();
+    assert_eq!(completion.run_failure, SvStatus::SUCCESS);
 }
 
 #[test]
