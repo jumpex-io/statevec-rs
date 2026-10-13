@@ -522,6 +522,7 @@ dependencies = [
 name = "statevec-projector-api"
 version = "0.3.0"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "sha2 0.10.9",

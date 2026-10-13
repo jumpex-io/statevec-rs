@@ -3,15 +3,21 @@
 use super::*;
 use ffi::*;
 use std::{ffi::c_void, sync::atomic::{AtomicBool, AtomicU64, Ordering}};
-struct Fixture {
+unsafe fn with_host(table: &SvProjectorHostV1, id: &str, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(), ProjectorFailure>) -> Result<SvProjectorCompletion, ProjectorAbiFailure> {
+    // Mechanical table input, never a native source/cut attestation.
+    let start = SvProjectorStart { identity: SvProjectionIdentity { manifest: 1, ..Default::default() }, peer_id: 1,
+        projector_id: SvProjectorId::encode(id).unwrap(), recovery_mode: 1, ..Default::default() };
+    unsafe { super::with_host(table, &start, run) }
+}
+pub(super) struct Fixture {
     stopped: AtomicBool, delivered: AtomicBool, offers: AtomicU64, releases: AtomicU64,
     frame_releases: AtomicU64, retain_frame: bool, fail_frame: bool, fail_reply: bool,
     receives: AtomicU64, fail_stop: bool, info_failure: Option<ProjectorFailure>, bad_frame: bool,
     changes: bool, inactive_image: bool, calls: std::sync::Mutex<Vec<(u8, u32)>>,
 }
 impl Fixture {
-    fn new() -> Self { Self { stopped: AtomicBool::new(false), delivered: AtomicBool::new(false), offers: AtomicU64::new(0), releases: AtomicU64::new(0), frame_releases: AtomicU64::new(0), retain_frame: false, fail_frame: false, fail_reply: false, receives: AtomicU64::new(0), fail_stop: false, info_failure: None, bad_frame: false, changes: false, inactive_image: false, calls: std::sync::Mutex::new(Vec::new()) } }
-    fn table(&self) -> SvProjectorHostV1 {
+    pub(super) fn new() -> Self { Self { stopped: AtomicBool::new(false), delivered: AtomicBool::new(false), offers: AtomicU64::new(0), releases: AtomicU64::new(0), frame_releases: AtomicU64::new(0), retain_frame: false, fail_frame: false, fail_reply: false, receives: AtomicU64::new(0), fail_stop: false, info_failure: None, bad_frame: false, changes: false, inactive_image: false, calls: std::sync::Mutex::new(Vec::new()) } }
+    pub(super) fn table(&self) -> SvProjectorHostV1 {
         SvProjectorHostV1 {
             h: SvHeader { abi_major: 1, kind: PROJECTOR_HOST_KIND, table_bytes: std::mem::size_of::<SvProjectorHostV1>() as u64, provided_caps: 0x3f, required_caps: 0x3f }, context: (self as *const Self).cast_mut().cast(),
             receive: Some(receive), stop_receive: Some(stop), frame_info: Some(info), transaction: Some(transaction), event: Some(event), change: Some(change), release_frame: Some(release_frame),

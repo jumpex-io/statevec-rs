@@ -10,6 +10,15 @@ mod borrow;
 mod io;
 mod views;
 mod control;
+mod author;
+mod inputs;
+mod observation;
+#[doc(hidden)]
+#[path = "plugin_v1/export.rs"]
+pub mod __export;
+
+pub use author::*;
+pub use crate::{ProjectorInitialization, ProjectorRecoveryMode, ProjectorRecoverySupport};
 
 pub use transport::{ControlReply, DeliveryLimits};
 pub use io::{Delivery, FrameLoan, ProjectorControlPort, ProjectorIo, ProjectorIoParts, ProjectorServices, ProjectorSource, ProjectorStop, with_host};
@@ -28,3 +37,6 @@ mod tests;
 #[cfg(test)]
 #[path = "ut_projector_io.rs"]
 mod io_tests;
+#[cfg(test)]
+#[path = "ut_projector_export.rs"]
+mod export_tests;

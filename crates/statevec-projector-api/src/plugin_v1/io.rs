@@ -9,6 +9,9 @@ pub(super) struct ScopeData {
     pub frame: Mutex<Held>,
     pub replies: Mutex<[Held; 4]>,
     completion: Mutex<SvProjectorCompletion>,
+    observation: super::observation::WorkerObservation,
+    startup: super::ProjectorStartupBase,
+    initialization: crate::ProjectorInitialization,
 }
 // SAFETY: a validated host promises concurrent control/stop/notify calls.
 // Source facades/loans are !Send + !Sync; all remaining shared state is locked.
@@ -45,6 +48,7 @@ impl ScopeData {
             };
             if *place == SvStatus::SUCCESS { *place = status; true } else { false }
         };
+        if first { self.observation.publish(SvProjectorFailureObservation { slot, reserved: 0, cause: status }); }
         if first && matches!(slot, 1..=4) {
             // Revoke acquisition using the same physical stop latch. Preserve
             // this release kind's first cause if the consequent wake also fails.
@@ -119,6 +123,8 @@ pub struct ProjectorStop<'io> { host: &'io ScopeData, _borrow: PhantomData<&'io 
 pub struct ProjectorServices<'io> { host: &'io ScopeData, services: &'io dyn SpawnServices<'io> }
 
 impl<'io> ProjectorIo<'io> {
+    pub fn startup_base(&self) -> super::ProjectorStartupBase { self.host.startup }
+    pub fn initialization(&self) -> crate::ProjectorInitialization { self.host.initialization }
     pub fn split(self) -> ProjectorIoParts<'io> {
         ProjectorIoParts {
             source: ProjectorSource { host: self.host, _local: PhantomData },
@@ -156,6 +162,7 @@ impl<'io> ProjectorServices<'io> {
                     completion.service_join_failure = SvStatus::from(&super::ProjectorCallFailure::ServiceJoinPanicked);
                     let observation = SvProjectorFailureObservation { slot: 5, reserved: 0, cause: completion.service_join_failure };
                     drop(completion);
+                    if first { host.observation.publish(observation); }
                     if let Err(failure) = host.stop() { host.record(1, failure); }
                     if first {
                         if let Err(cause) = call(unsafe { host.table.notify.unwrap()(host.table.context, 1, &observation) }, Op::Notify) { host.record(6, cause); }
@@ -175,14 +182,31 @@ impl<'io> ProjectorServices<'io> {
 /// # Safety
 /// The table/context and every callback must honor V1, remain valid through this
 /// call, and supply valid borrowed payloads until release. No other source worker
-/// may use this context. `projector_id` must match the admitted host attachment.
+/// may use this context. `startup` must be the actual admitted Startup view.
 pub unsafe fn with_host(
-    table: &SvProjectorHostV1, projector_id: &str,
+    table: &SvProjectorHostV1, startup: &SvProjectorStart,
     run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(), F>,
 ) -> Result<SvProjectorCompletion, A> {
+    let host = ScopeData::new(table, startup)?;
+    Ok(host.run(run))
+}
+
+impl ScopeData {
+pub(super) fn new(table: &SvProjectorHostV1, raw: &SvProjectorStart) -> Result<Self, A> {
     validate_host(table)?;
-    let projector_id = crate::ProjectorId::new(projector_id).map_err(|_| A::InvalidHandle)?;
-    let host = ScopeData { table: *table, projector_id, frame: Mutex::new(Held::default()), replies: Mutex::new([Held::default(); 4]), completion: Mutex::new(SvProjectorCompletion::EMPTY) };
+    let (startup, initialization) = super::inputs::startup(raw)?;
+    // The delivery phase activates continuous history only. Native latest-state
+    // admission/state lending belongs to the reviewed later rebuild phase.
+    if initialization != crate::ProjectorInitialization::Frames {
+        return Err(A::UnsupportedCapabilities { required: LATEST_STATE_CAPABILITY });
+    }
+    let projector_id = crate::ProjectorId::new(raw.projector_id.decode()?).map_err(|_| A::InvalidHandle)?;
+    Ok(Self { table: *table, projector_id, frame: Mutex::new(Held::default()), replies: Mutex::new([Held::default(); 4]), completion: Mutex::new(SvProjectorCompletion::EMPTY), observation: super::observation::WorkerObservation::new(), startup, initialization })
+}
+pub(super) fn poll(&self) -> (bool, SvProjectorFailureObservation) { self.observation.read() }
+pub(super) fn terminal(&self) -> SvProjectorCompletion { *self.completion.lock().unwrap_or_else(|e| e.into_inner()) }
+pub(super) fn run(&self, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(), F>) -> SvProjectorCompletion {
+    let host = self;
     std::thread::scope(|services| {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(ProjectorIo { host: &host, services }))) {
             Ok(Ok(())) => {}, Ok(Err(failure)) => host.record(1, failure),
@@ -198,9 +222,13 @@ pub unsafe fn with_host(
     if let Err(cause) = call(unsafe { host.table.notify.unwrap()(host.table.context, 2, &SvProjectorFailureObservation::NONE) }, Op::Notify) { host.record(6, cause); }
     let joined = host.frame.lock().unwrap_or_else(|e| e.into_inner()).cookie == 0
         && host.replies.lock().unwrap_or_else(|e| e.into_inner()).iter().all(|item| item.cookie == 0);
-    let mut completion = *host.completion.lock().unwrap_or_else(|e| e.into_inner());
+    let mut completion = host.completion.lock().unwrap_or_else(|e| e.into_inner());
     completion.joined = u32::from(joined);
-    Ok(completion)
+    let result = *completion;
+    drop(completion);
+    host.observation.finish();
+    result
+}
 }
 
 #[must_use]

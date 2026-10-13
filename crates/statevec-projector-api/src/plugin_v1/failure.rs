@@ -36,6 +36,23 @@ scalar_enum!(RebuildSourceFailure {
     Unavailable=1, InvalidRecord=2, Incomplete=3, EvidenceMismatch=4, RebuildAbandoned=5,
 });
 
+impl ProjectorIoKind {
+    pub fn from_io(kind: std::io::ErrorKind) -> Self {
+        use std::io::ErrorKind as K;
+        match kind {
+            K::NotFound => Self::NotFound, K::PermissionDenied => Self::PermissionDenied,
+            K::AlreadyExists => Self::AlreadyExists, K::InvalidInput => Self::InvalidInput,
+            K::InvalidData => Self::InvalidData, K::TimedOut => Self::TimedOut,
+            K::WouldBlock => Self::WouldBlock, K::Interrupted => Self::Interrupted,
+            K::UnexpectedEof => Self::UnexpectedEof, K::WriteZero => Self::WriteZero,
+            K::OutOfMemory => Self::OutOfMemory, K::StorageFull => Self::StorageFull,
+            K::Unsupported => Self::Unsupported, K::BrokenPipe => Self::BrokenPipe,
+            K::ConnectionAborted | K::ConnectionRefused | K::ConnectionReset | K::NotConnected => Self::Connection,
+            _ => Self::Other,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProjectorFailure {
