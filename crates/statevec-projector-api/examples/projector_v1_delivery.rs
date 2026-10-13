@@ -1,14 +1,16 @@
-//! Loaded transport conformance probe, not a configured product exporter/store.
-//! Consumer code below uses only safe public lending/control facades. The one
-//! unsafe entry adapts the caller's explicitly borrowed C table for this run.
+//! Public configured exporter and a separate loaded transport conformance probe.
+//! The business consumer uses safe lending/control facades; the raw probe also
+//! checks mode refusals through the caller's explicitly borrowed C table.
 use statevec_projector_api::plugin_v1::{self as p, ffi::*, *};
 use sha2::{Digest, Sha256};
+#[path = "projector_v1_delivery/mode_probe.rs"]
+mod mode_probe;
 
 #[repr(C)]
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Report {
     pub frames: u64, pub empty: u64, pub replay: u64, pub transactions: u64,
-    pub events: u64, pub changes: u64, pub last_index: u64, pub last_term: u64,
+    pub events: u64, pub changes: u64, pub mode_checks: u64, pub last_index: u64, pub last_term: u64,
     pub last_tx_seq: u64, pub chain: [u8; 32], pub digest: [u8; 32],
 }
 
@@ -20,6 +22,10 @@ pub unsafe extern "C" fn statevec_projector_delivery_probe_v1(
     // SAFETY: test caller lends these complete disjoint outputs and live table
     // through synchronous completion; no pointer survives this entry.
     let mut result = Report::default();
+    result.mode_checks = match unsafe { mode_probe::check_continuous_refusals(&*table) } {
+        Ok(checked) => checked,
+        Err(cause) => return (&cause).into(),
+    };
     let run = unsafe { p::with_host(&*table, &*startup, |io| consume(io, count, &mut result)) };
     match run {
         Ok(value) => { unsafe { report.write(result); completion.write(value); } SvStatus::SUCCESS }
