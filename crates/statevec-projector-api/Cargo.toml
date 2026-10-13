@@ -19,3 +19,8 @@ serde_json.workspace = true
 
 [dev-dependencies]
 test-case.workspace = true
+sha2.workspace = true
+
+[[example]]
+name = "projector_v1_delivery"
+crate-type = ["cdylib"]

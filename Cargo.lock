@@ -524,6 +524,7 @@ version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "statevec-api",
  "statevec-frame",
  "statevec-model",

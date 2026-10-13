@@ -96,9 +96,33 @@ native AppliedBatch, not an encoded-entry digest. Core V3 and execution identity
 are unchanged. Persisted stores need an application-reviewed migration: use the
 correct consumer namespace and a truthful complete offset, not made-up defaults.
 
+## Borrowed V1 delivery
+
+The `plugin_v1` module also provides a scoped borrower for a native V1 host
+table. `ProjectorIo::split()` separates `source`, `control`, `services` and
+`stop`. `source.try_next()` / `next_timeout()` return a `FrameLoan`, Empty,
+TimedOut, Stop or Disconnected. `loan.view()` exposes ordered transactions,
+borrowed events and record changes without copying their payloads. Views cannot
+outlive the loan; releasing the loan does not save or acknowledge an offset.
+
+After saving your effects and `loan.checkpoint_cut().offset()`, offer the cut's
+`checkpointed()` value with `control.offer_checkpoint()`. Queue Full, Closed and
+the four-live-reply capacity limit are distinct from a queued owner's refusal.
+A `ReplyHandle` polls without blocking; dropping a pending reply does not cancel
+the submitted operation. Control and reply handles may move to scoped services
+created with `services.spawn()`, not to unscoped threads or static storage. All
+those services are joined before the enclosing host borrow ends.
+
+The unsafe `with_host` entry is for an integration that already owns a validated
+host table and keeps its callback resources alive. The
+`projector_v1_delivery` cdylib example demonstrates this transport boundary using
+only public SDK crates. It is a conformance consumer, not a durable database
+example or a configured product exporter. Configure/prepare/start, generated
+worker lifecycle and the official Node adapter remain a separate integration.
+
 `LatestState` is reserved for rebuilding on every startup with no saved offset;
 the native delivery-phase integration rejects it until rebuild qualification.
-The V1 raw tables/status codecs are available, but a configured dynamic worker
+The V1 raw tables, scoped delivery and status codecs are available, but a configured dynamic worker
 and the default file store are not enabled by this release's groundwork alone.
 
 This SDK contains no projector database, checkpoint file format, network
