@@ -3,7 +3,10 @@
 //! Applications implement their read models and stores against these interfaces.
 //! The production runtime supplies the source, frames and checkpoint cut tokens.
 //! Source attachment, replication, replay, backpressure and checkpoint selection
-//! remain runtime responsibilities. This crate contains no runtime or file codec.
+//! remain runtime responsibilities. This crate contains no replication runtime.
+//! [`ConsumeOffset`] supplies a bounded four-field JSON codec, not a file store
+//! or an automatic acknowledgement. [`plugin_v1`] supplies the fixed wire
+//! contract; native attachment and a loaded worker still require host support.
 //!
 //! ```
 //! use statevec_projector_api::{CommittedFrame, CommittedTransaction};
@@ -31,6 +34,13 @@
 
 mod port;
 mod types;
+mod offset;
+pub mod plugin_v1;
+
+pub use offset::{
+    ConsumeOffset, ConsumeOffsetError, MAX_OFFSET_JSON_BYTES, MAX_PROJECTOR_ID_BYTES,
+    OffsetJsonCategory,
+};
 
 pub use port::{
     CheckpointCut, CheckpointPublication, CommittedFrame, CommittedTransaction, ProjectionReceiver,

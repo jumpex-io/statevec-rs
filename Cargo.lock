@@ -522,8 +522,12 @@ dependencies = [
 name = "statevec-projector-api"
 version = "0.2.1"
 dependencies = [
+ "serde",
+ "serde_json",
+ "statevec-api",
  "statevec-frame",
  "statevec-model",
+ "test-case",
 ]
 
 [[package]]

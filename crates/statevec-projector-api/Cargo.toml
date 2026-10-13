@@ -13,3 +13,9 @@ categories.workspace = true
 [dependencies]
 statevec_model.workspace = true
 statevec_frame.workspace = true
+statevec_api.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+test-case.workspace = true
