@@ -25,7 +25,7 @@ use ProjectorStatusDecodeFailure as D;
 #[test_case(size_of::<SvFrameInfo>(), 480; "frame")]
 #[test_case(size_of::<SvTransactionInfo>(), 200; "transaction")]
 #[test_case(size_of::<SvEvent>(), 24; "event")]
-#[test_case(size_of::<SvRecordChange>(), 48; "change")]
+#[test_case(size_of::<SvRecordChange>(), 64; "change")]
 #[test_case(size_of::<SvControlReply>(), 24; "reply")]
 #[test_case(size_of::<SvProjectorFailureObservation>(), 40; "observation")]
 #[test_case(size_of::<SvProjectorCompletion>(), 240; "completion")]
@@ -51,6 +51,8 @@ fn frozen_v1_extents(actual: usize, expected: usize) { assert_eq!(actual, expect
 #[test_case(offset_of!(SvProjectorCompletion, reply_release_failure), 200; "reply_release")]
 #[test_case(offset_of!(SvProjectorCompletion, failed_service_joins), 232; "service_count")]
 #[test_case(offset_of!(SvTransactionInfo, ref_tx_time_ns), 176; "transaction_time")]
+#[test_case(offset_of!(SvRecordChange, before), 32; "change_before")]
+#[test_case(offset_of!(SvRecordChange, after), 48; "change_after")]
 #[cfg(target_pointer_width = "64")]
 fn frozen_v1_offsets(actual: usize, expected: usize) { assert_eq!(actual, expected); }
 

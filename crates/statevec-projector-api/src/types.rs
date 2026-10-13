@@ -77,13 +77,14 @@ pub struct ProjectedEvent {
     pub payload: Vec<u8>,
 }
 
-/// Complete schema data after-image or explicit tombstone, without allocator
-/// headers. Insert and update remain distinct so missing prior rows are visible.
+/// Complete schema data at this transaction's boundary, without allocator
+/// headers. Repeated writes expose one net change; later transactions see
+/// earlier successful members, not the base of the containing Raft entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectedRecordChange {
     Insert { key: RecordKey, revision: u64, after: Vec<u8> },
-    Update { key: RecordKey, revision: u64, after: Vec<u8> },
-    Delete { key: RecordKey, revision: u64 },
+    Update { key: RecordKey, revision: u64, before: Vec<u8>, after: Vec<u8> },
+    Delete { key: RecordKey, revision: u64, before: Vec<u8> },
 }
 
 /// Requested recovery mode; the runtime checks it against its actual startup base.

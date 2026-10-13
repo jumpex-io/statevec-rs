@@ -83,11 +83,13 @@ impl TransactionView<'_> {
         let raw = unsafe { raw.assume_init() };
         if raw.reserved != 0 || raw.key.reserved16 != 0 || raw.key.reserved32 != 0 { return Err(A::Reserved { actual: 1 }.into()); }
         let key = RecordKey { kind: raw.key.kind, sys_id: raw.key.sys_id };
+        let before = unsafe { bytes(raw.before)? };
         let after = unsafe { bytes(raw.after)? };
         match raw.operation {
-            0 => Ok(RecordChangeView::Insert { key, revision: raw.revision, after }),
-            1 => Ok(RecordChangeView::Update { key, revision: raw.revision, after }),
-            2 if after.is_empty() && raw.after.ptr.is_null() => Ok(RecordChangeView::Delete { key, revision: raw.revision }),
+            0 if before.is_empty() && raw.before.ptr.is_null() => Ok(RecordChangeView::Insert { key, revision: raw.revision, after }),
+            1 => Ok(RecordChangeView::Update { key, revision: raw.revision, before, after }),
+            2 if after.is_empty() && raw.after.ptr.is_null() => Ok(RecordChangeView::Delete { key, revision: raw.revision, before }),
+            0 | 2 => Err(A::Reserved { actual: 1 }.into()),
             actual => Err(A::Flag { actual }.into()),
         }
     }
@@ -95,4 +97,8 @@ impl TransactionView<'_> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EventView<'a> { pub event_seq: u32, pub event_kind: u16, pub payload: &'a [u8] }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecordChangeView<'a> { Insert { key: RecordKey, revision: u64, after: &'a [u8] }, Update { key: RecordKey, revision: u64, after: &'a [u8] }, Delete { key: RecordKey, revision: u64 } }
+pub enum RecordChangeView<'a> {
+    Insert { key: RecordKey, revision: u64, after: &'a [u8] },
+    Update { key: RecordKey, revision: u64, before: &'a [u8], after: &'a [u8] },
+    Delete { key: RecordKey, revision: u64, before: &'a [u8] },
+}

@@ -14,8 +14,19 @@ and durable history recovery are supplied by the runtime.
 `ProjectionReceiver` returns an owned frame. `CommittedFrame::transactions`
 exposes ordered members, each with its actual result and `TransactionProjection`.
 An output includes the schema identity, replicated transaction time, every event,
-and full record after-images or deletion markers. Event ordinals and transaction
-order matter. Insert and update are distinct.
+and complete record data without allocator headers: Insert carries `after`,
+Update carries `before` and `after`, and Delete carries `before`. Event ordinals
+and transaction order matter. Images describe the individual transaction, not
+the whole frame. Repeated writes to a row expose one net change; the next
+successful transaction sees that result as its before value. Rejected writes
+and a create-then-delete within one transaction expose no record change.
+
+For a WebSocket view, compare the typed fields of Update's before/after and
+send only changed fields. You do not need a duplicate model merely to recover
+the old value. The application still owns subscription baselines, ordering and
+resynchronization after reconnect; before/after alone is not a reliable network
+delivery protocol. Latest-state rebuild enumerates current records only, then
+its incremental frames use the same before/after contract.
 
 Apply each complete frame atomically in your read model before coalescing rows.
 An empty frame still advances the source position. A rejected transaction has
@@ -84,6 +95,11 @@ IDs and joins the actual committed term/index through checkpoint restore or
 replay. It does not certify the contents of your business database. A stored
 offset is not a live publication token.
 
+The cluster ID is deterministically derived from cluster configuration. Creating
+a different cluster with exactly the same configuration can reuse that ID; an
+old store's term/index may coincidentally match. Do not reuse a disaster-recovery
+offset for unrelated history: the four fields deliberately omit a content hash.
+
 ## Migrating from 0.2.1 to 0.3.0
 
 This is a source-breaking consumer change. Replace Fresh/Restore recovery with
@@ -95,6 +111,10 @@ enums. Rich positions now contain `ProjectionAppliedIdentity` from the complete
 native AppliedBatch, not an encoded-entry digest. Core V3 and execution identity
 are unchanged. Persisted stores need an application-reviewed migration: use the
 correct consumer namespace and a truthful complete offset, not made-up defaults.
+Record-change matches must also accept Update's `before` and Delete's `before`.
+The local V1 draft has two borrowed image spans (64-byte change DTO, operations
+0/1/2); rebuild host and plugin together. No extra version/capability negotiation
+is introduced by this local amendment.
 
 ## Borrowed V1 delivery
 

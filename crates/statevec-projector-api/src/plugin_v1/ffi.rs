@@ -97,7 +97,10 @@ pub struct SvTransactionInfo {
 pub struct SvEvent { pub event_seq: u32, pub kind: u16, pub reserved: u16, pub payload: SvBytes }
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct SvRecordChange { pub key: SvKey, pub revision: u64, pub operation: u32, pub reserved: u32, pub after: SvBytes }
+pub struct SvRecordChange {
+    pub key: SvKey, pub revision: u64, pub operation: u32, pub reserved: u32,
+    pub before: SvBytes, pub after: SvBytes,
+}
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SvControlReply { pub tag: u32, pub cause: u32, pub value0: u64, pub value1: u64 }

@@ -60,13 +60,15 @@ pub unsafe extern "C" fn statevec_projector_delivery_probe_v1(
                         }
                         for index in 0..tx.change_count() {
                             result.changes += 1;
-                            let (tag, key, revision, after) = match tx.change(index)? {
-                                RecordChangeView::Insert { key, revision, after } => (1u8, key, revision, after),
-                                RecordChangeView::Update { key, revision, after } => (2, key, revision, after),
-                                RecordChangeView::Delete { key, revision } => (3, key, revision, &[][..]),
+                            let (tag, key, revision, before, after) = match tx.change(index)? {
+                                RecordChangeView::Insert { key, revision, after } => (0u8, key, revision, &[][..], after),
+                                RecordChangeView::Update { key, revision, before, after } => (1, key, revision, before, after),
+                                RecordChangeView::Delete { key, revision, before } => (2, key, revision, before, &[][..]),
                             };
                             hash.update([tag]); hash.update(key.kind.to_le_bytes()); hash.update(key.sys_id.to_le_bytes());
-                            hash.update(revision.to_le_bytes()); hash.update((after.len() as u64).to_le_bytes()); hash.update(after);
+                            hash.update(revision.to_le_bytes());
+                            hash.update((before.len() as u64).to_le_bytes()); hash.update(before);
+                            hash.update((after.len() as u64).to_le_bytes()); hash.update(after);
                         }
                     }
                     latest = Some(loan.checkpoint_cut());

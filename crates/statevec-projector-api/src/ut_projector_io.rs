@@ -7,10 +7,10 @@ struct Fixture {
     stopped: AtomicBool, delivered: AtomicBool, offers: AtomicU64, releases: AtomicU64,
     frame_releases: AtomicU64, retain_frame: bool, fail_frame: bool, fail_reply: bool,
     receives: AtomicU64, fail_stop: bool, info_failure: Option<ProjectorFailure>, bad_frame: bool,
-    changes: bool,
+    changes: bool, inactive_image: bool,
 }
 impl Fixture {
-    fn new() -> Self { Self { stopped: AtomicBool::new(false), delivered: AtomicBool::new(false), offers: AtomicU64::new(0), releases: AtomicU64::new(0), frame_releases: AtomicU64::new(0), retain_frame: false, fail_frame: false, fail_reply: false, receives: AtomicU64::new(0), fail_stop: false, info_failure: None, bad_frame: false, changes: false } }
+    fn new() -> Self { Self { stopped: AtomicBool::new(false), delivered: AtomicBool::new(false), offers: AtomicU64::new(0), releases: AtomicU64::new(0), frame_releases: AtomicU64::new(0), retain_frame: false, fail_frame: false, fail_reply: false, receives: AtomicU64::new(0), fail_stop: false, info_failure: None, bad_frame: false, changes: false, inactive_image: false } }
     fn table(&self) -> SvProjectorHostV1 {
         SvProjectorHostV1 {
             h: SvHeader { abi_major: 1, kind: PROJECTOR_HOST_KIND, table_bytes: std::mem::size_of::<SvProjectorHostV1>() as u64, provided_caps: 0x3f, required_caps: 0x3f }, context: (self as *const Self).cast_mut().cast(),
@@ -83,11 +83,13 @@ unsafe extern "C" fn transaction(_: *mut c_void, _: u64, _: u64, out: *mut SvTra
     SvStatus::SUCCESS
 }
 unused!(event(*mut c_void, u64, u64, u64, *mut SvEvent));
-unsafe extern "C" fn change(_: *mut c_void, _: u64, _: u64, index: u64, out: *mut SvRecordChange) -> SvStatus {
+unsafe extern "C" fn change(raw: *mut c_void, _: u64, _: u64, index: u64, out: *mut SvRecordChange) -> SvStatus {
+    let invalid = unsafe { fixture(raw) }.inactive_image;
     unsafe { out.write(SvRecordChange {
         key: SvKey { kind: 1, reserved16: 0, reserved32: 0, sys_id: 7 },
         revision: 9, operation: index as u32, reserved: 0,
-        after: if index == 2 { SvBytes::EMPTY } else { SvBytes::borrowed(&[42]) },
+        before: if index == 0 && !invalid { SvBytes::EMPTY } else { SvBytes::borrowed(&[17]) },
+        after: if index == 2 && !invalid { SvBytes::EMPTY } else { SvBytes::borrowed(&[42]) },
     }); }
     SvStatus::SUCCESS
 }
@@ -171,11 +173,27 @@ fn record_change_decodes_literal_abi_operation_values(index: usize) {
         let change = tx.change(index)?;
         assert!(matches!((index, change),
             (0, RecordChangeView::Insert { after: [42], .. }) |
-            (1, RecordChangeView::Update { after: [42], .. }) |
-            (2, RecordChangeView::Delete { .. })), "literal ABI operation {index}: {change:?}");
+            (1, RecordChangeView::Update { before: [17], after: [42], .. }) |
+            (2, RecordChangeView::Delete { before: [17], .. })), "literal ABI operation {index}: {change:?}");
         Ok(())
     }) }.unwrap();
     assert_eq!(completion.run_failure, SvStatus::SUCCESS);
+}
+
+#[test_case::test_case(0; "insert_before_must_be_empty")]
+#[test_case::test_case(2; "delete_after_must_be_empty")]
+fn record_change_rejects_nonempty_inactive_image(index: usize) {
+    let fixture = Fixture { changes: true, inactive_image: true, ..Fixture::new() };
+    let expected = ProjectorFailure::AbiContract(ProjectorAbiFailure::Reserved { actual: 1 });
+    let completion = unsafe { with_host(&fixture.table(), "history", |io| {
+        let mut source = io.split().source;
+        let Delivery::Frame(loan) = source.try_next()? else { panic!("mechanical frame") };
+        assert!(matches!(loan.view().transaction(0)?.change(index), Err(cause) if cause == expected));
+        Ok(())
+    }) }.unwrap();
+    assert_eq!(completion.run_failure, (&expected).into());
+    assert_eq!(completion.joined, 1);
+    assert_eq!(fixture.frame_releases.load(Ordering::SeqCst), 1);
 }
 
 #[test]
