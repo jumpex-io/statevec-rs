@@ -1,4 +1,4 @@
-use super::{borrow::call, ffi::*, io::{Held, ScopeData}, ProjectorAbiFailure as A, ProjectorFailure as F, ProjectorOperation as Op, ControlReply};
+use super::{borrow::call, ffi::*, io::{Held, ReplySlot, ScopeData}, ProjectorAbiFailure as A, ProjectorFailure as F, ProjectorOperation as Op, ControlReply};
 use crate::{ConsumeOffset, ProjectorCheckpointRejection as Rejection, ProjectorCheckpointStatus as Status};
 use std::{cell::Cell, marker::PhantomData};
 
@@ -87,29 +87,38 @@ impl<T: ReplyValue> Drop for ReplyHandle<'_, T> { fn drop(&mut self) { self.host
 
 impl<'io> super::ProjectorControlPort<'io> {
     fn offer<T: ReplyValue>(&self, op: Op, invoke: impl FnOnce(*mut u32, *mut u64) -> SvStatus) -> Result<Offer<'io, T>, F> {
-        let mut slots = self.host.replies.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(index) = slots.iter().position(|slot| slot.cookie == 0) else { return Ok(Offer::ReplyCapacityExhausted); };
+        let index = {
+            let mut slots = self.host.replies.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(index) = slots.iter().position(|slot| matches!(slot, ReplySlot::Free)) else { return Ok(Offer::ReplyCapacityExhausted); };
+            // Count the exact in-progress physical call against the same four
+            // slots; never hold this lock across foreign code.
+            slots[index] = ReplySlot::Offering;
+            index
+        };
         let (mut tag, mut cookie) = (0, 0);
         let result = call(invoke(&mut tag, &mut cookie), op);
+        let mut slots = self.host.replies.lock().unwrap_or_else(|e| e.into_inner());
+        debug_assert!(matches!(slots[index], ReplySlot::Offering));
+        slots[index] = ReplySlot::Free;
         if let Err(cause) = result {
             if cookie != 0 {
                 // Invalid transfer: retain unknown custody, never guess that a
                 // returned cookie is a live resource safe to destroy.
-                slots[index] = Held { cookie, attempted: true };
+                slots[index] = ReplySlot::Held(Held { cookie, attempted: true });
                 drop(slots);
                 self.host.record(4, A::InvalidHandle.into());
             }
             return Err(cause);
         }
         match tag {
-            0 if cookie != 0 && slots.iter().all(|slot| slot.cookie != cookie) => {
-                slots[index] = Held { cookie, attempted: false };
+            0 if cookie != 0 && slots.iter().all(|slot| !matches!(slot, ReplySlot::Held(held) if held.cookie == cookie)) => {
+                slots[index] = ReplySlot::Held(Held { cookie, attempted: false });
                 Ok(Offer::Queued(ReplyHandle { host: self.host, cookie, terminal: None, _borrow: PhantomData, _single: PhantomData }))
             }
             1 if cookie == 0 => Ok(Offer::OwnerQueueFull), 2 if cookie == 0 => Ok(Offer::Closed),
             3 if cookie == 0 => Ok(Offer::ReplyCapacityExhausted),
             _ => {
-                if cookie != 0 { slots[index] = Held { cookie, attempted: true }; }
+                if cookie != 0 { slots[index] = ReplySlot::Held(Held { cookie, attempted: true }); }
                 drop(slots);
                 self.host.record(4, A::InvalidHandle.into());
                 Err(A::InvalidHandle.into())

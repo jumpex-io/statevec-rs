@@ -3,11 +3,18 @@ use std::{cell::Cell, marker::PhantomData, rc::Rc, sync::Mutex};
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct Held { pub cookie: u64, pub attempted: bool }
+#[derive(Clone, Copy, Default)]
+pub(super) enum ReplySlot {
+    #[default]
+    Free,
+    Offering,
+    Held(Held),
+}
 pub(super) struct ScopeData {
     pub table: SvProjectorHostV1,
     pub projector_id: crate::ProjectorId,
     pub frame: Mutex<Held>,
-    pub replies: Mutex<[Held; 4]>,
+    pub replies: Mutex<[ReplySlot; 4]>,
     completion: Mutex<SvProjectorCompletion>,
     observation: super::observation::WorkerObservation,
     startup: super::ProjectorStartupBase,
@@ -77,13 +84,13 @@ impl ScopeData {
     pub fn release_reply(&self, cookie: u64) {
         let index = {
             let mut held = self.replies.lock().unwrap_or_else(|e| e.into_inner());
-            let Some(index) = held.iter().position(|item| item.cookie == cookie && !item.attempted && cookie != 0) else { return; };
-            held[index].attempted = true; index
+            let Some(index) = held.iter().position(|item| matches!(item, ReplySlot::Held(item) if item.cookie == cookie && !item.attempted && cookie != 0)) else { return; };
+            held[index] = ReplySlot::Held(Held { cookie, attempted: true }); index
         };
         let mut returned = cookie;
         // SAFETY: one move-only reply owns this cookie, still covered by scope.
         let result = call(unsafe { self.table.release_reply.unwrap()(self.table.context, &mut returned) }, Op::ReleaseReply);
-        if returned == 0 { self.replies.lock().unwrap_or_else(|e| e.into_inner())[index] = Held::default(); }
+        if returned == 0 { self.replies.lock().unwrap_or_else(|e| e.into_inner())[index] = ReplySlot::Free; }
         if let Err(failure) = result { self.record(4, failure); }
         else if returned != 0 { self.record(4, A::InvalidHandle.into()); }
     }
@@ -201,7 +208,7 @@ pub(super) fn new(table: &SvProjectorHostV1, raw: &SvProjectorStart) -> Result<S
         return Err(A::UnsupportedCapabilities { required: LATEST_STATE_CAPABILITY });
     }
     let projector_id = crate::ProjectorId::new(raw.projector_id.decode()?).map_err(|_| A::InvalidHandle)?;
-    Ok(Self { table: *table, projector_id, frame: Mutex::new(Held::default()), replies: Mutex::new([Held::default(); 4]), completion: Mutex::new(SvProjectorCompletion::EMPTY), observation: super::observation::WorkerObservation::new(), startup, initialization })
+    Ok(Self { table: *table, projector_id, frame: Mutex::new(Held::default()), replies: Mutex::new([ReplySlot::Free; 4]), completion: Mutex::new(SvProjectorCompletion::EMPTY), observation: super::observation::WorkerObservation::new(), startup, initialization })
 }
 pub(super) fn poll(&self) -> (bool, SvProjectorFailureObservation) { self.observation.read() }
 pub(super) fn terminal(&self) -> SvProjectorCompletion { *self.completion.lock().unwrap_or_else(|e| e.into_inner()) }
@@ -217,11 +224,11 @@ pub(super) fn run(&self, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(
         // bypassed by forgetting a public facade, and no new service is admitted.
     });
     host.release_frame();
-    let cookies = host.replies.lock().unwrap_or_else(|e| e.into_inner()).map(|item| item.cookie);
+    let cookies = host.replies.lock().unwrap_or_else(|e| e.into_inner()).map(|item| match item { ReplySlot::Held(item) => item.cookie, _ => 0 });
     for cookie in cookies { host.release_reply(cookie); }
     if let Err(cause) = call(unsafe { host.table.notify.unwrap()(host.table.context, 2, &SvProjectorFailureObservation::NONE) }, Op::Notify) { host.record(6, cause); }
     let joined = host.frame.lock().unwrap_or_else(|e| e.into_inner()).cookie == 0
-        && host.replies.lock().unwrap_or_else(|e| e.into_inner()).iter().all(|item| item.cookie == 0);
+        && host.replies.lock().unwrap_or_else(|e| e.into_inner()).iter().all(|item| matches!(item, ReplySlot::Free));
     let mut completion = host.completion.lock().unwrap_or_else(|e| e.into_inner());
     completion.joined = u32::from(joined);
     let result = *completion;
@@ -250,12 +257,14 @@ impl ProjectorSource<'_> {
     pub fn next_timeout(&mut self, wait: std::time::Duration) -> Result<Delivery<'_>, F> {
         // Do not reclassify an already-recorded release failure as a run error.
         self.host.acquisition_allowed()?;
-        let host = self.host;
-        host.checked(self.receive(wait))
-    }
-    fn receive(&mut self, wait: std::time::Duration) -> Result<Delivery<'_>, F> {
+        // These are checked local author errors, not host callback evidence.
+        // Handling them does not revoke the scope or manufacture a host fault.
         let nanos = u64::try_from(wait.as_nanos()).map_err(|_| A::Length { actual: u64::MAX, maximum: u64::MAX })?;
         if self.host.frame.lock().unwrap_or_else(|e| e.into_inner()).cookie != 0 { return Err(A::BorrowConflict.into()); }
+        let host = self.host;
+        host.checked(self.receive(nanos))
+    }
+    fn receive(&mut self, nanos: u64) -> Result<Delivery<'_>, F> {
         let (mut tag, mut cookie) = (0, 0);
         // SAFETY: the sole !Send source facade calls the live table; outputs are
         // disjoint and all returned bytes stay borrowed under the resulting loan.

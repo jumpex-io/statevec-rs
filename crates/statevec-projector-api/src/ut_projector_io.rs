@@ -168,6 +168,110 @@ fn finished_notification_uses_canonical_zero_observation() {
     assert_eq!(completion.notification_failure, SvStatus::SUCCESS);
 }
 
+#[test_case::test_case(false; "unrepresentable_timeout")]
+#[test_case::test_case(true; "forgotten_loan")]
+fn handled_local_receive_misuse_does_not_accuse_the_host(forgotten: bool) {
+    let fixture = Fixture::new();
+    let completion = unsafe { with_host(&fixture.table(), "history", |io| {
+        let mut parts = io.split();
+        if forgotten {
+            let Delivery::Frame(loan) = parts.source.try_next()? else { panic!("mechanical loan") };
+            std::mem::forget(loan);
+            assert!(matches!(parts.source.try_next(), Err(ProjectorFailure::AbiContract(ProjectorAbiFailure::BorrowConflict))));
+        } else {
+            assert!(matches!(parts.source.next_timeout(std::time::Duration::MAX), Err(ProjectorFailure::AbiContract(ProjectorAbiFailure::Length { .. }))));
+            let Delivery::Frame(loan) = parts.source.try_next()? else { panic!("local refusal must not stop receive") };
+            drop(loan);
+        }
+        let Offer::Queued(reply) = parts.control.offer_status()? else { panic!("local misuse must not revoke control") };
+        drop(reply);
+        Ok(())
+    }) }.unwrap();
+    assert_eq!(completion.run_failure, SvStatus::SUCCESS);
+    assert_eq!(completion.joined, 1);
+    assert_eq!(fixture.receives.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.frame_releases.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn external_offer_does_not_hold_the_reply_slot_lock() {
+    // While the first physical offer is held, a second scoped service must be
+    // able to reserve its own slot and call the host. A timeout returns normally
+    // from the C fixture; assertions stay outside the C boundary and all join.
+    use std::sync::{mpsc, Mutex};
+    struct Offers { entered: mpsc::Sender<()>, proceed: Mutex<mpsc::Receiver<()>>, calls: AtomicU64 }
+    unsafe extern "C" fn held_offer(raw: *mut c_void, tag: *mut u32, cookie: *mut u64) -> SvStatus {
+        let state = unsafe { &*raw.cast::<Offers>() };
+        let call = state.calls.fetch_add(1, Ordering::SeqCst);
+        if call == 0 {
+            let _ = state.entered.send(());
+            let _ = state.proceed.lock().unwrap().recv_timeout(std::time::Duration::from_secs(2));
+        } else { let _ = state.entered.send(()); }
+        unsafe { tag.write(1); cookie.write(0); }
+        SvStatus::SUCCESS
+    }
+    unsafe extern "C" fn ok_stop(_: *mut c_void) -> SvStatus { SvStatus::SUCCESS }
+    unsafe extern "C" fn ok_notify(_: *mut c_void, _: u32, _: *const SvProjectorFailureObservation) -> SvStatus { SvStatus::SUCCESS }
+    let (entered, arrivals) = mpsc::channel();
+    let (release, proceed) = mpsc::channel();
+    let state = Offers { entered, proceed: Mutex::new(proceed), calls: AtomicU64::new(0) };
+    let fixture = Fixture::new();
+    let table = SvProjectorHostV1 { context: (&state as *const Offers).cast_mut().cast(),
+        offer_status: Some(held_offer), stop_receive: Some(ok_stop), notify: Some(ok_notify), ..fixture.table() };
+    let mut progressed = false;
+    let completion = unsafe { with_host(&table, "history", |io| {
+        let parts = io.split();
+        let first = parts.control.clone();
+        parts.services.spawn(move |_| { let _ = first.offer_status()?; Ok(()) })?;
+        arrivals.recv_timeout(std::time::Duration::from_secs(1)).expect("first physical offer entered");
+        let second = parts.control.clone();
+        parts.services.spawn(move |_| { let _ = second.offer_status()?; Ok(()) })?;
+        progressed = arrivals.recv_timeout(std::time::Duration::from_millis(500)).is_ok();
+        release.send(()).unwrap();
+        Ok(())
+    }) }.unwrap();
+    assert!(progressed, "reply bookkeeping lock crossed the host callback");
+    assert_eq!(completion.run_failure, SvStatus::SUCCESS);
+    assert_eq!(completion.joined, 1);
+}
+
+#[test]
+fn in_progress_physical_offers_reserve_the_four_reply_slots() {
+    use std::sync::{mpsc, Mutex};
+    struct Offers { entered: mpsc::Sender<()>, proceed: Mutex<mpsc::Receiver<()>>, calls: AtomicU64 }
+    unsafe extern "C" fn held_offer(raw: *mut c_void, tag: *mut u32, cookie: *mut u64) -> SvStatus {
+        let state = unsafe { &*raw.cast::<Offers>() };
+        state.calls.fetch_add(1, Ordering::SeqCst);
+        let _ = state.entered.send(());
+        let _ = state.proceed.lock().unwrap().recv_timeout(std::time::Duration::from_secs(3));
+        unsafe { tag.write(1); cookie.write(0); }
+        SvStatus::SUCCESS
+    }
+    unsafe extern "C" fn ok_stop(_: *mut c_void) -> SvStatus { SvStatus::SUCCESS }
+    unsafe extern "C" fn ok_notify(_: *mut c_void, _: u32, _: *const SvProjectorFailureObservation) -> SvStatus { SvStatus::SUCCESS }
+    let (entered, arrivals) = mpsc::channel();
+    let (release, proceed) = mpsc::channel();
+    let state = Offers { entered, proceed: Mutex::new(proceed), calls: AtomicU64::new(0) };
+    let fixture = Fixture::new();
+    let table = SvProjectorHostV1 { context: (&state as *const Offers).cast_mut().cast(),
+        offer_status: Some(held_offer), stop_receive: Some(ok_stop), notify: Some(ok_notify), ..fixture.table() };
+    let completion = unsafe { with_host(&table, "history", |io| {
+        let parts = io.split();
+        for _ in 0..4 {
+            let control = parts.control.clone();
+            parts.services.spawn(move |_| { let _ = control.offer_status()?; Ok(()) })?;
+        }
+        for _ in 0..4 { arrivals.recv_timeout(std::time::Duration::from_secs(1)).expect("all four offers reached the host"); }
+        let exhausted = matches!(parts.control.offer_status()?, Offer::ReplyCapacityExhausted);
+        for _ in 0..4 { release.send(()).unwrap(); }
+        assert!(exhausted, "an in-progress offer must retain its reservation");
+        Ok(())
+    }) }.unwrap();
+    assert_eq!(state.calls.load(Ordering::SeqCst), 4);
+    assert_eq!(completion.run_failure, SvStatus::SUCCESS);
+    assert_eq!(completion.joined, 1);
+}
+
 #[test]
 fn failure_revokes_receive_before_notifying_host() {
     let fixture = Fixture::new();
