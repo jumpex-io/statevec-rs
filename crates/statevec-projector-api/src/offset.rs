@@ -75,6 +75,19 @@ struct OffsetFields {
     raft_index: u64,
 }
 
+/// Limit the public JSON envelope to a map. Derived struct deserializers also
+/// accept positional arrays; reuse their field checks only after map admission.
+struct OffsetObject;
+impl<'de> serde::de::Visitor<'de> for OffsetObject {
+    type Value = OffsetFields;
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a four-field consume offset object")
+    }
+    fn visit_map<M: serde::de::MapAccess<'de>>(self, map: M) -> Result<Self::Value, M::Error> {
+        OffsetFields::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+    }
+}
+
 pub(crate) fn validate_projector_id(value: &str) -> Result<(), ConsumeOffsetError> {
     if value.is_empty() || value.len() > MAX_PROJECTOR_ID_BYTES {
         return Err(ConsumeOffsetError::ProjectorIdLength { actual: value.len() });
@@ -123,7 +136,9 @@ impl ConsumeOffset {
     /// fields, non-integer coordinates and trailing data are refused.
     pub fn decode_json(bytes: &[u8]) -> Result<Self, ConsumeOffsetError> {
         check_length(bytes.len())?;
-        let fields: OffsetFields = serde_json::from_slice(bytes).map_err(json_failure)?;
+        let mut decoder = serde_json::Deserializer::from_slice(bytes);
+        let fields = serde::Deserializer::deserialize_map(&mut decoder, OffsetObject).map_err(json_failure)?;
+        decoder.end().map_err(json_failure)?;
         let offset = Self { cluster_id: fields.cluster_id, projector_id: fields.projector_id, raft_term: fields.raft_term, raft_index: fields.raft_index };
         offset.validate()?;
         Ok(offset)

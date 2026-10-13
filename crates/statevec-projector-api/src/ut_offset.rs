@@ -78,6 +78,15 @@ fn names_are_exact_and_offsets_are_not_genesis_sentinels() {
 }
 
 #[test]
+fn offset_json_requires_an_object_not_a_positional_array() {
+    let json = format!("[\"{}\",\"history\",1,2]", "ab".repeat(32));
+    assert!(matches!(ConsumeOffset::decode_json(json.as_bytes()),
+        Err(ConsumeOffsetError::Json { category: OffsetJsonCategory::Data, .. })));
+    let canonical = offset("history").encode_json().unwrap();
+    assert_eq!(ConsumeOffset::decode_json(&canonical), Ok(offset("history")));
+}
+
+#[test]
 fn numeric_projector_id_and_duplicate_identity_are_not_accepted() {
     let valid = String::from_utf8(offset("a").encode_json().unwrap()).unwrap();
     for json in [valid.replace("\"projector_id\":\"a\"", "\"projector_id\":7"), valid.replace("\"projector_id\":\"a\"", "\"projector_id\":\"a\",\"projector_id\":\"b\"")] {
