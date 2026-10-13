@@ -26,15 +26,20 @@ pub unsafe extern "C" fn statevec_projector_delivery_probe_v1(
         Ok(checked) => checked,
         Err(cause) => return (&cause).into(),
     };
-    let run = unsafe { p::with_host(&*table, &*startup, |io| consume(io, count, &mut result)) };
+    let run = unsafe { p::with_host(&*table, &*startup, |io| {
+        let parts = io.split();
+        let control = parts.control.clone();
+        let cut = consume(parts, count, &mut result)?;
+        offer_fixture_checkpoint(control, cut)
+    }) };
     match run {
         Ok(value) => { unsafe { report.write(result); completion.write(value); } SvStatus::SUCCESS }
         Err(cause) => (&cause).into(),
     }
 }
 
-fn consume(io: ProjectorIo<'_>, count: u64, result: &mut Report) -> Result<(), ProjectorFailure> {
-        let ProjectorIoParts { mut source, control, services, stop: _ } = io.split();
+fn consume(parts: ProjectorIoParts<'_>, count: u64, result: &mut Report) -> Result<CheckpointCut, ProjectorFailure> {
+        let ProjectorIoParts { mut source, control: _, services, stop: _ } = parts;
         // An actual scoped borrower is joined before its context can retire.
         services.spawn(|stop| {
             while !stop.is_stopping()? { std::thread::park_timeout(std::time::Duration::from_micros(200)); }
@@ -92,9 +97,16 @@ fn consume(io: ProjectorIo<'_>, count: u64, result: &mut Report) -> Result<(), P
             }
         }
         result.digest = hash.finalize().into();
-        // This transport probe asserts an in-memory fixture prefix only. Durable
-        // business-store qualification belongs to Durability and idle progress.
-        let cut = latest.ok_or(ProjectorFailure::Application { code: 902 })?;
+        latest.ok_or(ProjectorFailure::Application { code: 902 })
+}
+
+fn offer_fixture_checkpoint(control: ProjectorControlPort<'_>, cut: CheckpointCut) -> Result<(), ProjectorFailure> {
+        // Only the raw transport probe calls this synthetic acknowledgement. It
+        // tests the control channel, not durable storage or crash recovery.
+        // A real author must save effects AND this offset durably before offering
+        // it, then return that saved offset from recovery() on the next startup.
+        // The report-only configured example below deliberately does neither.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         cut.offset().encode_json().map_err(|_| ProjectorFailure::Application { code: 903 })?;
         let publication = cut.checkpointed();
         let mut reply = loop {
@@ -150,7 +162,9 @@ impl PreparedProjector for PreparedDelivery {
     fn run(mut self, io: ProjectorIo<'_>) -> Result<(), ProjectorFailure> {
         use std::io::Write;
         let mut report = Report::default();
-        consume(io, self.frames, &mut report)?;
+        let _cut = consume(io.split(), self.frames, &mut report)?;
+        // Writing a report does not establish durable effects plus an offset.
+        // Do not call offer_checkpoint: recovery() truthfully reports None.
         let bytes = serde_json::to_vec(&report).map_err(|_| ProjectorFailure::Application { code: 7 })?;
         self.file.write_all(&bytes).map_err(|e| io_failure(e, ProjectorIoStage::StoreWrite))
     }

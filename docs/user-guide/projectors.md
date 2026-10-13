@@ -150,8 +150,10 @@ the prepared value with its caller; a successful spawn transfers it once.
 The `projector_v1_delivery` cdylib example exports such a module using only public
 SDK crates, alongside a low-level transport conformance probe. Its temporary JSON
 report proves loaded delivery; it is not a durable business database or an offset
-store. Your application must still persist effects and the complete offset at
-its own durability boundary. The official Node adapter that wires this exporter
+store. The configured example never offers a checkpoint and reports no recovery
+offset; only the separate transport probe sends a synthetic fixture acknowledgement.
+Your application must persist effects and the complete offset at its own durability
+boundary before offering a checkpoint, and load that offset on restart. The official Node adapter that wires this exporter
 into product configuration and shell lifecycle is a later integration phase.
 
 `LatestState` is reserved for rebuilding on every startup with no saved offset;
