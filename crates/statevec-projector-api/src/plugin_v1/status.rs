@@ -183,19 +183,29 @@ fn check_nested(outer: u32, nested: D) -> Result<(), A> {
         D::UnknownTag { tag } => tag > 12,
         D::NonzeroSuccessCause { cause } => cause != 0,
         D::IllegalReturn { operation, tag, cause, stage, rebuild_reason } => {
+            let shape = match (tag, cause) {
+                (12, 2) => stage.is_some() && rebuild_reason.is_none(),
+                (12, 5) => stage.is_none() && rebuild_reason.is_some(),
+                _ => stage.is_none() && rebuild_reason.is_none(),
+            };
             let subcategory = stage.map_or(0, ProjectorIoStage::code) | rebuild_reason.map_or(0, RebuildSourceFailure::code);
             let raw = SvStatus { tag, cause, detail: [subcategory.into(), 0, 0] };
             // Core-only payloads are not interpreted. Every other cause is checked
             // through the direct decoder, not a duplicate known-cause range.
             let structural = matches!(tag, 1 | 2 | 3 | 5 | 6) || fields(Raw(raw)).is_ok();
-            tag <= 12 && structural && !operation.permits(tag, cause, subcategory)
+            shape && tag <= 12 && structural && !operation.permits(tag, cause, subcategory)
         }
         D::UnknownOperation { raw } => O::from_code(raw).is_none(),
-        D::UnexpectedTag { expected, actual } => expected != actual,
+        D::UnexpectedTag { expected, actual } => expected == 12 && matches!(actual, 1 | 2 | 3 | 5 | 6),
         D::UnknownCause { tag, cause } => {
             fields(Raw(SvStatus { tag, cause, detail: [0; 3] })) == Err(A::Status(D::UnknownCause { tag, cause }))
         }
-        D::DetailOutOfRange { slot, value, maximum } => slot < 3 && value > maximum,
+        D::DetailOutOfRange { slot, value, maximum } => value > maximum && match slot {
+            0 => maximum == u8::MAX as u64 || maximum == u32::MAX as u64 || maximum == usize::MAX as u64,
+            1 => maximum == u32::MAX as u64,
+            2 => maximum == u32::MAX as u64 || maximum == (1u64 << 33) - 1,
+            _ => false,
+        },
         D::NonzeroUnusedDetail { slot, value } => slot < 3 && value != 0,
         D::NoncanonicalNestedFailure { cause } => matches!(cause, 100..=105 | 108..=110),
     };
@@ -264,6 +274,19 @@ impl From<&A> for SvStatus {
                 D::NoncanonicalNestedFailure { cause } => (110, [cause.into(), 0, 0]),
             },
         };
-        Self { tag: 9, cause, detail }
+        // Public Rust diagnostic enums can be constructed inconsistently. Do
+        // not emit a malformed completion (or OR unrelated stage/reason bits
+        // into a plausible but different claim). Report that author error in
+        // the existing one-level noncanonical vocabulary instead.
+        if let A::Status(nested) = *source {
+            if check_nested(cause, nested).is_err() {
+                return Self { tag: 9, cause: 110, detail: [cause.into(), 0, 0] };
+            }
+        }
+        let status = Self { tag: 9, cause, detail };
+        match decode_failure(status) {
+            Ok(_) => status,
+            Err(rejection) => (&rejection).into(),
+        }
     }
 }

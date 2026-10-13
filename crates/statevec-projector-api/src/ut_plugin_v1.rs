@@ -83,8 +83,9 @@ fn allowed_returns_cannot_be_disguised_as_illegal(operation: O, cause: u32, subc
     assert!(decode_call(status, operation).unwrap().is_some());
     let stage = if cause == 2 { ProjectorIoStage::from_code(subcategory as u32) } else { None };
     let rebuild_reason = if cause == 5 { RebuildSourceFailure::from_code(subcategory as u32) } else { None };
-    let diagnostic = A::Status(D::IllegalReturn { operation, tag: 12, cause, stage, rebuild_reason });
-    assert_eq!(decode_call((&diagnostic).into(), O::Join), Err(A::Status(D::NoncanonicalNestedFailure { cause: 102 })));
+    let raw = SvStatus { tag: 9, cause: 102, detail: [operation.code().into(), 12 | (u64::from(cause) << 32),
+        u64::from(stage.map_or(0, ProjectorIoStage::code)) | u64::from(rebuild_reason.map_or(0, RebuildSourceFailure::code))] };
+    assert_eq!(decode_call(raw, O::Join), Err(A::Status(D::NoncanonicalNestedFailure { cause: 102 })));
 }
 
 #[test_case(O::Prepare, 3, 0; "prepare_worker_join")]
@@ -140,7 +141,7 @@ fn explicit_stop_forwards_host_failure_and_rejects_a_false_illegal_return(failur
 #[test_case(160; "nonbreaking_space")]
 #[test_case(0x110000; "invalid_unicode")]
 fn invalid_control_character_diagnostics_refuse(scalar: u32) {
-    let raw: SvStatus = (&A::ControlCharacter { scalar }).into();
+    let raw = SvStatus { tag: 9, cause: 16, detail: [scalar.into(), 0, 0] };
     assert_eq!(decode_call(raw, O::Event), Err(A::Flag { actual: scalar }));
 }
 
@@ -149,8 +150,44 @@ fn invalid_control_character_diagnostics_refuse(scalar: u32) {
 #[test_case(99; "below_status_range")]
 #[test_case(111; "above_status_range")]
 fn nested_noncanonical_diagnostic_has_one_closed_level(cause: u32) {
-    let raw: SvStatus = (&A::Status(D::NoncanonicalNestedFailure { cause })).into();
+    let raw = SvStatus { tag: 9, cause: 110, detail: [cause.into(), 0, 0] };
     assert_eq!(decode_call(raw, O::Prepare), Err(A::Status(D::NoncanonicalNestedFailure { cause: 110 })));
+}
+
+#[test_case(104, [11, 1, 0]; "unexpected_expected_tag")]
+#[test_case(104, [12, 4, 0]; "unexpected_known_projector_tag")]
+#[test_case(108, [0, 8, 7]; "invented_scalar_bound")]
+#[test_case(108, [1, 256, 255]; "bound_on_wrong_slot")]
+fn nested_diagnostics_must_describe_a_real_projector_decode_check(cause: u32, detail: [u64; 3]) {
+    assert_eq!(decode_failure(SvStatus { tag: 9, cause, detail }), Err(A::Status(D::NoncanonicalNestedFailure { cause })));
+}
+
+#[test_case(A::Status(D::IllegalReturn { operation: O::Prepare, tag: 12, cause: 3, stage: Some(ProjectorIoStage::StoreRead), rebuild_reason: None }); "inactive_stage")]
+#[test_case(A::Status(D::IllegalReturn { operation: O::StateInfo, tag: 12, cause: 2, stage: Some(ProjectorIoStage::StoreRead), rebuild_reason: Some(RebuildSourceFailure::Unavailable) }); "both_subcategories")]
+#[test_case(A::Status(D::IllegalReturn { operation: O::Prepare, tag: 12, cause: 1, stage: None, rebuild_reason: None }); "allowed_tuple")]
+#[test_case(A::Status(D::NoncanonicalNestedFailure { cause: 999 }); "invalid_inner_cause")]
+#[test_case(A::ControlCharacter { scalar: 32 }; "invalid_control_scalar")]
+fn unencodable_author_diagnostics_produce_a_canonical_failure(source: A) {
+    let status = SvStatus::from(&source);
+    assert!(matches!(decode_failure(status), Ok(Some(ProjectorCallFailure::Failure(F::AbiContract(_))))), "{source:?} encoded as noncanonical {status:?}");
+    assert!(status.cause != 102 && status.cause != 16, "do not reinterpret malformed author fields as a different legitimate claim");
+}
+
+#[test_case(0; "fresh_inactive_offset")]
+#[test_case(2; "latest_inactive_offset")]
+fn inactive_recovery_offset_uses_reserved_cause(tag: u32) {
+    let raw = SvRecovery { tag, offset: SvConsumeOffset { raft_term: 7, ..Default::default() }, ..Default::default() };
+    assert_eq!(raw.decode(), Err(A::Reserved { actual: 7 }));
+}
+
+#[test_case(SvStatus { tag: 1, cause: 0, detail: [0; 3] }; "actual_unexpected_tag")]
+#[test_case(SvStatus { tag: 9, cause: 108, detail: [256, 0, 0] }; "slot_byte_overflow")]
+#[test_case(SvStatus { tag: 12, cause: 2, detail: [1, u64::MAX, 0] }; "kind_word_overflow")]
+#[test_case(SvStatus { tag: 12, cause: 2, detail: [1, 0, 1u64 << 33] }; "os_encoding_overflow")]
+#[test_case(SvStatus { tag: 9, cause: 102, detail: [1, 12 | (2u64 << 32), u64::MAX] }; "nested_stage_word_overflow")]
+fn real_structural_decode_failures_round_trip_as_canonical_diagnostics(raw: SvStatus) {
+    let failure = decode_failure(raw).expect_err("actual malformed wire value");
+    assert_eq!(decode_failure((&failure).into()), Ok(Some(ProjectorCallFailure::Failure(F::AbiContract(failure)))));
 }
 
 #[test_case(None; "no_os_code")]

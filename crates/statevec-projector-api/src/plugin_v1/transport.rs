@@ -21,7 +21,11 @@ impl From<DeliveryLimits> for SvDeliveryLimits {
 impl SvRecovery {
     pub fn decode(self) -> Result<ProjectorRecovery, A> {
         if self.reserved != 0 { return Err(A::Reserved { actual: self.reserved.into() }); }
-        if self.tag != 1 && self.offset != SvConsumeOffset::default() { return Err(A::InvalidHandle); }
+        if self.tag != 1 && self.offset != SvConsumeOffset::default() {
+            let bytes = self.offset.cluster.iter().chain(&self.offset.projector_id.bytes)
+                .fold(0u64, |value, byte| value | u64::from(*byte));
+            return Err(A::Reserved { actual: bytes | self.offset.projector_id.len | self.offset.raft_term | self.offset.raft_index });
+        }
         match self.tag {
             0 => Ok(ProjectorRecovery::Continuous { offset: None }),
             1 => Ok(ProjectorRecovery::Continuous { offset: Some(self.offset.decode()?) }),
