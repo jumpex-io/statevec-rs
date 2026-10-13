@@ -32,7 +32,14 @@ unsafe extern "C" fn stop(raw: *mut c_void) -> SvStatus {
     f.stopped.store(true, Ordering::SeqCst); SvStatus::SUCCESS
 }
 unsafe extern "C" fn stopping(raw: *const c_void, out: *mut u32) -> SvStatus { unsafe { out.write(u32::from(fixture(raw).stopped.load(Ordering::SeqCst))); } SvStatus::SUCCESS }
-unsafe extern "C" fn notify(_: *mut c_void, _: u32, _: *const SvProjectorFailureObservation) -> SvStatus { SvStatus::SUCCESS }
+unsafe extern "C" fn notify(_: *mut c_void, kind: u32, observation: *const SvProjectorFailureObservation) -> SvStatus {
+    if observation.is_null() { return (&ProjectorAbiFailure::NullPointer).into(); }
+    let value = unsafe { *observation };
+    if kind == 2 && (value.slot != 0 || value.reserved != 0 || value.cause != SvStatus::SUCCESS) {
+        return (&ProjectorAbiFailure::InvalidHandle).into();
+    }
+    SvStatus::SUCCESS
+}
 unsafe extern "C" fn info(raw: *mut c_void, _: u64, out: *mut SvFrameInfo) -> SvStatus {
     let f = unsafe { fixture(raw) };
     if let Some(cause) = f.info_failure { return (&cause).into(); }
@@ -125,6 +132,14 @@ fn release_failure_revokes_new_acquisitions_even_if_stop_callback_refuses() {
     assert_eq!(f.receives.load(Ordering::SeqCst), 1);
     assert_eq!(f.offers.load(Ordering::SeqCst), 0);
     assert_eq!(completion.joined, 1);
+}
+
+#[test]
+fn finished_notification_uses_canonical_zero_observation() {
+    let fixture = Fixture::new();
+    let completion = unsafe { with_host(&fixture.table(), "history", |_| Ok(())) }.unwrap();
+    assert_eq!(completion.joined, 1);
+    assert_eq!(completion.notification_failure, SvStatus::SUCCESS);
 }
 
 #[test]

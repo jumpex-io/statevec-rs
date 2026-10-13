@@ -191,7 +191,7 @@ pub unsafe fn with_host(
     host.release_frame();
     let cookies = host.replies.lock().unwrap_or_else(|e| e.into_inner()).map(|item| item.cookie);
     for cookie in cookies { host.release_reply(cookie); }
-    if let Err(cause) = call(unsafe { host.table.notify.unwrap()(host.table.context, 2, std::ptr::null()) }, Op::Notify) { host.record(6, cause); }
+    if let Err(cause) = call(unsafe { host.table.notify.unwrap()(host.table.context, 2, &SvProjectorFailureObservation::NONE) }, Op::Notify) { host.record(6, cause); }
     let joined = host.frame.lock().unwrap_or_else(|e| e.into_inner()).cookie == 0
         && host.replies.lock().unwrap_or_else(|e| e.into_inner()).iter().all(|item| item.cookie == 0);
     let mut completion = *host.completion.lock().unwrap_or_else(|e| e.into_inner());
