@@ -29,8 +29,7 @@ fn offset_json_and_wire_preserve_exact_fields(id: String) {
 fn invalid_ids_never_encode(id: &str, expected: ConsumeOffsetError) {
     assert_eq!(offset(id).encode_json(), Err(expected));
     assert_eq!(SvProjectorId::encode(id), Err(expected));
-    let mut wire = SvProjectorId::default();
-    wire.len = id.len() as u64;
+    let mut wire = SvProjectorId { len: id.len() as u64, ..SvProjectorId::default() };
     wire.bytes[..id.len()].copy_from_slice(id.as_bytes());
     let actual = wire.decode().unwrap_err();
     match expected {

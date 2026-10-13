@@ -1,9 +1,9 @@
 use crate::{
-    Digest32, ProjectionContext, ProjectionPosition, ProjectorCheckpointRejection,
-    ProjectorCheckpointRestoreObservation, ProjectorCheckpointStatus, TransactionProjection,
+    ConsumeOffset, ProjectionContext, ProjectionPosition, ProjectorCheckpointRejection,
+    ProjectorCheckpointStatus, TransactionProjection,
     TransactionResult,
 };
-use std::{num::NonZeroU64, sync::mpsc, time::Duration};
+use std::{sync::mpsc, time::Duration};
 
 /// Immutable evidence supplied by a committed source. Implementations determine
 /// provenance; the production implementation cannot be constructed from metadata.
@@ -13,10 +13,13 @@ pub trait CheckpointCut: Copy {
 
     fn position(&self) -> ProjectionPosition;
 
-    /// Call only after the matching complete model and selected manifest are
-    /// durable, including directory syncs. The runtime still checks currentness,
-    /// identity and monotonicity when it receives this physical observation.
-    fn publication(self, generation: NonZeroU64, manifest_digest: Digest32) -> Self::Publication;
+    /// A continuous source supplies its bound namespace. Native ReplayOnly has
+    /// no durable consumer offset and returns None.
+    fn offset(&self) -> Option<ConsumeOffset>;
+
+    /// Call only after business effects and the complete offset are durable.
+    /// This is the application's assertion, not host file I/O or an automatic ACK.
+    fn checkpointed(self) -> Self::Publication;
 }
 
 /// Store publication bound to its source's concrete cut token.
@@ -24,9 +27,7 @@ pub trait CheckpointPublication: Copy {
     type Cut: CheckpointCut<Publication = Self>;
 
     fn cut(&self) -> Self::Cut;
-    fn generation(&self) -> NonZeroU64;
-    fn manifest_digest(&self) -> Digest32;
-    fn restore_observation(&self) -> ProjectorCheckpointRestoreObservation;
+    fn offset(&self) -> Option<ConsumeOffset>;
 }
 
 /// Read-only member output. Raw engine output alone is not a committed frame.

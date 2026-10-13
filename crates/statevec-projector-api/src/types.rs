@@ -1,6 +1,10 @@
-use statevec_frame::{Digest32, TxChainHash, TxSeq, outcome::EntryDigest};
+use statevec_frame::{Digest32, TxChainHash, TxSeq};
 use statevec_model::{RecordKey, SchemaIdentity};
-use std::num::NonZeroU64;
+
+/// Read-only identity of the native complete AppliedBatch, including a validated
+/// compacted base. Constructing these bytes never manufactures a live cut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectionAppliedIdentity(pub [u8; 32]);
 
 /// Actual execution progress, including the genesis chain at sequence zero.
 /// These inspectable bytes do not grant publication or recovery authority.
@@ -34,7 +38,7 @@ pub struct ProjectionPosition {
     pub manifest: ProjectionManifest,
     pub raft_index: u64,
     pub raft_term: u64,
-    pub entry_digest: EntryDigest,
+    pub applied_batch_identity: ProjectionAppliedIdentity,
     pub frontier: ProjectionFrontier,
 }
 
@@ -82,34 +86,33 @@ pub enum ProjectedRecordChange {
     Delete { key: RecordKey, revision: u64 },
 }
 
-/// Untrusted metadata decoded from a projector's durable selection. Runtime
-/// restore/replay must join this exact cut before it can cover an engine checkpoint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProjectorCheckpointRestoreObservation {
-    pub generation: NonZeroU64,
-    pub manifest_digest: Digest32,
-    pub cluster_identity: Digest32,
-    pub genesis_identity: Digest32,
-    pub execution_profile_identity: Digest32,
-    pub manifest: ProjectionManifest,
-    pub raft_index: u64,
-    pub raft_term: u64,
-    pub entry_digest: EntryDigest,
-    pub frontier: ProjectionFrontier,
-}
-
 /// Requested recovery mode; the runtime checks it against its actual startup base.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProjectorRecovery {
     /// Replay retained history with automatic engine checkpoints disabled.
     ReplayOnly,
-    /// Empty application state; the runtime requires a genesis engine base.
-    Fresh,
-    Restore(ProjectorCheckpointRestoreObservation),
+    /// No offset requires genesis; a saved offset joins its actual term/index.
+    Continuous { offset: Option<crate::ConsumeOffset> },
+    /// No offset persistence; rebuild from the admitted native state source.
+    LatestState,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProjectorRecoveryMode { ContinuousHistory, LatestStateOnly }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProjectorRecoverySupport { ContinuousHistory, LatestStateOnly, Both }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProjectorInitialization { Frames, Rebuild { target: u64 } }
 
 /// Runtime disposition of a checkpoint publication. It never changes store durability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProjectorCheckpointRejection {
     NotAttached,
     CheckpointsDisabled,
@@ -117,16 +120,23 @@ pub enum ProjectorCheckpointRejection {
     OwnerNotRunning,
     IdentityMismatch,
     BeyondApplied { applied: u64, projector: u64 },
-    GenerationRegressed,
-    GenerationConflict,
-    CutRegressed,
+    OffsetRegressed,
+    OffsetConflict,
+    WrongRecoveryMode,
+    ProjectorIdentityMismatch,
+    NotRebuilding,
+    RebuildNotComplete,
+    RebuildMismatch,
 }
 
 /// Pull-only scheduling sample. It does not authorize checkpoint selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProjectorCheckpointStatus {
     Disabled,
     ReplayOnly,
     Recovering { projector_raft_index: u64 },
     Active { durable_raft_index: u64, waiting_for_projector: Option<u64> },
+    Rebuilding { target_raft_index: u64 },
+    LatestStateActive { baseline_raft_index: u64 },
 }

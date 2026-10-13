@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "bank"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "statevec",
  "statevec-test",
@@ -143,7 +143,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "flight-booking"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "statevec",
  "statevec-test",
@@ -221,7 +221,7 @@ dependencies = [
 
 [[package]]
 name = "ingress-api"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "serde",
  "statevec-frame",
@@ -450,7 +450,7 @@ dependencies = [
 
 [[package]]
 name = "statevec"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -461,7 +461,7 @@ dependencies = [
 
 [[package]]
 name = "statevec-api"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "smallvec",
  "statevec-model",
@@ -470,7 +470,7 @@ dependencies = [
 
 [[package]]
 name = "statevec-frame"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "serde",
  "sha2 0.11.0",
@@ -479,7 +479,7 @@ dependencies = [
 
 [[package]]
 name = "statevec-ingress-client"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "ingress-api",
  "libc",
@@ -495,7 +495,7 @@ dependencies = [
 
 [[package]]
 name = "statevec-macros"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -509,7 +509,7 @@ dependencies = [
 
 [[package]]
 name = "statevec-model"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -520,7 +520,7 @@ dependencies = [
 
 [[package]]
 name = "statevec-projector-api"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -532,7 +532,7 @@ dependencies = [
 
 [[package]]
 name = "statevec-test"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "statevec",
  "statevec-api",

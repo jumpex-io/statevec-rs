@@ -4,8 +4,7 @@ use crate::{ConsumeOffset, ConsumeOffsetError, offset::validate_projector_id};
 impl SvProjectorId {
     pub fn encode(value: &str) -> Result<Self, ConsumeOffsetError> {
         validate_projector_id(value)?;
-        let mut result = Self::default();
-        result.len = value.len() as u64;
+        let mut result = Self { len: value.len() as u64, ..Self::default() };
         result.bytes[..value.len()].copy_from_slice(value.as_bytes());
         Ok(result)
     }

@@ -29,8 +29,8 @@
 //! ```
 //!
 //! Whole-frame consumption includes empty progress barriers. Receiving a frame
-//! does not acknowledge a durable checkpoint. Only after syncing checkpoint data,
-//! its selected manifest and their directories may the store report publication.
+//! does not acknowledge a durable checkpoint. Save business effects and the
+//! complete offset before reporting the source cut as checkpointed.
 
 mod port;
 mod types;
@@ -39,7 +39,7 @@ pub mod plugin_v1;
 
 pub use offset::{
     ConsumeOffset, ConsumeOffsetError, MAX_OFFSET_JSON_BYTES, MAX_PROJECTOR_ID_BYTES,
-    OffsetJsonCategory,
+    OffsetJsonCategory, ProjectorId,
 };
 
 pub use port::{
@@ -47,4 +47,4 @@ pub use port::{
     ProjectorControl,
 };
 pub use types::*;
-pub use statevec_frame::{Digest32, outcome::EntryDigest};
+pub use statevec_frame::Digest32;

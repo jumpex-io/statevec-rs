@@ -14,6 +14,34 @@ pub struct ConsumeOffset {
     pub raft_index: u64,
 }
 
+/// Checked logical namespace, copied into native source certificates. This is
+/// an identity value, not frame custody or proof of an acknowledged offset.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ProjectorId {
+    length: u8,
+    bytes: [u8; MAX_PROJECTOR_ID_BYTES],
+}
+
+impl ProjectorId {
+    pub fn new(value: &str) -> Result<Self, ConsumeOffsetError> {
+        validate_projector_id(value)?;
+        let mut bytes = [0; MAX_PROJECTOR_ID_BYTES];
+        bytes[..value.len()].copy_from_slice(value.as_bytes());
+        Ok(Self { length: value.len() as u8, bytes })
+    }
+
+    pub fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..usize::from(self.length)])
+            .expect("private checked UTF-8 identity")
+    }
+}
+
+impl std::fmt::Debug for ProjectorId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ProjectorId").field(&self.as_str()).finish()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum OffsetJsonCategory { Io, Syntax, Data, Eof }

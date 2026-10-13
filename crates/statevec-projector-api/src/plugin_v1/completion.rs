@@ -55,9 +55,8 @@ impl SvProjectorCompletion {
         if decoded[4].is_some() != (self.failed_service_joins != 0) {
             return Err(A::CallbackCount { expected: u64::from(decoded[4].is_some()), actual: self.failed_service_joins });
         }
-        if let Some(prior) = observed {
-            if !decoded.contains(&Some(prior)) { return Err(A::InvalidHandle); }
-        }
+        if let Some(prior) = observed
+            && !decoded.contains(&Some(prior)) { return Err(A::InvalidHandle); }
         if self.joined == 0 && [1, 2, 3, 4, 6].into_iter().all(|slot| decoded[slot].is_none()) {
             return Err(A::Flag { actual: self.joined });
         }
