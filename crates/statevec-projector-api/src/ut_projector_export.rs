@@ -156,6 +156,55 @@ fn explicit_stop_failure_remains_separate_from_an_existing_run_error() {
     assert!(report.decode(decode_observation(observed).unwrap()).is_ok());
 }
 
+#[test_case::test_case(None; "delivered")]
+#[test_case::test_case(Some(ProjectorFailure::HostPanicked); "notification_failure_survives_join")]
+fn finished_notification_observes_ready_before_the_physical_join(failure: Option<ProjectorFailure>) {
+    use std::sync::mpsc;
+    struct Notification {
+        entered: mpsc::Sender<()>,
+        proceed: Mutex<mpsc::Receiver<()>>,
+        result: SvStatus,
+    }
+    unsafe extern "C" fn stop(_: *mut c_void) -> SvStatus { SvStatus::SUCCESS }
+    unsafe extern "C" fn notify(raw: *mut c_void, kind: u32, _: *const SvProjectorFailureObservation) -> SvStatus {
+        let notification = unsafe { &*raw.cast::<Notification>() };
+        if kind == 2 {
+            let _ = notification.entered.send(());
+            let _ = notification.proceed.lock().unwrap().recv_timeout(Duration::from_secs(2));
+        }
+        notification.result
+    }
+    let (entered, arrived) = mpsc::channel();
+    let (release, proceed) = mpsc::channel();
+    let notification = Notification { entered, proceed: Mutex::new(proceed), result: failure.as_ref().map(SvStatus::from).unwrap_or(SvStatus::SUCCESS) };
+    let fixture = io_tests::Fixture::new();
+    let host = SvProjectorHostV1 { context: (&notification as *const Notification).cast_mut().cast(),
+        stop_receive: Some(stop), notify: Some(notify), ..fixture.table() };
+    let (mut config, _) = configured(Case::Normal);
+    let mut prepared = prepared(config);
+    let mut running = Running { worker: std::ptr::null_mut(), _host: &fixture };
+    assert_eq!(unsafe { table().start.unwrap()(&mut prepared, &host, &startup(), &mut running.worker) }, SvStatus::SUCCESS);
+
+    // Hold the real worker in Finished. The host thread polls independently;
+    // the callback does not reenter the plugin, and readiness is not a join.
+    let arrival = arrived.recv_timeout(Duration::from_secs(2));
+    let (mut ready, mut observed) = (0, SvProjectorFailureObservation::NONE);
+    let polled = unsafe { table().poll_worker.unwrap()(running.worker, &mut ready, &mut observed) };
+    let stopped = unsafe { table().request_stop.unwrap()(running.worker) };
+    let released = release.send(());
+    let mut report = SvProjectorCompletion::EMPTY;
+    let joined = unsafe { table().join.unwrap()(&mut running.worker, &mut report) };
+    let destroyed = unsafe { table().destroy_configured.unwrap()(&mut config) };
+
+    assert!(arrival.is_ok() && released.is_ok(), "the notification cut must be reached and released");
+    assert_eq!((polled, ready, observed), (SvStatus::SUCCESS, 1, SvProjectorFailureObservation::NONE), "Finished must wake an already-ready observer");
+    assert_eq!((stopped, joined, destroyed), (SvStatus::SUCCESS, SvStatus::SUCCESS, SvStatus::SUCCESS));
+    assert!(running.worker.is_null());
+    assert_eq!(report.joined, 1, "only actual join confirms retirement");
+    assert_eq!(report.decode(None).unwrap().notification_failure, failure);
+    assert_eq!(report.run_failure, SvStatus::SUCCESS);
+}
+
 #[test_case::test_case(Case::Normal; "normal")]
 #[test_case::test_case(Case::RunError; "immediate_run_error_is_accepted")]
 #[test_case::test_case(Case::RunPanic; "panicking_payload_is_not_dropped")]

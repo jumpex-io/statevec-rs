@@ -226,6 +226,10 @@ pub(super) fn run(&self, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(
     host.release_frame();
     let cookies = host.replies.lock().unwrap_or_else(|e| e.into_inner()).map(|item| match item { ReplySlot::Held(item) => item.cookie, _ => 0 });
     for cookie in cookies { host.release_reply(cookie); }
+    // Publish the readiness hint before waking its observer. Actual join still
+    // waits for this callback and reads the terminal result, including a failed
+    // Finished notification; readiness alone never releases host dependencies.
+    host.observation.finish();
     if let Err(cause) = call(unsafe { host.table.notify.unwrap()(host.table.context, 2, &SvProjectorFailureObservation::NONE) }, Op::Notify) { host.record(6, cause); }
     let joined = host.frame.lock().unwrap_or_else(|e| e.into_inner()).cookie == 0
         && host.replies.lock().unwrap_or_else(|e| e.into_inner()).iter().all(|item| matches!(item, ReplySlot::Free));
@@ -233,7 +237,6 @@ pub(super) fn run(&self, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(
     completion.joined = u32::from(joined);
     let result = *completion;
     drop(completion);
-    host.observation.finish();
     result
 }
 }
