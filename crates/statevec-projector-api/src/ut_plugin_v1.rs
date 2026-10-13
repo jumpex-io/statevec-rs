@@ -124,6 +124,17 @@ fn structural_failures_precede_operation_legality_and_core_is_unchanged() {
         Err(statevec_api::plugin_v3::StatusDecodeFailure::UnknownTag { tag: 12 }));
 }
 
+#[test_case(F::HostPanicked; "stop_host_panic")]
+#[test_case(F::Host(HostFailure::Resource(ResourceFailure::Os { code: 5 })); "stop_host_io")]
+fn explicit_stop_forwards_host_failure_and_rejects_a_false_illegal_return(failure: F) {
+    let raw = SvStatus::from(&failure);
+    assert_eq!(decode_call(raw, O::RequestStop), Ok(Some(ProjectorCallFailure::Failure(failure))));
+    let falsely_illegal = SvStatus { tag: 9, cause: 102,
+        detail: [O::RequestStop.code().into(), u64::from(raw.tag) | (u64::from(raw.cause) << 32), 0] };
+    assert_eq!(decode_failure(falsely_illegal), Err(A::Status(D::NoncanonicalNestedFailure { cause: 102 })));
+    assert!(matches!(decode_call(raw, O::PollWorker), Err(A::Status(D::IllegalReturn { .. }))));
+}
+
 #[test_case(0; "nul_is_not_control_character")]
 #[test_case(32; "space")]
 #[test_case(160; "nonbreaking_space")]

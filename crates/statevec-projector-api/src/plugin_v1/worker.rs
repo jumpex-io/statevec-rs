@@ -56,10 +56,10 @@ pub(super) unsafe extern "C" fn request_stop(raw: *mut c_void) -> SvStatus {
     caught(|| {
         if let Err(cause) = pointer(raw.cast::<Worker>()) { return (&cause).into(); }
         let worker = unsafe { &*raw.cast::<Worker>() };
-        // Host callback failures are terminal worker observations, not legal
-        // Projector RequestStop invocation returns. Actual join retains them.
-        if let Err(cause) = worker.scope.stop() { worker.scope.record(1, cause); }
-        SvStatus::SUCCESS
+        // An explicit caller-owned stop result must survive an earlier run
+        // failure. Forward it to the host's independent stop slot; join still
+        // consumes the worker and reports the unchanged run/release causes.
+        match worker.scope.stop() { Ok(()) => SvStatus::SUCCESS, Err(cause) => (&cause).into() }
     })
 }
 pub(super) unsafe extern "C" fn poll(raw: *const c_void, ready: *mut u32, failure: *mut SvProjectorFailureObservation) -> SvStatus {
@@ -82,9 +82,8 @@ pub(super) unsafe extern "C" fn join(raw: *mut *mut c_void, out: *mut SvProjecto
         let mut worker = unsafe { Box::from_raw(handle) };
         let result = worker.join.take().expect("accepted worker retains its join").join();
         let completion = match result {
-            // request_stop may have published a callback failure after the
-            // body returned. Join samples the canonical retained result only
-            // after the sole stop caller and physical worker have both ended.
+            // Sample the canonical retained result after the physical worker
+            // and every scoped service have ended, not a readiness hint.
             Ok(_) => worker.scope.terminal(),
             Err(payload) => {
                 std::mem::forget(payload);

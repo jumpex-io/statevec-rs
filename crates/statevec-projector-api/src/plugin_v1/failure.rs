@@ -137,7 +137,8 @@ impl ProjectorOperation {
             Self::Configure => matches!(tag, 7 | 10),
             Self::Prepare => matches!(tag, 7 | 11) || tag == 12 && (cause == 1 || cause == 2 && (1..=6).contains(&subcategory)),
             Self::Start => matches!(tag, 7 | 11) || tag == 12 && cause == 2 && subcategory == 8,
-            Self::RequestStop | Self::PollWorker | Self::Join | Self::DestroyPrepared | Self::DestroyConfigured => tag == 7,
+            Self::RequestStop => matches!(tag, 4 | 7 | 8),
+            Self::PollWorker | Self::Join | Self::DestroyPrepared | Self::DestroyConfigured => tag == 7,
             _ => {
                 matches!(tag, 4 | 8) || tag == 12 && match cause {
                     2 => matches!(self, Self::StateNext | Self::FinishState) && subcategory == 10,

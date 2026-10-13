@@ -128,6 +128,34 @@ impl Drop for Running<'_> {
     }
 }
 
+#[test]
+fn explicit_stop_failure_remains_separate_from_an_existing_run_error() {
+    unsafe extern "C" fn fail_stop(_: *mut c_void) -> SvStatus { (&ProjectorFailure::HostPanicked).into() }
+    let fixture = io_tests::Fixture::new();
+    let host = SvProjectorHostV1 { stop_receive: Some(fail_stop), ..fixture.table() };
+    let (mut config, _) = configured(Case::RunError);
+    let mut prepared = prepared(config);
+    let mut running = Running { worker: std::ptr::null_mut(), _host: &fixture };
+    assert_eq!(unsafe { table().start.unwrap()(&mut prepared, &host, &startup(), &mut running.worker) }, SvStatus::SUCCESS);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut ready = 0;
+    let mut observed = SvProjectorFailureObservation::NONE;
+    while ready == 0 && Instant::now() < deadline {
+        assert_eq!(unsafe { table().poll_worker.unwrap()(running.worker, &mut ready, &mut observed) }, SvStatus::SUCCESS);
+        std::thread::yield_now();
+    }
+    assert_eq!(ready, 1);
+    let stopped = unsafe { table().request_stop.unwrap()(running.worker) };
+    let mut report = SvProjectorCompletion::EMPTY;
+    assert_eq!(unsafe { table().join.unwrap()(&mut running.worker, &mut report) }, SvStatus::SUCCESS);
+    assert_eq!(unsafe { table().destroy_configured.unwrap()(&mut config) }, SvStatus::SUCCESS);
+    assert_eq!(report.run_failure, (&ProjectorFailure::Application { code: 42 }).into());
+    assert_eq!(report.joined, 1);
+    assert_eq!(stopped, (&ProjectorFailure::HostPanicked).into(), "explicit stop is a separate returned cause, not a second run error");
+    assert_eq!(decode_call(stopped, ProjectorOperation::RequestStop), Ok(Some(ProjectorCallFailure::Failure(ProjectorFailure::HostPanicked))));
+    assert!(report.decode(decode_observation(observed).unwrap()).is_ok());
+}
+
 #[test_case::test_case(Case::Normal; "normal")]
 #[test_case::test_case(Case::RunError; "immediate_run_error_is_accepted")]
 #[test_case::test_case(Case::RunPanic; "panicking_payload_is_not_dropped")]
