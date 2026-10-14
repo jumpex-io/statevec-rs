@@ -25,6 +25,7 @@ libc.workspace = true
 test-case.workspace = true
 libc.workspace = true
 tempfile.workspace = true
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [[example]]
 name = "projector_v1_delivery"
@@ -32,6 +33,10 @@ crate-type = ["cdylib"]
 
 [[example]]
 name = "projector_v1_observer"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "projector_v1_history"
 crate-type = ["cdylib"]
 
 # Qualification fixture, not an application/durability example.

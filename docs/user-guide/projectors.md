@@ -183,6 +183,32 @@ host validation and requires its reply; it does not write your offset. DB users
 may store the four fields directly in the transaction containing their effects.
 The file helper stores no business model and makes no cross-store atomicity claim.
 
+## Durable history reference consumer
+
+Build `cargo build -p statevec-projector-api --example projector_v1_history`.
+Its configuration object accepts `database_path` and optional `offset_path` and
+`status_path`, with relative paths resolved against the configuration directory.
+With no offset_path it commits events, current record images and the four
+ConsumeOffset fields in one SQLite transaction (`WAL`, `synchronous=FULL`). With
+an offset_path it commits idempotent DB effects first, then calls the default
+file store. One stable DB writer lock covers the attachment; the application
+owns its table/key organization. Inspect parses paths but opens no DB/store.
+
+Recovery loads the actual selected offset; replay verifies exact previously
+stored entries without repeating effects. New Update/Delete images check the
+existing model against `before`. Whole-entry saves include empty barriers.
+The consumer reports only after commit/save, retains the exact publication
+through queue pressure/lost replies, and polls control/status during finite
+idle waits. Optional status_path is an observation stream of `ready <host-prefix>
+<model-prefix>`; it has no authority over either prefix. A DB commit without an
+offset-file save can leave the model ahead; it becomes ready only after native
+replay catches up and confirms that model prefix. All u64 coordinates use
+eight-byte big-endian DB blobs to avoid SQLite's signed-integer limitation.
+
+This example defines one local business schema, not a generic distributed DB
+lease, fencing or exactly-once protocol. Use a stopped, consistent business
+backup and an offset that retained native history can still validate.
+
 `LatestState` is reserved for rebuilding on every startup with no saved offset;
 the native delivery-phase integration rejects it until rebuild qualification.
 The V1 raw tables, scoped delivery, status codecs and configured continuous-history
