@@ -126,7 +126,7 @@ borrowed events and record changes without copying their payloads. Views cannot
 outlive the loan; releasing the loan does not save or acknowledge an offset.
 
 After saving your effects and `loan.checkpoint_cut().offset()`, offer the cut's
-`checkpointed()` value with `control.offer_checkpoint()`. Queue Full, Closed and
+`checkpointed()` value with `control.report_durable_offset()`. Queue Full, Closed and
 the four-live-reply capacity limit are distinct from a queued owner's refusal.
 A `ReplyHandle` polls without blocking; dropping a pending reply does not cancel
 the submitted operation. Control and reply handles may move to scoped services
@@ -157,16 +157,39 @@ boundary before offering a checkpoint, and load that offset on restart. The
 official Node adapter now wires this exporter into product configuration and the
 shell lifecycle: it prepares a continuous-history learner attachment, polls the
 worker, explicitly stops and joins it, and retires configured material only after
-confirmed cleanup. Main paths are implemented on the paired local Linux host;
-the Configured worker lifecycle phase still has composed exit qualification.
+confirmed cleanup. Configured worker lifecycle is qualified within the paired
+local x86_64 Linux scope.
+
+## Persist an offset in a file
+
+On Unix, `FileOffsetStore::initialize(directory)` explicitly creates one directory
+under an existing parent and syncs both. `FileOffsetStore::open(path, cluster_id,
+projector_id)` opens that directory, acquires a nonblocking exclusive writer lock
+on the stable `<filename>.lock` sidecar, and validates any existing offset. Leave
+the lock file in place. Its lifetime is independent of atomic offset replacement.
+The helper refuses competing writers, symlinks/non-regular selected files,
+corruption and namespace mismatch; only positive absence returns `None`.
+
+`load()` reads the actual selected bytes. `persist_offset(&offset)` writes the
+bounded version-1 envelope, syncs the file, atomically replaces it and syncs the
+directory before success. Exact duplicate saves are idempotent; a backwards
+index or conflicting term at the same index refuses. A failed save requires
+closing/reopening and inspecting the actual selection; it may contain the old
+or new offset. No file/host operation runs implicitly from Drop.
+
+Persist business effects first, then call `persist_offset`, then submit the real
+frame's `checkpointed()` value with `report_durable_offset`. Reporting only queues
+host validation and requires its reply; it does not write your offset. DB users
+may store the four fields directly in the transaction containing their effects.
+The file helper stores no business model and makes no cross-store atomicity claim.
 
 `LatestState` is reserved for rebuilding on every startup with no saved offset;
 the native delivery-phase integration rejects it until rebuild qualification.
 The V1 raw tables, scoped delivery, status codecs and configured continuous-history
-exporter are available. Latest-state workers and the default file offset store
-remain pending; their planned APIs are not implementation evidence.
+exporter and explicit Unix file offset storage are available. Latest-state
+workers remain pending.
 
-This SDK contains no projector database, checkpoint file format, network
+This SDK contains no projector database, network
 subscription protocol, or Raft implementation. Local substitutes may implement
 the interfaces for business tests; they cannot manufacture the production
 runtime's cut or publication types.

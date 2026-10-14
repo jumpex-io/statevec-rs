@@ -16,11 +16,15 @@ statevec_frame.workspace = true
 statevec_api.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
 
 [dev-dependencies]
 test-case.workspace = true
-sha2.workspace = true
 libc.workspace = true
+tempfile.workspace = true
 
 [[example]]
 name = "projector_v1_delivery"

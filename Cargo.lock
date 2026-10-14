@@ -529,6 +529,7 @@ dependencies = [
  "statevec-api",
  "statevec-frame",
  "statevec-model",
+ "tempfile",
  "test-case",
 ]
 

@@ -125,9 +125,15 @@ impl<'io> super::ProjectorControlPort<'io> {
             }
         }
     }
-    pub fn offer_checkpoint(&self, value: &OffsetCheckpoint) -> Result<Offer<'io, Result<(), Rejection>>, F> {
+    /// Report a prefix whose business effects and offset are already durable.
+    /// This enqueues a host request; inspect its reply to confirm acceptance.
+    pub fn report_durable_offset(&self, value: &OffsetCheckpoint) -> Result<Offer<'io, Result<(), Rejection>>, F> {
         self.host.acquisition_allowed()?;
         self.host.checked(self.offer(Op::OfferCheckpoint, |tag, handle| unsafe { self.host.table.offer_checkpoint.unwrap()(self.host.table.context, &value.raw, tag, handle) }))
+    }
+    #[deprecated(note = "use report_durable_offset; persist business effects and offset first")]
+    pub fn offer_checkpoint(&self, value: &OffsetCheckpoint) -> Result<Offer<'io, Result<(), Rejection>>, F> {
+        self.report_durable_offset(value)
     }
     pub fn offer_status(&self) -> Result<Offer<'io, Status>, F> {
         self.host.acquisition_allowed()?;

@@ -110,7 +110,7 @@ fn offer_fixture_checkpoint(control: ProjectorControlPort<'_>, cut: CheckpointCu
         cut.offset().encode_json().map_err(|_| ProjectorFailure::Application { code: 903 })?;
         let publication = cut.checkpointed();
         let mut reply = loop {
-            match control.offer_checkpoint(&publication)? {
+            match control.report_durable_offset(&publication)? {
                 Offer::Queued(reply) => break reply,
                 Offer::OwnerQueueFull => { if std::time::Instant::now() >= deadline { return Err(ProjectorFailure::Application { code: 904 }); } std::thread::yield_now(); },
                 _ => return Err(ProjectorFailure::Application { code: 905 }),

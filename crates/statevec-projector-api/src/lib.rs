@@ -4,8 +4,10 @@
 //! The production runtime supplies the source, frames and checkpoint cut tokens.
 //! Source attachment, replication, replay, backpressure and checkpoint selection
 //! remain runtime responsibilities. This crate contains no replication runtime.
-//! [`ConsumeOffset`] supplies a bounded four-field JSON codec, not a file store
-//! or an automatic acknowledgement. [`plugin_v1`] supplies the fixed wire
+//! [`ConsumeOffset`] supplies a bounded four-field JSON codec. On Unix,
+//! [`FileOffsetStore`] persists it explicitly; applications report durability
+//! separately through [`plugin_v1::ProjectorControlPort::report_durable_offset`].
+//! [`plugin_v1`] supplies the fixed wire
 //! contract; native attachment and a loaded worker still require host support.
 //!
 //! ```
@@ -35,7 +37,12 @@
 mod port;
 mod types;
 mod offset;
+#[cfg(unix)]
+mod offset_file;
 pub mod plugin_v1;
+
+#[cfg(unix)]
+pub use offset_file::{FileOffsetStore, OffsetFileFailure, OffsetStoreError, OffsetStoreOperation};
 
 pub use offset::{
     ConsumeOffset, ConsumeOffsetError, MAX_OFFSET_JSON_BYTES, MAX_PROJECTOR_ID_BYTES,
