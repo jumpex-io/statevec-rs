@@ -153,8 +153,12 @@ report proves loaded delivery; it is not a durable business database or an offse
 store. The configured example never offers a checkpoint and reports no recovery
 offset; only the separate transport probe sends a synthetic fixture acknowledgement.
 Your application must persist effects and the complete offset at its own durability
-boundary before offering a checkpoint, and load that offset on restart. The official Node adapter that wires this exporter
-into product configuration and shell lifecycle is a later integration phase.
+boundary before offering a checkpoint, and load that offset on restart. The
+official Node adapter now wires this exporter into product configuration and the
+shell lifecycle: it prepares a continuous-history learner attachment, polls the
+worker, explicitly stops and joins it, and retires configured material only after
+confirmed cleanup. Main paths are implemented on the paired local Linux host;
+the Configured worker lifecycle phase still has composed exit qualification.
 
 `LatestState` is reserved for rebuilding on every startup with no saved offset;
 the native delivery-phase integration rejects it until rebuild qualification.

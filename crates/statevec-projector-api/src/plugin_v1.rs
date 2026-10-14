@@ -40,3 +40,6 @@ mod io_tests;
 #[cfg(test)]
 #[path = "ut_projector_export.rs"]
 mod export_tests;
+#[cfg(test)]
+#[path = "ut_projector_poll.rs"]
+mod poll_tests;
