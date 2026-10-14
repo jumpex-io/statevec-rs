@@ -39,6 +39,12 @@ crate-type = ["cdylib"]
 name = "projector_v1_history"
 crate-type = ["cdylib"]
 
+# Physical queue/reply faults around the same public history author.
+[[example]]
+name = "projector_v1_history_probe"
+path = "tests/fixtures/history_probe.rs"
+crate-type = ["cdylib"]
+
 # Qualification fixture, not an application/durability example.
 [[example]]
 name = "projector_v1_lifecycle_probe"

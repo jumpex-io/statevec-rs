@@ -61,7 +61,14 @@ impl Error {
             },
             Self::Database(_) => ProjectorFailure::Application { code: 1000 },
             Self::File(_) => ProjectorFailure::Application { code: 1001 },
-            Self::Metadata(_) => ProjectorFailure::Application { code: 1002 },
+            Self::Metadata(source) => ProjectorFailure::Application {
+                code: match source {
+                    ConsumeOffsetError::ClusterMismatch | ConsumeOffsetError::ProjectorMismatch => {
+                        1004
+                    }
+                    _ => 1002,
+                },
+            },
             Self::WriterInUse => ProjectorFailure::Application { code: 1003 },
             Self::Namespace => ProjectorFailure::Application { code: 1004 },
             Self::Format => ProjectorFailure::Application { code: 1005 },
