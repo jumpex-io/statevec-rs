@@ -4,6 +4,7 @@
 #![cfg(target_os = "linux")]
 #[path = "../../examples/projector_v1_history/author.rs"]
 mod author;
+mod history_crash;
 use statevec_projector_api::plugin_v1::{__export, ControlReply, ProjectorFailure, ffi::*};
 use std::{
     ffi::c_void,
@@ -16,7 +17,15 @@ use std::{
 };
 
 unsafe extern "C" fn configure(config: SvBytes, base: SvBytes, out: *mut *mut c_void) -> SvStatus {
-    unsafe { __export::configure(&author::History, config, base, out) }
+    caught(|| {
+        let result = unsafe { __export::configure(&author::History, config, base, out) };
+        if result.is_success() {
+            // The real configure already validated the borrowed UTF-8 span.
+            let bytes = unsafe { std::slice::from_raw_parts(base.ptr, base.len as usize) };
+            history_crash::configure(std::path::Path::new(std::str::from_utf8(bytes).unwrap()));
+        }
+        result
+    })
 }
 static BASE: __export::ProjectorExportTable =
     __export::ProjectorExportTable::new::<author::History>(configure);
@@ -42,6 +51,7 @@ fn caught(f: impl FnOnce() -> SvStatus) -> SvStatus {
 }
 struct Proxy {
     original: SvProjectorHostV1,
+    crash: Option<history_crash::Cut>,
     first: Mutex<Option<SvOffsetCheckpoint>>,
     attempts: AtomicUsize,
     reply: AtomicU64,
@@ -63,7 +73,6 @@ macro_rules! forward {
 }
 forward!(receive(nanos:u64,tag:*mut u32,frame:*mut u64));
 forward!(stop_receive());
-forward!(frame_info(frame:u64,out:*mut SvFrameInfo));
 forward!(transaction(frame:u64,index:u64,out:*mut SvTransactionInfo));
 forward!(event(frame:u64,tx:u64,index:u64,out:*mut SvEvent));
 forward!(change(frame:u64,tx:u64,index:u64,out:*mut SvRecordChange));
@@ -81,6 +90,17 @@ unsafe extern "C" fn stopping(raw: *const c_void, out: *mut u32) -> SvStatus {
         p.original.stopping.unwrap()(p.original.context, out)
     })
 }
+unsafe extern "C" fn frame_info(raw: *mut c_void, frame: u64, out: *mut SvFrameInfo) -> SvStatus {
+    with_proxy(raw, |p| {
+        let result = unsafe { p.original.frame_info.unwrap()(p.original.context, frame, out) };
+        if result.is_success() {
+            if let Some(cut) = &p.crash {
+                cut.frame(unsafe { *out });
+            }
+        }
+        result
+    })
+}
 unsafe extern "C" fn offer_checkpoint(
     raw: *mut c_void,
     value: *const SvOffsetCheckpoint,
@@ -90,6 +110,14 @@ unsafe extern "C" fn offer_checkpoint(
     with_proxy(raw, |p| {
         if value.is_null() || tag.is_null() || reply.is_null() {
             return (&ProjectorFailure::HostPanicked).into();
+        }
+        if let Some(cut) = &p.crash {
+            cut.before_offer(&p.original, unsafe { *value });
+            let status = unsafe { p.original.offer_checkpoint.unwrap()(p.original.context, value, tag, reply) };
+            if status.is_success() && unsafe { *tag == 0 } {
+                p.reply.store(unsafe { *reply }, Ordering::Release);
+            }
+            return status;
         }
         if !p.completed.load(Ordering::Acquire) {
             let value = unsafe { *value };
@@ -130,6 +158,12 @@ unsafe extern "C" fn poll_reply(
             && p.reply.load(Ordering::Acquire) == reply
             && matches!(unsafe { (*out).decode() }, Ok(ControlReply::Accepted))
         {
+            if let Some(cut) = &p.crash {
+                if cut.lose_accepted() {
+                    unsafe { out.write(SvControlReply { tag: 4, ..SvControlReply::default() }); }
+                }
+                return status;
+            }
             if !p.lost.swap(true, Ordering::AcqRel) {
                 unsafe {
                     out.write(SvControlReply {
@@ -197,6 +231,7 @@ unsafe extern "C" fn start(
         let original = unsafe { *prepared };
         let proxy = Box::new(Proxy {
             original: unsafe { *host },
+            crash: history_crash::Cut::connect(),
             first: Mutex::new(None),
             attempts: AtomicUsize::new(0),
             reply: AtomicU64::new(0),
