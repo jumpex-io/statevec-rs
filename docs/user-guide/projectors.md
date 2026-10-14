@@ -165,7 +165,11 @@ local x86_64 Linux scope.
 On Unix, `FileOffsetStore::initialize(directory)` explicitly creates one directory
 under an existing parent and syncs both. `FileOffsetStore::open(path, cluster_id,
 projector_id)` opens that directory, acquires a nonblocking exclusive writer lock
-on the stable `<filename>.lock` sidecar, and validates any existing offset. Leave
+on the stable `<filename>.lock` sidecar, and validates any existing offset. Before
+returning an existing selection, it syncs that same file and its opened directory;
+either failure refuses open, releases writer custody and preserves the bytes.
+This confirmation must precede handing an offset to native recovery: native may
+accept the restored prefix without waiting for a new frame or report. Leave
 the lock file in place. Its lifetime is independent of atomic offset replacement.
 The helper refuses competing writers, symlinks/non-regular selected files,
 corruption and namespace mismatch; only positive absence returns `None`.
@@ -175,7 +179,9 @@ bounded version-1 envelope, syncs the file, atomically replaces it and syncs the
 directory before success. Exact duplicate saves are idempotent; a backwards
 index or conflicting term at the same index refuses. A failed save requires
 closing/reopening and inspecting the actual selection; it may contain the old
-or new offset. No file/host operation runs implicitly from Drop.
+or new offset. Successful reopen re-establishes file/directory durability, not
+business effects or atomicity across stores. No file/host operation runs implicitly
+from Drop.
 
 Persist business effects first, then call `persist_offset`, then submit the real
 frame's `checkpointed()` value with `report_durable_offset`. Reporting only queues
@@ -208,6 +214,10 @@ eight-byte big-endian DB blobs to avoid SQLite's signed-integer limitation.
 This example defines one local business schema, not a generic distributed DB
 lease, fencing or exactly-once protocol. Use a stopped, consistent business
 backup and an offset that retained native history can still validate.
+Custom DB/Redis recovery must establish its backend's durability before returning
+an offset, not just read a visible value after an ambiguous I/O error. SQLite WAL
+recovery and sync-error/crash combinations belong to the application's SQLite
+storage contract; the file helper's sync tests do not qualify those combinations.
 
 `LatestState` is reserved for rebuilding on every startup with no saved offset;
 the native delivery-phase integration rejects it until rebuild qualification.

@@ -340,14 +340,72 @@ fn physical_save_failure_requires_reopen_without_claiming_rollback(mode: &str) {
             Err(OffsetStoreError::NeedsReopen)
         ));
         drop(store);
-        assert_eq!(
-            open(&path).load().unwrap(),
-            Some(offset(if mode == "replace" { 1 } else { 2 }))
-        );
+        if mode == "directory" {
+            assert!(
+                matches!(
+                    FileOffsetStore::open(&path, &offset(1).cluster_id, "trade-history"),
+                    Err(OffsetStoreError::Io {
+                        operation: OffsetStoreOperation::SyncDirectory,
+                        ..
+                    })
+                ),
+                "a visible replacement cannot authorize restore while sync still fails"
+            );
+        } else {
+            assert_eq!(open(&path).load().unwrap(), Some(offset(1)));
+        }
         return;
     }
     let root = tempfile::tempdir().unwrap();
-    finish(run_child(&root.path().join("history"), mode));
+    let path = root.path().join("history");
+    finish(run_child(&path, mode));
+    assert_eq!(
+        open(&path).load().unwrap(),
+        Some(offset(if mode == "replace" { 1 } else { 2 }))
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test_case("file"; "selected_file_sync_failure")]
+#[test_case("directory"; "selected_directory_sync_failure")]
+fn reopen_requires_durability_before_exposing_restore(mode: &str) {
+    if let Some(path) = std::env::var_os("SV_OFFSET_FILE_CHILD") {
+        let path = PathBuf::from(path);
+        let mut store = open(&path);
+        store.persist_offset(&offset(2)).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let directory = store.directory.as_raw_fd();
+        drop(store);
+
+        // This isolated child opens no other files between close and reopen:
+        // the directory reacquires the lowest free fd used by the first open.
+        // Denying every fsync in the file case also checks file-before-dir order.
+        refuse_syscall(mode, directory);
+        let expected = if mode == "file" {
+            OffsetStoreOperation::SyncFile
+        } else {
+            OffsetStoreOperation::SyncDirectory
+        };
+        match FileOffsetStore::open(&path, &offset(1).cluster_id, "trade-history") {
+            Err(OffsetStoreError::Io { operation, source }) => {
+                assert_eq!(operation, expected);
+                assert_eq!(source.raw_os_error(), Some(libc::EIO));
+            }
+            Err(error) => panic!("restore must preserve the sync failure: {error:?}"),
+            Ok(_) => panic!("reopen exposed restore without confirming durability"),
+        }
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("history");
+    finish(run_child(&path, mode));
+    // A new process without the physical fault can establish the receipt and
+    // continue. Failed construction did not keep the writer lock or erase P.
+    let mut store = open(&path);
+    assert_eq!(store.load().unwrap(), Some(offset(2)));
+    store.persist_offset(&offset(3)).unwrap();
+    assert_eq!(store.load().unwrap(), Some(offset(3)));
 }
 
 #[cfg(target_os = "linux")]
@@ -374,7 +432,14 @@ fn refuse_syscall(mode: &str, directory: i32) {
         ),
         i(libc::BPF_LD | libc::BPF_W | libc::BPF_ABS, 0, 0, 0),
     ];
-    if mode == "replace" {
+    if mode == "file" {
+        instructions.push(i(
+            libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
+            0,
+            1,
+            libc::SYS_fsync as u32,
+        ));
+    } else if mode == "replace" {
         instructions.push(i(
             libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
             0,

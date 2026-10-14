@@ -141,6 +141,9 @@ impl FileOffsetStore {
     /// Open an existing directory and acquire nonblocking writer custody.
     /// Does not create directories or replace/create the selected offset.
     /// Positive absence is returned by load; invalid existing files refuse.
+    /// Before exposing an existing offset for restore, validate and sync the
+    /// selected file, then its directory. Visibility after an uncertain save
+    /// is not enough; either sync failure refuses construction.
     pub fn open(
         path: &Path,
         cluster_id: &str,
@@ -188,7 +191,7 @@ impl FileOffsetStore {
                 return Err(io_failure(OffsetStoreOperation::Lock, source));
             }
         }
-        let mut store = Self {
+        let store = Self {
             directory,
             _writer: writer,
             name,
@@ -196,13 +199,23 @@ impl FileOffsetStore {
             projector_id: projector_id.into(),
             state: State::Open,
         };
-        store.load()?;
+        if let Some((file, _)) = store.read_selected()? {
+            file.sync_all()
+                .map_err(|e| io_failure(OffsetStoreOperation::SyncFile, e))?;
+            store.directory
+                .sync_all()
+                .map_err(|e| io_failure(OffsetStoreOperation::SyncDirectory, e))?;
+        }
         Ok(store)
     }
 
     /// Read the actual selected file each time, never a cached cursor.
     pub fn load(&mut self) -> Result<Option<ConsumeOffset>, OffsetStoreError> {
         self.check_open()?;
+        Ok(self.read_selected()?.map(|(_, offset)| offset))
+    }
+
+    fn read_selected(&self) -> Result<Option<(File, ConsumeOffset)>, OffsetStoreError> {
         let file = match open_at(&self.directory, &self.name, libc::O_RDONLY) {
             Ok(file) => file,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -212,7 +225,7 @@ impl FileOffsetStore {
         offset
             .check_source(&self.cluster_id, &self.projector_id)
             .map_err(OffsetStoreError::Offset)?;
-        Ok(Some(offset))
+        Ok(Some((file, offset)))
     }
 
     /// Persist after business effects are durable. This does not notify the
@@ -244,8 +257,8 @@ impl FileOffsetStore {
         // object reusable after uncertain selection/durability.
         self.state = State::NeedsReopen;
         if previous.as_ref() == Some(offset) {
-            // Reopening an uncertain selection is not a durability receipt.
-            // An exact duplicate establishes its durability again explicitly.
+            // Exact duplicate saves refresh the receipt without replacing the
+            // selected file. Open also establishes it before exposing restore.
             let file = open_at(&self.directory, &self.name, libc::O_RDONLY)
                 .map_err(|e| io_failure(OffsetStoreOperation::OpenOffset, e))?;
             file.sync_all()
