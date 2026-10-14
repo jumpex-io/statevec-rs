@@ -49,6 +49,12 @@ fn write(report: &mut std::fs::File, row: serde_json::Value) -> Result<(), Proje
     bytes.push(b'\n');
     report.write_all(&bytes).and_then(|()| report.flush()).map_err(|e| io_failure(e, ProjectorIoStage::StoreWrite))
 }
+pub(crate) fn write_reset(report: &mut std::fs::File, model: &Model, target: u64) -> Result<(), ProjectorFailure> {
+    // Isolate a prior process's partial last row without reading old output.
+    // Readers resynchronize at reset; this is framing, not recovery/durability.
+    report.write_all(b"\n").map_err(|e| io_failure(e, ProjectorIoStage::StoreWrite))?;
+    write(report, model.reset(target))
+}
 // Queue pressure and reply loss retain this exact EOF-issued cut. No retry can
 // fabricate a replacement or assert persistent history. Stop is not a receipt.
 fn accept(control: &ProjectorControlPort<'_>, stop: &ProjectorStop<'_>, cut: &RebuildCut) -> Result<bool, ProjectorFailure> {
@@ -106,7 +112,7 @@ impl PreparedProjector for Prepared {
         // Complete local installation and subscriber reset precede suffix.
         // This output is NOT a durable checkpoint; no fsync/offset is needed.
         if stop.is_stopping()? { return Ok(()); }
-        write(&mut self.report, model.reset(target))?;
+        write_reset(&mut self.report, &model, target)?;
         if !accept(&control, &stop, &cut)? { return Ok(()); }
         write(&mut self.report, serde_json::json!({ "type": "ready", "raft_index": target.to_string() }))?;
         let mut index = target;

@@ -258,8 +258,9 @@ IDs, revisions and Raft indices are decimal strings to preserve all u64 values.
 
 The append-only report is subscriber output, never a recovery store: it is
 never read, has no offset/manifest, and is not fsynced as durability evidence.
-Each invocation appends a new reset; clients discard any previous model and
-incomplete output row. `ready` marks confirmation of the reset's native baseline,
+Each invocation emits a newline separator before its new reset, without reading
+old output. Output readers ignore empty lines, discard any prior partial row and
+resynchronize at reset, replacing the previous model. `ready` marks confirmation of the reset's native baseline,
 not persistence. There is no continuous-history fallback or cache selection.
 For WebSocket use, replace the report writer with your subscription transport
 and encode schema-specific field deltas from before/after. Client reset, delivery

@@ -41,3 +41,19 @@ fn configuration_is_strict_and_never_opens_the_report() {
     }
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }
+
+#[test]
+fn reset_starts_a_new_output_row_without_reading_or_replacing_old_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("report");
+    let partial = b"{\"type\":\"delta\",\"changes\":";
+    std::fs::write(&path, partial).unwrap();
+    // A write-only append descriptor cannot load the previous model or offset.
+    let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+    author::write_reset(&mut file, &Model::default(), 9).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(&bytes[..partial.len()], partial, "old output is not a cache to delete");
+    assert_eq!(bytes[partial.len()], b'\n', "partial previous output cannot swallow the new reset");
+    let reset: serde_json::Value = serde_json::from_slice(&bytes[partial.len() + 1..]).unwrap();
+    assert_eq!(reset, serde_json::json!({"type":"reset","raft_index":"9","records":[]}));
+}
