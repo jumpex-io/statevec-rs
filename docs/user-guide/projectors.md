@@ -183,6 +183,13 @@ or new offset. Successful reopen re-establishes file/directory durability, not
 business effects or atomicity across stores. No file/host operation runs implicitly
 from Drop.
 
+An abrupt process exit before replacement can leave `.sv-offset-<pid>-<n>`
+temporaries. They are never selected or adopted on reopen. The helper removes
+its own unselected temporary on ordinary failure, but does not scan/delete
+orphans: another offset writer may share the directory. Operators may remove
+confirmed leftovers only while all writers using that directory are stopped;
+leave selected offset files and stable `.lock` sidecars intact.
+
 Persist business effects first, then call `persist_offset`, then submit the real
 frame's `checkpointed()` value with `report_durable_offset`. Reporting only queues
 host validation and requires its reply; it does not write your offset. DB users

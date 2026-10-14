@@ -254,7 +254,7 @@ impl Drop for Process {
         }
     }
 }
-fn run_child(path: &Path, mode: &str) -> Process {
+fn run_child(path: &Path) -> Process {
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
         .args([
@@ -263,12 +263,11 @@ fn run_child(path: &Path, mode: &str) -> Process {
             "--nocapture",
         ])
         .env("SV_OFFSET_FILE_CHILD", path)
-        .env("SV_OFFSET_FILE_MODE", mode)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     Process(Some(command.spawn().unwrap()))
 }
-fn finish(mut process: Process) {
+fn wait_output(mut process: Process) -> std::process::Output {
     let deadline = Instant::now() + Duration::from_secs(5);
     while process.0.as_mut().unwrap().try_wait().unwrap().is_none() {
         assert!(
@@ -277,7 +276,10 @@ fn finish(mut process: Process) {
         );
         std::thread::sleep(Duration::from_millis(1));
     }
-    let result = process.0.take().unwrap().wait_with_output().unwrap();
+    process.0.take().unwrap().wait_with_output().unwrap()
+}
+fn finish(process: Process) {
+    let result = wait_output(process);
     assert!(
         result.status.success(),
         "{}",
@@ -302,7 +304,7 @@ fn killed_writer_releases_lock_and_recovery_reads_only_disk() {
     }
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("history");
-    let mut child = run_child(&path, "hold");
+    let mut child = run_child(&path);
     let deadline = Instant::now() + Duration::from_secs(5);
     while !path.with_extension("ready").exists() {
         assert!(Instant::now() < deadline, "child must persist before kill");
@@ -318,19 +320,38 @@ fn killed_writer_releases_lock_and_recovery_reads_only_disk() {
 }
 
 #[cfg(target_os = "linux")]
-#[test_case("replace"; "rename_failure_preserves_old_selection")]
-#[test_case("directory"; "directory_sync_failure_can_select_new_offset")]
-fn physical_save_failure_requires_reopen_without_claiming_rollback(mode: &str) {
+#[derive(Clone, Copy)]
+enum IoFault {
+    WriteTemporary,
+    SyncFile,
+    Replace,
+    SyncDirectory,
+    TerminateBeforeReplace,
+}
+
+#[cfg(target_os = "linux")]
+#[test_case(IoFault::WriteTemporary; "temporary_write_failure_preserves_old_selection")]
+#[test_case(IoFault::SyncFile; "temporary_sync_failure_preserves_old_selection")]
+#[test_case(IoFault::Replace; "rename_failure_preserves_old_selection")]
+#[test_case(IoFault::SyncDirectory; "directory_sync_failure_can_select_new_offset")]
+fn physical_save_failure_requires_reopen_without_claiming_rollback(fault: IoFault) {
+    let selected = if matches!(fault, IoFault::SyncDirectory) {
+        2
+    } else {
+        1
+    };
     if let Some(path) = std::env::var_os("SV_OFFSET_FILE_CHILD") {
         let path = PathBuf::from(path);
         let mut store = open(&path);
         store.persist_offset(&offset(1)).unwrap();
-        let operation = if mode == "replace" {
-            OffsetStoreOperation::Replace
-        } else {
-            OffsetStoreOperation::SyncDirectory
+        let operation = match fault {
+            IoFault::WriteTemporary => OffsetStoreOperation::WriteTemporary,
+            IoFault::SyncFile => OffsetStoreOperation::SyncFile,
+            IoFault::Replace => OffsetStoreOperation::Replace,
+            IoFault::SyncDirectory => OffsetStoreOperation::SyncDirectory,
+            IoFault::TerminateBeforeReplace => unreachable!("separate crash case"),
         };
-        refuse_syscall(mode, store.directory.as_raw_fd());
+        refuse_syscall(fault, store.directory.as_raw_fd());
         assert!(
             matches!(store.persist_offset(&offset(2)), Err(OffsetStoreError::Io { operation: actual, source }) if actual == operation && source.raw_os_error() == Some(libc::EIO))
         );
@@ -340,16 +361,21 @@ fn physical_save_failure_requires_reopen_without_claiming_rollback(mode: &str) {
             Err(OffsetStoreError::NeedsReopen)
         ));
         drop(store);
-        if mode == "directory" {
+        assert_eq!(
+            read_offset(&File::open(&path).unwrap()).unwrap(),
+            offset(selected)
+        );
+        assert!(
+            temporary_paths(path.parent().unwrap()).is_empty(),
+            "failed save must unlink its own temporary"
+        );
+        if matches!(fault, IoFault::SyncFile | IoFault::SyncDirectory) {
             assert!(
                 matches!(
                     FileOffsetStore::open(&path, &offset(1).cluster_id, "trade-history"),
-                    Err(OffsetStoreError::Io {
-                        operation: OffsetStoreOperation::SyncDirectory,
-                        ..
-                    })
+                    Err(OffsetStoreError::Io { operation: actual, .. }) if actual == operation
                 ),
-                "a visible replacement cannot authorize restore while sync still fails"
+                "a visible selection cannot authorize restore while sync still fails"
             );
         } else {
             assert_eq!(open(&path).load().unwrap(), Some(offset(1)));
@@ -358,17 +384,17 @@ fn physical_save_failure_requires_reopen_without_claiming_rollback(mode: &str) {
     }
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("history");
-    finish(run_child(&path, mode));
-    assert_eq!(
-        open(&path).load().unwrap(),
-        Some(offset(if mode == "replace" { 1 } else { 2 }))
-    );
+    finish(run_child(&path));
+    let mut reopened = open(&path);
+    assert_eq!(reopened.load().unwrap(), Some(offset(selected)));
+    reopened.persist_offset(&offset(3)).unwrap();
+    assert_eq!(reopened.load().unwrap(), Some(offset(3)));
 }
 
 #[cfg(target_os = "linux")]
-#[test_case("file"; "selected_file_sync_failure")]
-#[test_case("directory"; "selected_directory_sync_failure")]
-fn reopen_requires_durability_before_exposing_restore(mode: &str) {
+#[test_case(IoFault::SyncFile; "selected_file_sync_failure")]
+#[test_case(IoFault::SyncDirectory; "selected_directory_sync_failure")]
+fn reopen_requires_durability_before_exposing_restore(fault: IoFault) {
     if let Some(path) = std::env::var_os("SV_OFFSET_FILE_CHILD") {
         let path = PathBuf::from(path);
         let mut store = open(&path);
@@ -380,8 +406,8 @@ fn reopen_requires_durability_before_exposing_restore(mode: &str) {
         // This isolated child opens no other files between close and reopen:
         // the directory reacquires the lowest free fd used by the first open.
         // Denying every fsync in the file case also checks file-before-dir order.
-        refuse_syscall(mode, directory);
-        let expected = if mode == "file" {
+        refuse_syscall(fault, directory);
+        let expected = if matches!(fault, IoFault::SyncFile) {
             OffsetStoreOperation::SyncFile
         } else {
             OffsetStoreOperation::SyncDirectory
@@ -399,7 +425,7 @@ fn reopen_requires_durability_before_exposing_restore(mode: &str) {
     }
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("history");
-    finish(run_child(&path, mode));
+    finish(run_child(&path));
     // A new process without the physical fault can establish the receipt and
     // continue. Failed construction did not keep the writer lock or erase P.
     let mut store = open(&path);
@@ -409,7 +435,66 @@ fn reopen_requires_durability_before_exposing_restore(mode: &str) {
 }
 
 #[cfg(target_os = "linux")]
-fn refuse_syscall(mode: &str, directory: i32) {
+fn temporary_paths(directory: &Path) -> Vec<PathBuf> {
+    fs::read_dir(directory)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.file_name().unwrap().to_string_lossy().starts_with(".sv-offset-")
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn termination_before_rename_never_selects_or_deletes_an_orphan_temporary() {
+    use std::os::unix::process::ExitStatusExt;
+    if let Some(path) = std::env::var_os("SV_OFFSET_FILE_CHILD") {
+        let path = PathBuf::from(path);
+        let mut store = open(&path);
+        store.persist_offset(&offset(1)).unwrap();
+        // Kill only this child at the real rename syscall, after temp write and
+        // fsync. No Rust Drop runs, as with SIGKILL before selection.
+        let limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_CORE, &limit) }, 0);
+        refuse_syscall(
+            IoFault::TerminateBeforeReplace,
+            store.directory.as_raw_fd(),
+        );
+        let _ = store.persist_offset(&offset(2));
+        panic!("the real replace syscall must terminate this child");
+    }
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("history");
+    let output = wait_output(run_child(&path));
+    assert_eq!(output.status.signal(), Some(libc::SIGSYS));
+    let temporary = temporary_paths(root.path());
+    assert_eq!(
+        temporary.len(), 1,
+        "the process reached temporary creation, not selection"
+    );
+    assert_eq!(
+        read_offset(&File::open(&temporary[0]).unwrap()).unwrap(),
+        offset(2)
+    );
+    let bytes = fs::read(&temporary[0]).unwrap();
+
+    let mut reopened = open(&path);
+    assert_eq!(reopened.load().unwrap(), Some(offset(1)));
+    reopened.persist_offset(&offset(3)).unwrap();
+    assert_eq!(reopened.load().unwrap(), Some(offset(3)));
+    assert_eq!(temporary_paths(root.path()), temporary);
+    assert_eq!(
+        fs::read(&temporary[0]).unwrap(), bytes,
+        "no directory-wide orphan cleanup"
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn refuse_syscall(fault: IoFault, directory: i32) {
     let i = |code: u32, jt, jf, k| libc::sock_filter {
         code: code as u16,
         jt,
@@ -432,14 +517,26 @@ fn refuse_syscall(mode: &str, directory: i32) {
         ),
         i(libc::BPF_LD | libc::BPF_W | libc::BPF_ABS, 0, 0, 0),
     ];
-    if mode == "file" {
+    if matches!(fault, IoFault::WriteTemporary) {
+        instructions.extend([
+            i(
+                libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
+                0,
+                4,
+                libc::SYS_write as u32,
+            ),
+            i(libc::BPF_LD | libc::BPF_W | libc::BPF_ABS, 0, 0, 16),
+            i(libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K, 2, 0, 1),
+            i(libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K, 1, 0, 2),
+        ]); // Preserve stdout/stderr so a missing write still has diagnostics.
+    } else if matches!(fault, IoFault::SyncFile) {
         instructions.push(i(
             libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
             0,
             1,
             libc::SYS_fsync as u32,
         ));
-    } else if mode == "replace" {
+    } else if matches!(fault, IoFault::Replace | IoFault::TerminateBeforeReplace) {
         instructions.push(i(
             libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
             0,
@@ -468,7 +565,11 @@ fn refuse_syscall(mode: &str, directory: i32) {
             libc::BPF_RET | libc::BPF_K,
             0,
             0,
-            libc::SECCOMP_RET_ERRNO | libc::EIO as u32,
+            if matches!(fault, IoFault::TerminateBeforeReplace) {
+                libc::SECCOMP_RET_KILL_PROCESS
+            } else {
+                libc::SECCOMP_RET_ERRNO | libc::EIO as u32
+            },
         ),
         i(libc::BPF_RET | libc::BPF_K, 0, 0, libc::SECCOMP_RET_ALLOW),
     ]);

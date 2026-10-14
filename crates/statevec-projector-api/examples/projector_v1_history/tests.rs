@@ -75,6 +75,11 @@ fn restored_consumer_replays_idempotently_and_applies_the_next_update(file: bool
     let mut restored = open(&path, file);
     assert_eq!(restored.load().unwrap(), Some(second.offset()));
     restored.commit_entry(&first).unwrap();
+    assert_eq!(
+        restored.load().unwrap(), Some(second.offset()),
+        "replaying below P cannot temporarily regress the saved offset"
+    );
+    assert_eq!(record(&restored), b"b");
     restored.commit_entry(&second).unwrap();
     assert_eq!(events(&restored), [b"a".to_vec(), b"b".to_vec()]);
     restored.commit_entry(&entry(3, Some(b"b"), b"c")).unwrap();
@@ -84,6 +89,50 @@ fn restored_consumer_replays_idempotently_and_applies_the_next_update(file: bool
         [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
     );
     assert_eq!(restored.load().unwrap().unwrap().raft_index, 3);
+}
+
+#[test]
+fn reopening_an_older_business_backup_refuses_the_newer_file_offset() {
+    use statevec_projector_api::plugin_v1::{ProjectorFailure, ProjectorIoStage};
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("history.sqlite");
+    let backup = root.path().join("stopped-backup.sqlite");
+    let first = entry(1, None, b"a");
+    let second = entry(2, Some(b"a"), b"b");
+    let mut store = open(&path, true);
+    store.commit_entry(&first).unwrap();
+    drop(store); // Close SQLite's WAL before copying a stopped business backup.
+    std::fs::copy(&path, &backup).unwrap();
+    let mut store = open(&path, true);
+    store.commit_entry(&second).unwrap();
+    drop(store);
+    let offset_bytes = std::fs::read(path.with_extension("offset")).unwrap();
+
+    std::fs::copy(&backup, &path).unwrap();
+    let error = match HistoryStore::open(
+        &path,
+        Some(&path.with_extension("offset")),
+        &"ab".repeat(32),
+        "history",
+    ) {
+        Err(error) => error,
+        Ok(_) => panic!("offset P must not authorize recovery from a business backup below P"),
+    };
+    assert!(matches!(error, store::Error::MissingEffects));
+    assert!(matches!(
+        error.failure(ProjectorIoStage::StoreOpen),
+        ProjectorFailure::Application { code: 1006 }
+    ));
+    assert_eq!(
+        std::fs::read(path.with_extension("offset")).unwrap(), offset_bytes
+    );
+    let database = rusqlite::Connection::open_with_flags(
+        &path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ).unwrap();
+    let model: Vec<u8> = database
+        .query_row("SELECT value FROM records WHERE kind=1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(model, b"a", "refusal must not repair or reset the business backup");
 }
 
 #[test]
