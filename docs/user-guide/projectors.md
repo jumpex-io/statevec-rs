@@ -245,12 +245,31 @@ an offset, not just read a visible value after an ambiguous I/O error. SQLite WA
 recovery and sync-error/crash combinations belong to the application's SQLite
 storage contract; the file helper's sync tests do not qualify those combinations.
 
-`LatestState` rebuilds on every startup with no saved offset. The paired native
-source/owner and SDK/bridge read/ACK path are implemented and exercised by a
-loaded transport probe. Official Node configuration still refuses latest-state
-until the composed integration is qualified; a public latest-state reference
-consumer and phase exit review remain pending. The configured continuous-history
-exporter and explicit Unix file offset storage remain available.
+## Latest-state reference consumer
+
+Build `cargo build -p statevec-projector-api --example projector_v1_latest`.
+Its strict configuration object is `{"report_path":"updates.jsonl"}`. Relative
+paths resolve against the configuration directory. This latest-only consumer
+starts with an empty private model on every invocation, enumerates the actual
+state source through EOF, emits a complete `reset`, then confirms the source's
+rebuild cut. Only after confirmation does it consume and emit ordered `delta`
+rows, checking each Update/Delete against the model's `before` image. Record
+IDs, revisions and Raft indices are decimal strings to preserve all u64 values.
+
+The append-only report is subscriber output, never a recovery store: it is
+never read, has no offset/manifest, and is not fsynced as durability evidence.
+Each invocation appends a new reset; clients discard any previous model and
+incomplete output row. `ready` marks confirmation of the reset's native baseline,
+not persistence. There is no continuous-history fallback or cache selection.
+For WebSocket use, replace the report writer with your subscription transport
+and encode schema-specific field deltas from before/after. Client reset, delivery
+and reconnect semantics remain the application's responsibility; this example
+does not implement a network protocol or promise exactly-once delivery.
+
+The paired native source/owner and SDK/bridge read/ACK path are implemented.
+Official Node activation and composed qualification follow this reference
+consumer; phase exit review remains pending. Continuous-history export and
+explicit Unix file offset storage remain separate paths.
 
 This SDK contains no projector database, network
 subscription protocol, or Raft implementation. Local substitutes may implement

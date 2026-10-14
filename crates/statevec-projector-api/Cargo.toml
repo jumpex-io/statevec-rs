@@ -39,6 +39,10 @@ crate-type = ["cdylib"]
 name = "projector_v1_history"
 crate-type = ["cdylib"]
 
+[[example]]
+name = "projector_v1_latest"
+crate-type = ["cdylib"]
+
 # Physical queue/reply faults around the same public history author.
 [[example]]
 name = "projector_v1_history_probe"
