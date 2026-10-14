@@ -95,7 +95,7 @@ unsafe extern "C" fn frame_info(raw: *mut c_void, frame: u64, out: *mut SvFrameI
         let result = unsafe { p.original.frame_info.unwrap()(p.original.context, frame, out) };
         if result.is_success() {
             if let Some(cut) = &p.crash {
-                cut.frame(unsafe { *out });
+                cut.frame(&p.original, unsafe { *out });
             }
         }
         result
