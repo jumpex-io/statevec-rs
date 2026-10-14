@@ -29,3 +29,9 @@ crate-type = ["cdylib"]
 [[example]]
 name = "projector_v1_observer"
 crate-type = ["cdylib"]
+
+# Qualification fixture, not an application/durability example.
+[[example]]
+name = "projector_v1_lifecycle_probe"
+path = "tests/fixtures/lifecycle_probe.rs"
+crate-type = ["cdylib"]
