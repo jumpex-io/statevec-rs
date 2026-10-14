@@ -14,7 +14,7 @@ mod export;
 
 #[derive(Clone, Copy, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-enum Case { FrameError, FrameRetained, ReplyError, ReplyRetained, ServiceFrame, HeldService }
+enum Case { FrameError, FrameRetained, ReplyError, ReplyRetained, ServiceFrame, HeldService, StateError, StateRetained }
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Config { case: Case, report: PathBuf, control: PathBuf, lease: PathBuf }
@@ -30,7 +30,7 @@ struct Module(Arc<Harness>);
 struct Configured(Arc<Harness>);
 struct Prepared { harness: Arc<Harness>, control: UnixStream }
 impl ProjectorModule for Module {
-    const RECOVERY_SUPPORT: ProjectorRecoverySupport = ProjectorRecoverySupport::ContinuousHistory;
+    const RECOVERY_SUPPORT: ProjectorRecoverySupport = ProjectorRecoverySupport::Both;
     type Configured = Configured;
     fn configure(&self, _: ProjectorConfig<'_>) -> Result<Configured, ConfigureFailure> { Ok(Configured(self.0.clone())) }
 }
@@ -43,7 +43,10 @@ impl ConfiguredProjector for Configured {
     }
 }
 impl PreparedProjector for Prepared {
-    fn recovery(&self) -> ProjectorRecovery { ProjectorRecovery::Continuous { offset: None } }
+    fn recovery(&self) -> ProjectorRecovery {
+        if matches!(self.harness.config.case, Case::StateError | Case::StateRetained) { ProjectorRecovery::LatestState }
+        else { ProjectorRecovery::Continuous { offset: None } }
+    }
     fn delivery_limits(&self) -> DeliveryLimits { DeliveryLimits {
         frame_capacity: NonZeroUsize::new(2).unwrap(), maximum_accounted_bytes: NonZeroUsize::new(1024 * 1024).unwrap(),
     } }
@@ -52,6 +55,20 @@ impl PreparedProjector for Prepared {
         harness.author_calls.fetch_add(1, Ordering::Relaxed);
         let ProjectorIoParts { mut source, control, services, stop } = io.split();
         match harness.config.case {
+            Case::StateError | Case::StateRetained => {
+                let Delivery::State(mut loan) = source.next_timeout(Duration::from_secs(5))? else { panic!("actual source required"); };
+                // Read the real source (including EOF for genesis), then let a
+                // model-installation error unwind the SDK's actual StateLoan.
+                loop {
+                    match loan.next_record()? {
+                        StateRead::Progress => (),
+                        StateRead::Record(_) | StateRead::End => break,
+                        StateRead::Stop => panic!("source stopped before the model failure cut"),
+                    }
+                }
+                harness.event("state-held-and-read");
+                Err(ProjectorFailure::Application { code: 301 })
+            }
             Case::HeldService => {
                 let held = harness.clone();
                 services.spawn(move |_| {

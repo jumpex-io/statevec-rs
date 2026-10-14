@@ -98,7 +98,7 @@ unsafe extern "C" fn poll(raw: *const c_void, ready: *mut u32, observation: *mut
     let h = &worker.callbacks.harness;
     h.polls.fetch_add(1, Ordering::Relaxed);
     h.allocations.fetch_add(allocations, Ordering::Relaxed);
-    if matches!(unsafe { (*observation).slot }, 2 | 4) { h.release_observed.store(true, Ordering::Release); }
+    if matches!(unsafe { (*observation).slot }, 2 | 3 | 4) { h.release_observed.store(true, Ordering::Release); }
     // One test-only status on a budget breach fails the real Node gate, rather
     // than merely logging a measurement that would not influence its oracle.
     if allocations != 0 { (&ProjectorFailure::HostPanicked).into() } else { result }

@@ -33,7 +33,16 @@ forward!(poll_reply(cookie: u64, out: *mut SvControlReply));
 forward!(state_info(cookie: u64, out: *mut SvStateInfo));
 forward!(state_next(cookie: u64, tag: *mut u32, out: *mut SvStateRecord));
 forward!(finish_state(cookie: *mut u64, out: *mut SvRebuildCut));
-forward!(release_state(cookie: *mut u64));
+unsafe extern "C" fn release_state(raw: *mut c_void, cookie: *mut u64) -> SvStatus {
+    let c = unsafe { &*raw.cast::<Callbacks>() };
+    c.harness.releases.fetch_add(1, Ordering::Relaxed);
+    if c.harness.config.case == Case::StateRetained { return (&ProjectorFailure::HostPanicked).into(); }
+    let result = unsafe { c.original.release_state.unwrap()(c.original.context, cookie) };
+    if c.harness.config.case == Case::StateError && unsafe { *cookie == 0 }
+        && result == SvStatus::from(&ProjectorFailure::RebuildSource(RebuildSourceFailure::RebuildAbandoned)) {
+        (&ProjectorFailure::HostPanicked).into()
+    } else { result }
+}
 forward!(offer_rebuild(cut: *const SvRebuildCut, tag: *mut u32, reply: *mut u64));
 unsafe extern "C" fn stopping(raw: *const c_void, out: *mut u32) -> SvStatus {
     let c = unsafe { &*raw.cast::<Callbacks>() };
@@ -67,7 +76,7 @@ unsafe extern "C" fn notify(raw: *mut c_void, kind: u32, out: *const SvProjector
     // real Node pump must still discover failure via its regular SDK poll.
     if c.harness.config.case == Case::HeldService { return SvStatus::SUCCESS; }
     let result = unsafe { c.original.notify.unwrap()(c.original.context, kind, out) };
-    if kind == 1 && matches!(unsafe { (*out).slot }, 2 | 4) {
+    if kind == 1 && matches!(unsafe { (*out).slot }, 2 | 3 | 4) {
         // Hold the *real* callback after the native observation, before user
         // run can return A. An actual Node poll must first observe release B.
         let deadline = Instant::now() + Duration::from_secs(5);

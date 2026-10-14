@@ -266,10 +266,13 @@ and encode schema-specific field deltas from before/after. Client reset, deliver
 and reconnect semantics remain the application's responsibility; this example
 does not implement a network protocol or promise exactly-once delivery.
 
-The paired native source/owner and SDK/bridge read/ACK path are implemented.
-Official Node activation and composed qualification follow this reference
-consumer; phase exit review remains pending. Continuous-history export and
-explicit Unix file offset storage remain separate paths.
+The paired official Node now selects this path with
+`"recovery_mode":"latest-state-only"`. Its inspect command checks the selected
+mode's capability without opening the report or preparing a model. The learner,
+External retention and enabled checkpoint-policy requirements still apply.
+This is the phase's main implementation, not completed exit qualification;
+continuous-history export and explicit Unix file offset storage remain separate
+paths. Build host and SDK from the paired revisions.
 
 This SDK contains no projector database, network
 subscription protocol, or Raft implementation. Local substitutes may implement
