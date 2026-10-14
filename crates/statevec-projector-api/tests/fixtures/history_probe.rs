@@ -258,7 +258,7 @@ unsafe impl Send for StaticTable {}
 unsafe impl Sync for StaticTable {}
 static TABLE: std::sync::OnceLock<StaticTable> = std::sync::OnceLock::new();
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn statevec_projector_entry_v1(size: u64, out: *mut SvDiscovery) -> u32 {
+pub unsafe extern "C" fn statevec_projector_plugin_entry_v1(size: u64, out: *mut SvDiscovery) -> u32 {
     if out.is_null() || size < size_of::<SvDiscovery>() as u64 {
         return 1;
     }
