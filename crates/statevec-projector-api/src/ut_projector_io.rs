@@ -3,6 +3,8 @@
 use super::*;
 use ffi::*;
 use std::{ffi::c_void, sync::atomic::{AtomicBool, AtomicU64, Ordering}};
+#[path = "ut_projector_state.rs"]
+mod state_tests;
 unsafe fn with_host(table: &SvProjectorHostV1, id: &str, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(), ProjectorFailure>) -> Result<SvProjectorCompletion, ProjectorAbiFailure> {
     // Mechanical table input, never a native source/cut attestation.
     let start = SvProjectorStart { identity: SvProjectionIdentity { manifest: 1, ..Default::default() }, peer_id: 1,

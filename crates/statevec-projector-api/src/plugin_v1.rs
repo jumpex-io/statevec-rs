@@ -9,6 +9,7 @@ mod transport;
 mod borrow;
 mod io;
 mod views;
+mod state;
 mod control;
 mod author;
 mod inputs;
@@ -23,6 +24,7 @@ pub use crate::{ProjectorInitialization, ProjectorRecoveryMode, ProjectorRecover
 pub use transport::{ControlReply, DeliveryLimits};
 pub use io::{Delivery, FrameLoan, ProjectorControlPort, ProjectorIo, ProjectorIoParts, ProjectorServices, ProjectorSource, ProjectorStop, with_host};
 pub use views::{FrameView, TransactionView, EventView, RecordChangeView};
+pub use state::{StateLoan, StateRead, ProjectionStateInfo, ProjectionStateRecord};
 pub use views::{EventView as ProjectedEventRef, RecordChangeView as ProjectedRecordChangeRef};
 pub use control::{CheckpointCut, OffsetCheckpoint, RebuildCut, Offer, ReplyHandle, ReplyPoll};
 

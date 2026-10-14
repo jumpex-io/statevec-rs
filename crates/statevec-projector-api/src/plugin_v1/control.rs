@@ -3,17 +3,19 @@ use crate::{ConsumeOffset, ProjectorCheckpointRejection as Rejection, ProjectorC
 use std::{cell::Cell, marker::PhantomData};
 
 #[derive(Debug, Clone, Copy)]
-pub struct CheckpointCut { pub(super) raw: SvCut, pub(super) position: SvPosition, pub(super) projector_id: crate::ProjectorId }
+pub struct CheckpointCut { pub(super) raw: SvCut, pub(super) position: SvPosition, pub(super) projector_id: crate::ProjectorId, pub(super) mode: crate::ProjectorRecoveryMode }
 #[derive(Debug, Clone, Copy)]
 pub struct OffsetCheckpoint { pub(super) raw: SvOffsetCheckpoint }
 #[derive(Debug, Clone, Copy)]
 pub struct RebuildCut { pub(super) raw: SvRebuildCut }
 impl CheckpointCut {
-    pub fn offset(&self) -> ConsumeOffset {
+    /// Latest-state frames never define a durable consume offset.
+    pub fn offset(&self) -> Option<ConsumeOffset> {
+        if self.mode != crate::ProjectorRecoveryMode::ContinuousHistory { return None; }
         let mut cluster_id = String::with_capacity(64);
         use std::fmt::Write;
         for byte in self.position.cluster { write!(&mut cluster_id, "{byte:02x}").expect("writing a String"); }
-        ConsumeOffset { cluster_id, projector_id: self.projector_id.as_str().to_owned(), raft_term: self.position.raft_term, raft_index: self.position.raft_index }
+        Some(ConsumeOffset { cluster_id, projector_id: self.projector_id.as_str().to_owned(), raft_term: self.position.raft_term, raft_index: self.position.raft_index })
     }
     /// Assertion after the application durably saved effects and this offset.
     pub fn checkpointed(self) -> OffsetCheckpoint { OffsetCheckpoint { raw: SvOffsetCheckpoint { cut: self.raw } } }

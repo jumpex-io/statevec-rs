@@ -5,6 +5,8 @@ use statevec_projector_api::plugin_v1::{self as p, ffi::*, *};
 use sha2::{Digest, Sha256};
 #[path = "projector_v1_delivery/mode_probe.rs"]
 mod mode_probe;
+#[path = "projector_v1_delivery/rebuild_probe.rs"]
+mod rebuild_probe;
 
 #[repr(C)]
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -93,7 +95,7 @@ fn consume(parts: ProjectorIoParts<'_>, count: u64, result: &mut Report) -> Resu
                     latest = Some(loan.checkpoint_cut());
                 }
                 Delivery::Empty | Delivery::TimedOut => {},
-                Delivery::Stop | Delivery::Disconnected => return Err(ProjectorFailure::Application { code: 901 }),
+                Delivery::Stop | Delivery::Disconnected | Delivery::State(_) => return Err(ProjectorFailure::Application { code: 901 }),
             }
         }
         result.digest = hash.finalize().into();
@@ -107,7 +109,7 @@ fn offer_fixture_checkpoint(control: ProjectorControlPort<'_>, cut: CheckpointCu
         // it, then return that saved offset from recovery() on the next startup.
         // The report-only configured example below deliberately does neither.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        cut.offset().encode_json().map_err(|_| ProjectorFailure::Application { code: 903 })?;
+        cut.offset().ok_or(ProjectorFailure::Application { code: 903 })?.encode_json().map_err(|_| ProjectorFailure::Application { code: 903 })?;
         let publication = cut.checkpointed();
         let mut reply = loop {
             match control.report_durable_offset(&publication)? {

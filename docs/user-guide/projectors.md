@@ -54,7 +54,8 @@ version it describes. Application library types can be generic over
 `C: CheckpointCut`; the production integration supplies the concrete type.
 `cut.position()` exposes identity, source position and actual execution frontier
 for inspection. Those readable fields cannot reconstruct a token. For a
-continuous-history source, `cut.offset()` returns these four fields:
+continuous-history source, `cut.offset()` returns `Some(ConsumeOffset)` with
+these four fields; latest-state cuts return `None`:
 
 ```rust
 use statevec_projector_api::ConsumeOffset;
@@ -120,12 +121,13 @@ is introduced by this local amendment.
 
 The `plugin_v1` module also provides a scoped borrower for a native V1 host
 table. `ProjectorIo::split()` separates `source`, `control`, `services` and
-`stop`. `source.try_next()` / `next_timeout()` return a `FrameLoan`, Empty,
-TimedOut, Stop or Disconnected. `loan.view()` exposes ordered transactions,
+`stop`. `source.try_next()` / `next_timeout()` return a `FrameLoan`, `StateLoan`,
+Empty, TimedOut, Stop or Disconnected. `loan.view()` exposes ordered transactions,
 borrowed events and record changes without copying their payloads. Views cannot
 outlive the loan; releasing the loan does not save or acknowledge an offset.
 
-After saving your effects and `loan.checkpoint_cut().offset()`, offer the cut's
+For continuous history, obtain the `Some(offset)` from
+`loan.checkpoint_cut().offset()`. After saving your effects and that offset, offer the cut's
 `checkpointed()` value with `control.report_durable_offset()`. Queue Full, Closed and
 the four-live-reply capacity limit are distinct from a queued owner's refusal.
 A `ReplyHandle` polls without blocking; dropping a pending reply does not cancel
@@ -136,6 +138,17 @@ those services are joined before the enclosing host borrow ends.
 The unsafe `with_host` entry is for an integration that already owns a validated
 host table, startup binding and callback resources that remain alive through all
 actual joins. Application authors normally use the generated exporter instead.
+
+For latest-state initialization, the first source delivery is a `StateLoan`.
+`info()` gives the exact frozen baseline and live-record count. `next_record()`
+lends one record, returns `Progress` for a bounded scan quantum, or returns `End`
+only after the real complete scan. Neither an error nor `Stop` is EOF. Borrowed
+bytes must end before another read; the source loan cannot move between threads.
+After `End`, `finish()` consumes the native loan and yields a `RebuildCut`.
+Install the complete in-memory model before `control.offer_rebuild(&cut)`;
+Accepted permits ordered delivery from S+1. No offset file or database is read
+or written by this path. Dropping an unfinished loan cannot grant readiness;
+an explicit model/read/service failure retains precedence over abandonment.
 
 ## Export a configured continuous-history worker
 
@@ -226,11 +239,12 @@ an offset, not just read a visible value after an ambiguous I/O error. SQLite WA
 recovery and sync-error/crash combinations belong to the application's SQLite
 storage contract; the file helper's sync tests do not qualify those combinations.
 
-`LatestState` is reserved for rebuilding on every startup with no saved offset;
-the native delivery-phase integration rejects it until rebuild qualification.
-The V1 raw tables, scoped delivery, status codecs and configured continuous-history
-exporter and explicit Unix file offset storage are available. Latest-state
-workers remain pending.
+`LatestState` rebuilds on every startup with no saved offset. The paired native
+source/owner and SDK/bridge read/ACK path are implemented and exercised by a
+loaded transport probe. Official Node configuration still refuses latest-state
+until the composed integration is qualified; a public latest-state reference
+consumer and phase exit review remain pending. The configured continuous-history
+exporter and explicit Unix file offset storage remain available.
 
 This SDK contains no projector database, network
 subscription protocol, or Raft implementation. Local substitutes may implement

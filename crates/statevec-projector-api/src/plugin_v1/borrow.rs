@@ -30,8 +30,9 @@ pub(super) fn validate_host(table: &SvProjectorHostV1) -> Result<(), A> {
     if h.kind != PROJECTOR_HOST_KIND { return Err(A::Kind { expected: PROJECTOR_HOST_KIND, actual: h.kind }); }
     if h.table_bytes != std::mem::size_of::<SvProjectorHostV1>() as u64 { return Err(A::TableSize { expected: std::mem::size_of::<SvProjectorHostV1>() as u64, actual: h.table_bytes }); }
     if (h.provided_caps | h.required_caps) & !PROJECTOR_CAPABILITIES != 0
-        || h.provided_caps & (PROJECTOR_BASE_CAPABILITIES | CONTINUOUS_HISTORY_CAPABILITY) != PROJECTOR_BASE_CAPABILITIES | CONTINUOUS_HISTORY_CAPABILITY
-        || h.required_caps != PROJECTOR_BASE_CAPABILITIES | CONTINUOUS_HISTORY_CAPABILITY {
+        || h.provided_caps & h.required_caps != h.required_caps
+        || ![PROJECTOR_BASE_CAPABILITIES | CONTINUOUS_HISTORY_CAPABILITY,
+              PROJECTOR_BASE_CAPABILITIES | LATEST_STATE_CAPABILITY].contains(&h.required_caps) {
         return Err(A::UnsupportedCapabilities { required: h.required_caps });
     }
     if table.context.is_null() { return Err(A::NullPointer); }
@@ -45,9 +46,16 @@ pub(super) fn validate_host(table: &SvProjectorHostV1) -> Result<(), A> {
 }
 
 pub(super) fn position(value: SvPosition) -> Result<crate::ProjectionPosition, A> {
+    if value.raft_index == 0 { return Err(A::InvalidHandle); }
+    state_position(value)
+}
+pub(super) fn state_position(value: SvPosition) -> Result<crate::ProjectionPosition, A> {
     if value.reserved != 0 { return Err(A::Reserved { actual: value.reserved.into() }); }
     if value.manifest != 1 { return Err(A::Flag { actual: value.manifest }); }
-    if value.raft_index == 0 || value.raft_term == 0 { return Err(A::InvalidHandle); }
+    if (value.raft_index == 0) != (value.raft_term == 0)
+        || value.raft_index == 0 && (value.applied_batch_identity != [0; 32] || value.applied_tx_seq != 0) {
+        return Err(A::InvalidHandle);
+    }
     Ok(crate::ProjectionPosition {
         cluster_identity: crate::Digest32::new(value.cluster), genesis_identity: crate::Digest32::new(value.genesis),
         execution_profile_identity: crate::Digest32::new(value.profile), manifest: crate::ProjectionManifest::AllRegisteredSchemaV1,

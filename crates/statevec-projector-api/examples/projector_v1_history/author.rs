@@ -199,7 +199,7 @@ impl PreparedProjector for Prepared {
             match source.next_timeout(Duration::from_millis(10))? {
                 Delivery::Frame(loan) => {
                     let cut = loan.checkpoint_cut();
-                    let entry = store::Entry::read(loan.view(), cut.offset())?;
+                    let entry = store::Entry::read(loan.view(), cut.offset().ok_or(ProjectorFailure::Application { code: 1103 })?)?;
                     self.store
                         .commit_entry(&entry)
                         .map_err(|e| e.failure(ProjectorIoStage::StoreWrite))?;
@@ -210,6 +210,7 @@ impl PreparedProjector for Prepared {
                     }
                 }
                 Delivery::Empty | Delivery::TimedOut => (),
+                Delivery::State(_) => return Err(ProjectorFailure::AbiContract(ProjectorAbiFailure::InvalidHandle)),
                 Delivery::Stop => return Ok(()),
                 Delivery::Disconnected => {
                     if stop.is_stopping()? {

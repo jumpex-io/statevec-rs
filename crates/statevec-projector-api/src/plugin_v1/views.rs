@@ -22,7 +22,11 @@ pub struct FrameView<'a> { host: &'a ScopeData, cookie: u64, info: SvFrameInfo, 
 impl super::FrameLoan<'_> {
     pub fn view(&self) -> FrameView<'_> { FrameView { host: self.host, cookie: self.cookie, info: self.info, _loan: std::marker::PhantomData } }
     pub fn checkpoint_cut(&self) -> super::CheckpointCut {
-        super::CheckpointCut { raw: self.info.cut, position: self.info.position, projector_id: self.host.projector_id }
+        let mode = match self.host.initialization {
+            crate::ProjectorInitialization::Frames => crate::ProjectorRecoveryMode::ContinuousHistory,
+            crate::ProjectorInitialization::Rebuild { .. } => crate::ProjectorRecoveryMode::LatestStateOnly,
+        };
+        super::CheckpointCut { raw: self.info.cut, position: self.info.position, projector_id: self.host.projector_id, mode }
     }
 }
 impl FrameView<'_> {

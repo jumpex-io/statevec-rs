@@ -52,6 +52,7 @@ impl PreparedProjector for Prepared {
                 }
                 Delivery::Stop | Delivery::Disconnected => break,
                 Delivery::Empty | Delivery::TimedOut => (),
+                Delivery::State(_) => return Err(ProjectorFailure::AbiContract(ProjectorAbiFailure::InvalidHandle)),
             }
         }
         writeln!(self.report, "stopped").map_err(|e| failure(e, ProjectorIoStage::StoreWrite))

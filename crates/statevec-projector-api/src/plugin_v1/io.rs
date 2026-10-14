@@ -14,11 +14,13 @@ pub(super) struct ScopeData {
     pub table: SvProjectorHostV1,
     pub projector_id: crate::ProjectorId,
     pub frame: Mutex<Held>,
+    pub state: Mutex<Held>,
+    pub abandoned: std::sync::atomic::AtomicBool,
     pub replies: Mutex<[ReplySlot; 4]>,
     completion: Mutex<SvProjectorCompletion>,
     observation: super::observation::WorkerObservation,
-    startup: super::ProjectorStartupBase,
-    initialization: crate::ProjectorInitialization,
+    pub startup: super::ProjectorStartupBase,
+    pub initialization: crate::ProjectorInitialization,
 }
 // SAFETY: a validated host promises concurrent control/stop/notify calls.
 // Source facades/loans are !Send + !Sync; all remaining shared state is locked.
@@ -184,7 +186,7 @@ impl<'io> ProjectorServices<'io> {
 /// Synchronous entry shared by the generated worker exporter and loaded delivery
 /// fixtures. It owns all host borrows outside author code and joins every scoped
 /// service before releasing forgotten loans/replies. It does not configure or
-/// start a product node and does not implement latest-state delivery yet.
+/// start a product node. Native ownership alone selects and admits recovery.
 ///
 /// # Safety
 /// The table/context and every callback must honor V1, remain valid through this
@@ -202,13 +204,15 @@ impl ScopeData {
 pub(super) fn new(table: &SvProjectorHostV1, raw: &SvProjectorStart) -> Result<Self, A> {
     validate_host(table)?;
     let (startup, initialization) = super::inputs::startup(raw)?;
-    // The delivery phase activates continuous history only. Native latest-state
-    // admission/state lending belongs to the reviewed later rebuild phase.
-    if initialization != crate::ProjectorInitialization::Frames {
-        return Err(A::UnsupportedCapabilities { required: LATEST_STATE_CAPABILITY });
+    let required = PROJECTOR_BASE_CAPABILITIES | match initialization {
+        crate::ProjectorInitialization::Frames => CONTINUOUS_HISTORY_CAPABILITY,
+        crate::ProjectorInitialization::Rebuild { .. } => LATEST_STATE_CAPABILITY,
+    };
+    if table.h.required_caps != required || table.h.provided_caps & required != required {
+        return Err(A::UnsupportedCapabilities { required });
     }
     let projector_id = crate::ProjectorId::new(raw.projector_id.decode()?).map_err(|_| A::InvalidHandle)?;
-    Ok(Self { table: *table, projector_id, frame: Mutex::new(Held::default()), replies: Mutex::new([ReplySlot::Free; 4]), completion: Mutex::new(SvProjectorCompletion::EMPTY), observation: super::observation::WorkerObservation::new(), startup, initialization })
+    Ok(Self { table: *table, projector_id, frame: Mutex::new(Held::default()), state: Mutex::new(Held::default()), abandoned: std::sync::atomic::AtomicBool::new(false), replies: Mutex::new([ReplySlot::Free; 4]), completion: Mutex::new(SvProjectorCompletion::EMPTY), observation: super::observation::WorkerObservation::new(), startup, initialization })
 }
 pub(super) fn poll(&self) -> (bool, SvProjectorFailureObservation) { self.observation.read() }
 pub(super) fn terminal(&self) -> SvProjectorCompletion { *self.completion.lock().unwrap_or_else(|e| e.into_inner()) }
@@ -219,6 +223,9 @@ pub(super) fn run(&self, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(
             Ok(Ok(())) => {}, Ok(Err(failure)) => host.record(1, failure),
             Err(payload) => { std::mem::forget(payload); host.record(1, F::PluginPanicked); }
         }
+        // Release a forgotten state loan before our internal stop can mask
+        // abandonment. It cannot have a safe borrower after run returns.
+        host.release_state();
         if let Err(failure) = host.stop() { host.record(1, failure); }
         // Scope joins even routines holding control/reply facades. It cannot be
         // bypassed by forgetting a public facade, and no new service is admitted.
@@ -226,12 +233,21 @@ pub(super) fn run(&self, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(
     host.release_frame();
     let cookies = host.replies.lock().unwrap_or_else(|e| e.into_inner()).map(|item| match item { ReplySlot::Held(item) => item.cookie, _ => 0 });
     for cookie in cookies { host.release_reply(cookie); }
+    if host.abandoned.load(std::sync::atomic::Ordering::Acquire) {
+        let result = host.terminal();
+        if [result.run_failure, result.frame_release_failure, result.state_release_failure,
+            result.reply_release_failure, result.service_join_failure, result.notification_failure,
+            result.worker_join_failure].iter().all(|cause| *cause == SvStatus::SUCCESS) {
+            host.record(1, F::RebuildSource(super::RebuildSourceFailure::RebuildAbandoned));
+        }
+    }
     // Publish the readiness hint before waking its observer. Actual join still
     // waits for this callback and reads the terminal result, including a failed
     // Finished notification; readiness alone never releases host dependencies.
     host.observation.finish();
     if let Err(cause) = call(unsafe { host.table.notify.unwrap()(host.table.context, 2, &SvProjectorFailureObservation::NONE) }, Op::Notify) { host.record(6, cause); }
     let joined = host.frame.lock().unwrap_or_else(|e| e.into_inner()).cookie == 0
+        && host.state.lock().unwrap_or_else(|e| e.into_inner()).cookie == 0
         && host.replies.lock().unwrap_or_else(|e| e.into_inner()).iter().all(|item| matches!(item, ReplySlot::Free));
     let mut completion = host.completion.lock().unwrap_or_else(|e| e.into_inner());
     completion.joined = u32::from(joined);
@@ -242,7 +258,7 @@ pub(super) fn run(&self, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(
 }
 
 #[must_use]
-pub enum Delivery<'a> { Frame(FrameLoan<'a>), Empty, TimedOut, Stop, Disconnected }
+pub enum Delivery<'a> { Frame(FrameLoan<'a>), State(super::StateLoan<'a>), Empty, TimedOut, Stop, Disconnected }
 #[must_use]
 /// ```compile_fail,E0505
 /// use statevec_projector_api::plugin_v1::FrameLoan;
@@ -263,7 +279,8 @@ impl ProjectorSource<'_> {
         // These are checked local author errors, not host callback evidence.
         // Handling them does not revoke the scope or manufacture a host fault.
         let nanos = u64::try_from(wait.as_nanos()).map_err(|_| A::Length { actual: u64::MAX, maximum: u64::MAX })?;
-        if self.host.frame.lock().unwrap_or_else(|e| e.into_inner()).cookie != 0 { return Err(A::BorrowConflict.into()); }
+        if self.host.frame.lock().unwrap_or_else(|e| e.into_inner()).cookie != 0
+            || self.host.state.lock().unwrap_or_else(|e| e.into_inner()).cookie != 0 { return Err(A::BorrowConflict.into()); }
         let host = self.host;
         host.checked(self.receive(nanos))
     }
@@ -272,9 +289,10 @@ impl ProjectorSource<'_> {
         // SAFETY: the sole !Send source facade calls the live table; outputs are
         // disjoint and all returned bytes stay borrowed under the resulting loan.
         let result = call(unsafe { self.host.table.receive.unwrap()(self.host.table.context, nanos, &mut tag, &mut cookie) }, Op::Receive);
-        if (result.is_err() || tag != 0) && cookie != 0 {
-            *self.host.frame.lock().unwrap_or_else(|e| e.into_inner()) = Held { cookie, attempted: true };
-            self.host.record(2, A::InvalidHandle.into());
+        if (result.is_err() || !matches!(tag, 0 | 5)) && cookie != 0 {
+            let (held, slot) = if tag == 5 { (&self.host.state, 3) } else { (&self.host.frame, 2) };
+            *held.lock().unwrap_or_else(|e| e.into_inner()) = Held { cookie, attempted: true };
+            self.host.record(slot, A::InvalidHandle.into());
             return Err(result.err().unwrap_or_else(|| A::InvalidHandle.into()));
         }
         result?;
@@ -289,6 +307,14 @@ impl ProjectorSource<'_> {
                 Ok(Delivery::Frame(FrameLoan { host: self.host, cookie, info, _local: PhantomData }))
             }
             1 => Ok(Delivery::Empty), 2 => Ok(Delivery::Disconnected), 3 => Ok(Delivery::Stop),
+            5 => {
+                if cookie == 0 { return Err(A::InvalidHandle.into()); }
+                *self.host.state.lock().unwrap_or_else(|e| e.into_inner()) = Held { cookie, attempted: false };
+                match super::state::StateLoan::acquire(self.host, cookie) {
+                    Ok(loan) => Ok(Delivery::State(loan)),
+                    Err(cause) => { self.host.record(1, cause); self.host.release_state(); Err(cause) }
+                }
+            }
             4 if nanos != 0 => Ok(Delivery::TimedOut), actual => Err(A::Flag { actual }.into()),
         }
     }
