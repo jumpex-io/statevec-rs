@@ -55,7 +55,13 @@ version it describes. Application library types can be generic over
 `cut.position()` exposes identity, source position and actual execution frontier
 for inspection. Those readable fields cannot reconstruct a token. For a
 continuous-history source, `cut.offset()` returns `Some(ConsumeOffset)` with
-these four fields; latest-state cuts return `None`:
+these four fields; latest-state cuts return `None`. The dynamic V1 facade uses
+the same `Option<ConsumeOffset>` result as the native cut. A continuous consumer
+must handle `None` as a mode mismatch; never replace it with a zero offset or
+interpret it as a request to initialize history. This is a source-level change
+from the earlier local V1 draft, not a wire-layout or version-negotiation change.
+
+The stored continuous offset is:
 
 ```rust
 use statevec_projector_api::ConsumeOffset;

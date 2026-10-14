@@ -194,6 +194,79 @@ fn state_abandonment_waits_for_scoped_service_result() {
     assert_eq!(f.base.frame_releases.load(Ordering::SeqCst), 1);
 }
 
+#[test]
+fn state_abandonment_does_not_replace_reply_cleanup_failure() {
+    let mut f = StateFixture::new(Fault::None);
+    f.base.fail_reply = true;
+    let c = f.run(|io| {
+        let ProjectorIoParts { mut source, control, .. } = io.split();
+        let Offer::Queued(reply) = control.offer_status()? else { panic!("held reply") };
+        let Delivery::State(loan) = source.try_next()? else { panic!("held state") };
+
+        drop(loan); // Provisional abandonment, before an independent cleanup fails.
+        drop(reply);
+        Ok(())
+    });
+
+    assert_eq!(c.run_failure, SvStatus::SUCCESS, "abandonment must not invent a run failure");
+    assert_eq!(c.state_release_failure, SvStatus::SUCCESS);
+    assert_eq!(c.reply_release_failure, (&ProjectorFailure::HostPanicked).into());
+    assert_eq!(c.joined, 1);
+    assert!(c.decode(Some(ProjectorWorkerFailure::ReplyRelease(ProjectorFailure::HostPanicked))).is_ok());
+    assert_eq!(f.base.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(f.base.frame_releases.load(Ordering::SeqCst), 1);
+    assert!(!f.base.calls.lock().unwrap().contains(&(1, 1)), "no abandonment Run notification");
+}
+
+#[test]
+fn state_abandonment_does_not_replace_service_join_failure() {
+    let f = StateFixture::new(Fault::None);
+    let c = f.run(|io| {
+        let ProjectorIoParts { mut source, services, .. } = io.split();
+        services.spawn(|stop| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !stop.is_stopping()? {
+                if std::time::Instant::now() >= deadline { return Err(ProjectorFailure::Application { code: 9701 }); }
+                std::thread::yield_now();
+            }
+            panic!("service fails after the unfinished state is released");
+        })?;
+        let Delivery::State(loan) = source.try_next()? else { panic!("held state") };
+        drop(loan);
+        Ok(())
+    });
+
+    assert_eq!(c.run_failure, SvStatus::SUCCESS, "service join failure outranks provisional abandonment");
+    assert_eq!(c.state_release_failure, SvStatus::SUCCESS);
+    assert_eq!(c.failed_service_joins, 1);
+    assert_eq!(c.joined, 1);
+    assert!(c.decode(Some(ProjectorWorkerFailure::ServiceJoinPanicked)).is_ok());
+    assert!(!f.base.calls.lock().unwrap().contains(&(1, 1)), "no abandonment Run notification");
+}
+
+#[test_case::test_case(3; "source_before_target")]
+#[test_case::test_case(5; "source_after_target")]
+fn state_acquire_rejects_a_well_formed_source_at_the_wrong_target(source_index: u64) {
+    let mut f = StateFixture::new(Fault::None);
+    let start = f.start(); // Startup promised S=4; keep this independent of the returned source.
+    assert_eq!(start.rebuild_target, 4);
+    f.info.position.raft_index = source_index;
+    let cause = ProjectorFailure::AbiContract(ProjectorAbiFailure::InvalidHandle);
+
+    let c = unsafe { super::super::with_host(&f.table(), &start, |io| {
+        let mut source = io.split().source;
+        assert!(matches!(source.try_next(), Err(actual) if actual == cause), "well-formed metadata at a different S must refuse acquisition");
+        Ok(()) // Handling the error cannot make the malformed host evidence successful.
+    }) }.unwrap();
+
+    assert_eq!(c.run_failure, (&cause).into());
+    assert_eq!(c.state_release_failure, SvStatus::SUCCESS);
+    assert_eq!(c.joined, 1);
+    assert_eq!(f.reads.load(Ordering::SeqCst), 0, "do not read the wrong baseline");
+    assert_eq!(f.finishes.load(Ordering::SeqCst), 0, "do not request a cut");
+    assert_eq!(f.base.frame_releases.load(Ordering::SeqCst), 1, "return acquired custody exactly once");
+}
+
 #[test_case::test_case(Fault::BadInfo; "invalid_info")]
 #[test_case::test_case(Fault::Read; "explicit_read_failure")]
 #[test_case::test_case(Fault::EarlyEnd; "count_mismatch_at_eof")]
