@@ -25,3 +25,7 @@ libc.workspace = true
 [[example]]
 name = "projector_v1_delivery"
 crate-type = ["cdylib"]
+
+[[example]]
+name = "projector_v1_observer"
+crate-type = ["cdylib"]
