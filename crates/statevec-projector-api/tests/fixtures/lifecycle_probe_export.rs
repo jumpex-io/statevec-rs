@@ -2,7 +2,7 @@
 //! callback interposer for exactly the same joined/retained lifetime; completion
 //! bytes and ready/observation values are never rewritten by the fixture.
 use super::*;
-use std::{alloc::{GlobalAlloc, Layout, System}, cell::Cell, mem::size_of, ptr, sync::OnceLock};
+use std::{alloc::{GlobalAlloc, Layout, System}, cell::Cell, mem::{size_of, ManuallyDrop}, ptr, sync::OnceLock};
 thread_local! { static ALLOCS: Cell<Option<usize>> = const { Cell::new(None) }; }
 struct Counting;
 #[global_allocator]
@@ -68,12 +68,26 @@ unsafe extern "C" fn start(raw: *mut *mut c_void, host: *const SvProjectorHostV1
         let c = unsafe { &mut *(*raw).cast::<Holding>() };
         let mut callbacks = Box::new(callbacks::Callbacks { original: unsafe { *host }, harness: c.harness.clone() });
         let table = Box::new(callbacks.table());
-        let mut inner = ptr::null_mut();
-        let result = unsafe { generated().start.unwrap()(&mut c.inner, &*table, input, &mut inner) };
-        if result.is_success() {
-            assert!(c.inner.is_null() && !inner.is_null());
+        let original = c.inner;
+        // A malformed generated transfer (including during a source probe)
+        // must not make this interposer free callbacks before the real host
+        // can retain them. Default to retained even if our own report panics.
+        let mut worker = ManuallyDrop::new(Box::new(Worker { inner: ptr::null_mut(), callbacks, _table: table }));
+        let table = &*worker._table as *const SvProjectorHostV1;
+        let result = unsafe { generated().start.unwrap()(&mut c.inner, table, input, &mut worker.inner) };
+        let unchanged = c.inner == original;
+        if c.inner.is_null() {
             drop(unsafe { Box::from_raw((*raw).cast::<Holding>()) });
-            unsafe { *raw = ptr::null_mut(); *out = Box::into_raw(Box::new(Worker { inner, callbacks, _table: table })).cast(); }
+            unsafe { *raw = ptr::null_mut(); }
+        } else if !unchanged {
+            // Preserve a changed handle identity instead of normalizing it to
+            // an apparently unchanged prepared holding. Old custody is unknown.
+            unsafe { *raw = Box::into_raw(Box::new(Holding { inner: c.inner, harness: c.harness.clone() })).cast(); }
+        }
+        if !worker.inner.is_null() {
+            unsafe { *out = Box::into_raw(ManuallyDrop::into_inner(worker)).cast(); }
+        } else if !result.is_success() && unchanged {
+            drop(ManuallyDrop::into_inner(worker));
         }
         result
     })
@@ -94,14 +108,16 @@ unsafe extern "C" fn stop(raw: *mut c_void) -> SvStatus {
 }
 unsafe extern "C" fn join(raw: *mut *mut c_void, out: *mut SvProjectorCompletion) -> SvStatus {
     caught(|| {
-        let mut worker = unsafe { Box::from_raw((*raw).cast::<Worker>()) };
-        unsafe { *raw = ptr::null_mut(); }
+        let mut worker = ManuallyDrop::new(unsafe { Box::from_raw((*raw).cast::<Worker>()) });
         let result = unsafe { generated().join.unwrap()(&mut worker.inner, out) };
+        if worker.inner.is_null() { unsafe { *raw = ptr::null_mut(); } }
+        let confirmed = result.is_success() && worker.inner.is_null()
+            && unsafe { *out }.decode(None).is_ok_and(|completion| completion.joined);
         let h = &worker.callbacks.harness;
         h.event(format_args!("joined={} polls={} allocations={} releases={} release_observed={} author_calls={}",
             unsafe { (*out).joined }, h.polls.load(Ordering::Relaxed), h.allocations.load(Ordering::Relaxed),
             h.releases.load(Ordering::Relaxed), h.release_observed.load(Ordering::Acquire), h.author_calls.load(Ordering::Relaxed)));
-        if !result.is_success() || unsafe { (*out).joined } == 0 { std::mem::forget(worker); }
+        if confirmed { drop(ManuallyDrop::into_inner(worker)); }
         result
     })
 }
