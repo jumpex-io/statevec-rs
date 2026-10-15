@@ -507,6 +507,7 @@ fn slot_candidate_guard_returns_original_without_publishing(case: InvalidReserva
         attempt: BatchAttempt::Eligible { at: clock.sample().unwrap() },
         submit_route: None,
         submit_transmissions: 0,
+        delivery: SubmitDelivery::Unsent,
         committed: None,
         notice: None,
     };

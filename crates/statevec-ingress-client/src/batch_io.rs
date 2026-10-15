@@ -118,9 +118,13 @@ impl<S: Read + Write> BatchIoWorker<S> {
             return self.runnable();
         };
         let offered = bytes.len() - *offset;
+        let mut unwritten = *offset == 0;
         let result = match self.stream.write(&bytes[*offset..]) {
             Ok(0) => Err(io::ErrorKind::WriteZero.into()),
-            Ok(written) if written > offered => Err(io::ErrorKind::InvalidData.into()),
+            Ok(written) if written > offered => {
+                unwritten = false; // Invalid device accounting cannot certify non-delivery.
+                Err(io::ErrorKind::InvalidData.into())
+            }
             Ok(written) => {
                 *offset += written;
                 if *offset < bytes.len() {
@@ -137,14 +141,25 @@ impl<S: Read + Write> BatchIoWorker<S> {
         };
         let request_id = *request_id;
         self.write = None;
+        if unwritten && let Err(source) = result {
+            return Poll::Ready(Some(super::ClientEvent::WriteUnwritten {
+                operation_id: self.operation_id,
+                request_id,
+                source,
+            }));
+        }
         Poll::Ready(Some(super::ClientEvent::Written { operation_id: self.operation_id, request_id, result }))
     }
 
     /// Dispose of the real stream AND partial buffers before returning Closed.
-    /// This acknowledges physical retirement, not cancellation or non-admission.
+    /// Retirement may also certify an exact zero-write; it does not classify admission.
     pub fn close(self) -> super::ClientEvent {
         let operation_id = self.operation_id;
+        let unwritten = self.write.as_ref().and_then(|(id, _, offset)| (*offset == 0).then_some(*id));
         drop(self);
-        super::ClientEvent::Closed { operation_id }
+        match unwritten {
+            Some(request_id) => super::ClientEvent::ClosedUnwritten { operation_id, request_id },
+            None => super::ClientEvent::Closed { operation_id },
+        }
     }
 }

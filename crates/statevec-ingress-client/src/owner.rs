@@ -23,6 +23,8 @@ enum ClientState {
         maximum_commands: u32,
         maximum_frame_bytes: u32,
         retry_millis: u64,
+        // Idle connection failures back off; accepted batch retry timing is unchanged.
+        idle_reconnect_millis: u64,
         operation_millis: u64,
         lifetime_millis: u64,
         unavailable_reply_limit: u32,
@@ -91,6 +93,11 @@ pub enum ClientEvent {
     Closed {
         operation_id: u64,
     },
+    /// Actual socket disposal also certifies zero bytes for this exact Write.
+    ClosedUnwritten {
+        operation_id: u64,
+        request_id: NonZeroU64,
+    },
     /// One complete bounded frame from this connection, or its read failure.
     /// Framing/short reads remain mechanical; the owner decodes and classifies.
     Read {
@@ -103,6 +110,12 @@ pub enum ClientEvent {
         operation_id: u64,
         request_id: NonZeroU64,
         result: std::io::Result<()>,
+    },
+    /// The physical Write failed before accepting any bytes, including prefixes.
+    WriteUnwritten {
+        operation_id: u64,
+        request_id: NonZeroU64,
+        source: std::io::Error,
     },
     Stop,
 }

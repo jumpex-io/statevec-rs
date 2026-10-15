@@ -144,7 +144,7 @@ impl BatchTerminalResult {
 #[derive(Debug)]
 enum BatchAttempt {
     // Eligibility time is scheduling only. First-send uncertainty is the
-    // independent, saturating submit_transmissions fact on the original slot.
+    // independent delivery fact on the original slot.
     Eligible {
         at: MonotonicMillis,
     },
@@ -183,6 +183,40 @@ impl BatchAttempt {
 }
 
 #[derive(Debug)]
+enum SubmitDelivery {
+    Unsent,
+    Pending { operation_id: u64, request_id: NonZeroU64 },
+    Sole { operation_id: u64, request_id: NonZeroU64 },
+    // Multiple possibly exposed writes, or imported uncertainty. Never reset.
+    Uncertain,
+}
+
+impl SubmitDelivery {
+    fn dispatch(&mut self, operation_id: u64, request_id: NonZeroU64) {
+        *self = match self {
+            Self::Unsent => Self::Pending { operation_id, request_id },
+            _ => Self::Uncertain,
+        };
+    }
+
+    fn returned(&mut self, operation_id: u64, request_id: NonZeroU64) {
+        if let Self::Pending { operation_id: held, request_id: request } = self {
+            if *held == operation_id && *request == request_id {
+                *self = Self::Sole { operation_id, request_id };
+            }
+        }
+    }
+
+    fn unwritten(&mut self, operation_id: u64, request_id: NonZeroU64) {
+        if let Self::Pending { operation_id: held, request_id: request } = self {
+            if *held == operation_id && *request == request_id {
+                *self = Self::Unsent;
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
 enum BatchSlot {
     Pending {
         handle: BatchHandle,
@@ -193,9 +227,9 @@ enum BatchSlot {
         // Single-slot dispatch makes these contiguous; after commitment only
         // queries allocate IDs, so they cannot enter this fixed-size interval.
         submit_route: Option<(u64, NonZeroU64, NonZeroU64)>,
-        // Saturates at two deliberately: zero / exactly one / retransmitted.
-        // Fresh wire IDs never erase uncertainty from a prior transmission/import.
+        // Dispatch/ID history, not delivery: zero / first / later or import.
         submit_transmissions: u8,
+        delivery: SubmitDelivery,
         // Only exact committed/apply replies establish this irreversible fact.
         committed: Option<EntryBinding>,
         // Canonical notification custody, never read back as retry authority.
@@ -228,6 +262,7 @@ enum BatchConnection {
     Connected {
         operation_id: u64,
         peer: usize,
+        connected_at: MonotonicMillis,
         // At most one physical frame write, even if its slot already settled.
         write: Option<(NonZeroU64, MonotonicMillis)>,
     },
@@ -363,6 +398,7 @@ impl IngressClientOwner {
                 maximum_commands,
                 maximum_frame_bytes,
                 retry_millis,
+                idle_reconnect_millis: retry_millis,
                 operation_millis,
                 lifetime_millis,
                 unavailable_reply_limit,
@@ -477,6 +513,11 @@ impl IngressClientOwner {
             // Two denotes prior uncertainty, not an exact transmission count.
             // Import cannot acquire the fresh request's NotAdmitted proof.
             submit_transmissions,
+            delivery: if submit_transmissions == 0 {
+                SubmitDelivery::Unsent
+            } else {
+                SubmitDelivery::Uncertain
+            },
             committed,
             notice: None,
         };
@@ -548,8 +589,10 @@ impl IngressClientOwner {
             ClientEvent::Drive
             | ClientEvent::Connected { .. }
             | ClientEvent::Closed { .. }
+            | ClientEvent::ClosedUnwritten { .. }
             | ClientEvent::Read { .. }
-            | ClientEvent::Written { .. } => clock(),
+            | ClientEvent::Written { .. }
+            | ClientEvent::WriteUnwritten { .. } => clock(),
             _ => Ok(*last_now),
         };
         self.drive_batch(event, now)
@@ -560,6 +603,26 @@ impl IngressClientOwner {
             self.stop_batches(ClientFailure::Stopped);
             return self.batch_effect();
         }
+        let event = match event {
+            ClientEvent::WriteUnwritten { operation_id, request_id, source } => {
+                if matches!(&self.state, ClientState::Batch {
+                    connection: BatchConnection::Connected { operation_id: current, write: Some((id, _)), .. }
+                        | BatchConnection::Switching { operation_id: current, write: Some((id, _)), .. }, ..
+                } if *current == operation_id && *id == request_id) {
+                    self.observe_unwritten(operation_id, request_id);
+                }
+                ClientEvent::Written { operation_id, request_id, result: Err(source) }
+            }
+            ClientEvent::ClosedUnwritten { operation_id, request_id } => {
+                if matches!(&self.state, ClientState::Batch {
+                    connection: BatchConnection::Closing { operation_id: current, .. }, ..
+                } if *current == operation_id) {
+                    self.observe_unwritten(operation_id, request_id);
+                }
+                ClientEvent::Closed { operation_id }
+            }
+            event => event,
+        };
         let event = match event {
             ClientEvent::Read { operation_id, result } => return self.read_batch_reply(operation_id, result, sample),
             ClientEvent::Written { operation_id, request_id, result } => {
@@ -613,7 +676,7 @@ impl IngressClientOwner {
             ClientEvent::Connected { operation_id, result: Ok(()) } => {
                 if let BatchConnection::Connecting { operation_id: pending, peer, .. } = connection {
                     if operation_id == *pending {
-                        *connection = BatchConnection::Connected { operation_id, peer: *peer, write: None };
+                        *connection = BatchConnection::Connected { operation_id, peer: *peer, connected_at: now, write: None };
                     }
                 }
             }
@@ -659,9 +722,15 @@ impl IngressClientOwner {
         if let Ok(now) = now {
             self.expire_batches(now);
         }
-        let ClientState::Batch { connection, .. } = &mut self.state;
+        let ClientState::Batch { connection, slot, .. } = &mut self.state;
         if let BatchConnection::Closing { operation_id: pending, retry } = connection {
             if operation_id == *pending {
+                if let Some(BatchSlot::Pending { delivery, .. }) = slot {
+                    if let SubmitDelivery::Pending { request_id, .. } = delivery {
+                        let request_id = *request_id;
+                        delivery.returned(operation_id, request_id);
+                    }
+                }
                 *connection = match *retry {
                     Some((retry_at, peer)) => BatchConnection::Disconnected { retry_at, peer },
                     None => BatchConnection::Stopped,
@@ -671,6 +740,20 @@ impl IngressClientOwner {
         match now {
             Ok(_) => self.batch_effect(),
             Err(cause) => ClientResult::ClockFailed { cause },
+        }
+    }
+
+    fn observe_submit_write(&mut self, operation_id: u64, request_id: NonZeroU64) {
+        let ClientState::Batch { slot, .. } = &mut self.state;
+        if let Some(BatchSlot::Pending { delivery, .. }) = slot {
+            delivery.returned(operation_id, request_id);
+        }
+    }
+
+    fn observe_unwritten(&mut self, operation_id: u64, request_id: NonZeroU64) {
+        let ClientState::Batch { slot, .. } = &mut self.state;
+        if let Some(BatchSlot::Pending { delivery, .. }) = slot {
+            delivery.unwritten(operation_id, request_id);
         }
     }
 
@@ -685,7 +768,7 @@ impl IngressClientOwner {
             self.expire_batches(now);
         }
         let next_peer = self.next_batch_peer();
-        let ClientState::Batch { connection, retry_millis, .. } = &mut self.state;
+        let ClientState::Batch { connection, .. } = &mut self.state;
         // Failure returns physical custody, including after Stop/timeout. A bad
         // clock has already made retry None, but cannot retain that resource.
         let retry_peer = match connection {
@@ -711,13 +794,14 @@ impl IngressClientOwner {
             Err(_) => return ClientResult::ConnectionFailed { operation_id, source, next_wake: None },
         };
         if let Some(peer) = retry_peer {
-            let retry_at = match now.checked_add(*retry_millis) {
+            let retry_at = match self.next_reconnect_at(now) {
                 Ok(due) => due,
                 Err(time_failure) => {
                     self.stop_batches(ClientFailure::InvalidTime { source: time_failure });
                     return ClientResult::ConnectionFailed { operation_id, source, next_wake: None };
                 }
             };
+            let ClientState::Batch { connection, .. } = &mut self.state;
             *connection = BatchConnection::Disconnected { retry_at, peer };
         }
         ClientResult::ConnectionFailed { operation_id, source, next_wake: self.batch_deadline() }
@@ -868,6 +952,7 @@ fn validate_batch_state(
                 BatchSlot::Pending {
                     attempt: BatchAttempt::Eligible { .. },
                     submit_transmissions: 0,
+                    delivery: SubmitDelivery::Unsent,
                     committed: None,
                     notice: None,
                     submit_route: None,
@@ -875,6 +960,7 @@ fn validate_batch_state(
                 } | BatchSlot::Pending {
                     attempt: BatchAttempt::Eligible { .. },
                     submit_transmissions: 2,
+                    delivery: SubmitDelivery::Uncertain,
                     notice: None,
                     submit_route: None,
                     ..
@@ -952,16 +1038,28 @@ fn validate_batch_state(
             return Err(ClientFailure::BatchReservationInvariant);
         }
         match slot {
-            BatchSlot::Pending { attempt, committed, notice, submit_route, submit_transmissions, .. } => {
+            BatchSlot::Pending { attempt, committed, notice, submit_route, submit_transmissions, delivery, .. } => {
                 if *submit_transmissions > 2
                     || (*submit_transmissions == 0
                         && (!matches!(attempt, BatchAttempt::Eligible { .. })
                             || committed.is_some()
                             || notice.is_some()
-                            || submit_route.is_some()))
+                            || submit_route.is_some()
+                            || !matches!(delivery, SubmitDelivery::Unsent)))
                     || (attempt.query().is_some() && committed.is_none())
                 {
                     return Err(ClientFailure::BatchReservationInvariant);
+                }
+                if let SubmitDelivery::Sole { operation_id, request_id: exposed }
+                    | SubmitDelivery::Pending { operation_id, request_id: exposed } = delivery
+                {
+                    if *operation_id == 0
+                        || *operation_id >= next_connection_id
+                        || *exposed < handle.context.request_id
+                        || *exposed >= request_id
+                    {
+                        return Err(ClientFailure::BatchReservationInvariant);
+                    }
                 }
                 if matches!(attempt, BatchAttempt::Awaiting { operation_id, .. } if submit_route.map(|(id, _, _)| id) != Some(*operation_id))
                 {

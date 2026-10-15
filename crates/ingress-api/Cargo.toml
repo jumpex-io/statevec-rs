@@ -13,3 +13,6 @@ categories.workspace = true
 [dependencies]
 serde.workspace = true
 statevec_frame = { package = "statevec-frame", version = "0.3.0", path = "../statevec-frame" }
+
+[dev-dependencies]
+test-case.workspace = true

@@ -201,6 +201,36 @@ fn ready(driver: &mut BatchDriverWorker<ScriptIo>, client: &mut BatchClient) {
 }
 
 #[test]
+fn driver_eof_before_first_write_preserves_non_admission_proof() {
+    let clock = Clock::new();
+    let mut client = client(&clock);
+    let first = bytes();
+    let second = bytes();
+    let (mut driver, _) = driver(&[first.clone(), second.clone()]);
+    driver.step(&mut client).unwrap(); // Connect.
+    driver.step(&mut client).unwrap(); // Connected, before the first read/write poll.
+    assert!(matches!(client.status(), ClientStatus::Batch { connected: true, .. }));
+    first.lock().unwrap().eof = true;
+    let handle = client.try_submit(batch(1)).unwrap();
+    drain(&mut driver, &mut client);
+    assert_eq!(first.lock().unwrap().writes, 0);
+    assert_eq!(first.lock().unwrap().drops, 1, "real driver must return zero-write proof after disposing the socket");
+
+    clock.set(INITIAL_TIME + RETRY);
+    drain(&mut driver, &mut client);
+    let received = requests(&second);
+    assert_eq!(received.len(), 1);
+    assert_eq!(received[0].batch().commitment_v1(), handle.intent);
+    enqueue(&second, reply(&received[0], ReplyDisposition::Refused(BatchSubmitRefusal::TooLarge)));
+    ready(&mut driver, &mut client);
+    drain(&mut driver, &mut client);
+    assert!(matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::NotAdmitted { handle: returned, .. })) if returned == handle));
+    driver.stop(&mut client).unwrap();
+    drain(&mut driver, &mut client);
+    assert!(driver.is_quiescent());
+}
+
+#[test]
 fn manual_driver_decodes_short_request_and_retains_duplicate_coalesced_terminal() {
     let clock = Clock::new();
     let mut client = client(&clock);
@@ -342,6 +372,38 @@ fn partial_reply_is_discarded_on_reconnect_but_a_latched_terminal_survives() {
         matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::Applied { handle: actual, .. })) if actual == handle)
     );
     assert!(client.poll_event().is_none());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn client_socket_arms_kernel_liveness_before_connect_returns() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut worker = BatchTcpWorker::new().unwrap();
+    let stream = worker.connect(listener.local_addr().unwrap()).unwrap();
+    let socket = socket2::SockRef::from(&stream);
+
+    assert!(socket.keepalive().unwrap(), "a silently lost peer must not retain an idle socket indefinitely");
+    assert_eq!(socket.tcp_keepalive_time().unwrap(), Duration::from_secs(5));
+    assert_eq!(socket.tcp_keepalive_interval().unwrap(), Duration::from_secs(1));
+    assert_eq!(socket.tcp_keepalive_retries().unwrap(), 3);
+    assert_eq!(socket.tcp_user_timeout().unwrap(), Some(Duration::from_secs(8)), "all three idle probes need a response window");
+}
+
+#[test_case::test_case(Duration::from_millis(7999); "before last probe window")]
+#[test_case::test_case(Duration::from_micros(8_000_001); "fractional millisecond")]
+#[test_case::test_case(Duration::from_millis(i32::MAX as u64 + 1); "kernel signed integer overflow")]
+fn client_kernel_budget_rejects_incoherent_values(timeout: Duration) {
+    assert!(matches!(BatchTcpWorker::with_tcp_user_timeout(timeout), Err(e) if e.kind() == io::ErrorKind::InvalidInput));
+}
+
+#[cfg(target_os = "linux")]
+#[test_case::test_case(Duration::from_secs(30); "ordinary physical budget")]
+#[test_case::test_case(Duration::from_millis(i32::MAX as u64); "largest kernel budget")]
+fn client_kernel_budget_is_configurable_without_changing_owner_deadlines(budget: Duration) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut worker = BatchTcpWorker::with_tcp_user_timeout(budget).unwrap();
+    let stream = worker.connect(listener.local_addr().unwrap()).unwrap();
+    assert_eq!(socket2::SockRef::from(&stream).tcp_user_timeout().unwrap(), Some(budget));
 }
 
 #[test]

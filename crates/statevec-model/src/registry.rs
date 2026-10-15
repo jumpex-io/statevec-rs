@@ -20,6 +20,21 @@ use std::collections::BTreeMap;
 /// adversarial-collision defense.
 pub type SchemaFingerprint = [u8; 16];
 
+/// Failure to validate record field values before generated accessors or indexes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecordValueError {
+    /// The record cannot contain its declared schema payload.
+    PayloadTooShort { kind: RecordKind, required: usize, actual: usize },
+    /// A checked field does not fit its type's encoding in the declared record layout.
+    FieldLayout { kind: RecordKind, field_index: u32, offset: u32, len: u32 },
+    /// An enum field has no matching type definition in this registry.
+    MissingDefinition { kind: RecordKind, field_index: u32 },
+    /// A byte does not name a declared variant; discriminants need not be contiguous.
+    InvalidValue { kind: RecordKind, field_index: u32, value: u8 },
+    /// A FixedBytes length prefix exceeds the field's declared capacity.
+    FixedBytesLength { kind: RecordKind, field_index: u32, len: u16, capacity: u32 },
+}
+
 /// Complete schema identity for compatibility checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SchemaIdentity {
@@ -201,6 +216,56 @@ impl SchemaRegistry {
     #[inline]
     pub fn enum_defs(&self) -> impl Iterator<Item = &EnumDefinition> + '_ {
         self.enum_defs.values()
+    }
+
+    /// Checks the field values generated infallible getters require: declared
+    /// EnumU8 discriminants and FixedBytes lengths within capacity.
+    ///
+    /// Reserved spans remain the responsibility of `validate_reserved_bytes_zero`.
+    /// FixedBytes padding after the logical length is not checked here. This
+    /// does not call user encoders or establish arbitrary callback safety.
+    pub fn validate_record_values(&self, definition: &RecordDefinition, data: &[u8]) -> Result<(), RecordValueError> {
+        let kind = definition.kind;
+        if data.len() < definition.data_size as usize {
+            return Err(RecordValueError::PayloadTooShort {
+                kind,
+                required: definition.data_size as usize,
+                actual: data.len(),
+            });
+        }
+        for field in definition.fields {
+            let field_index = field.field_index;
+            let layout = RecordValueError::FieldLayout { kind, field_index, offset: field.offset, len: field.len };
+            match field.ty {
+                FieldType::EnumU8 => {
+                    if field.len != 1 || field.offset >= definition.data_size {
+                        return Err(layout);
+                    }
+                    let enum_def = field
+                        .enum_type_name
+                        .and_then(|name| self.enum_defs.get(name))
+                        .ok_or(RecordValueError::MissingDefinition { kind, field_index })?;
+                    let value = data[field.offset as usize];
+                    if !enum_def.variants.iter().any(|variant| variant.discriminant == value) {
+                        return Err(RecordValueError::InvalidValue { kind, field_index, value });
+                    }
+                }
+                FieldType::FixedBytes => {
+                    // Encoded as a little-endian u16 length followed by the capacity.
+                    let Some(capacity) = field.len.checked_sub(2) else { return Err(layout) };
+                    if field.offset.checked_add(field.len).is_none_or(|end| end > definition.data_size) {
+                        return Err(layout);
+                    }
+                    let offset = field.offset as usize;
+                    let len = u16::from_le_bytes([data[offset], data[offset + 1]]);
+                    if u32::from(len) > capacity {
+                        return Err(RecordValueError::FixedBytesLength { kind, field_index, len, capacity });
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     /// Encodes a unique key for a record buffer when the record supports it.

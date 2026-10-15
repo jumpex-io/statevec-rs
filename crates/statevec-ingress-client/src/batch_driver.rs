@@ -247,8 +247,10 @@ impl<P: BatchConnectIo> BatchDriverWorker<P> {
             }
             ClientResult::Close { operation_id } => {
                 drop(self.connecting.take());
-                drop(self.connected.take());
-                self.observation = Some(ClientEvent::Closed { operation_id });
+                self.observation = Some(match self.connected.take() {
+                    Some(worker) => worker.close(),
+                    None => ClientEvent::Closed { operation_id },
+                });
                 self.connect_ready = false;
                 Ok(BatchDriverStep::Runnable)
             }
