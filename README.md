@@ -7,6 +7,18 @@ commands and checks their execution.
 This repository provides the open-source Rust development libraries, user
 guide, examples and a small in-memory engine for local business tests.
 
+## Development compatibility
+
+The `dev` branch contains unreleased **0.3.0** work. It includes source-breaking
+changes from 0.2.1, notably the
+[Projector recovery and offset API](docs/user-guide/projectors.md#migrating-from-021-to-030).
+Following `dev` is not a compatible update to an existing 0.2.1 consumer.
+Update the application explicitly and rebuild its plugins against the matched
+host/SDK revision. Keep all StateVec crates at that same reviewed Git revision;
+use an exact `rev` and retain the lockfile for reproducible deployments, not a
+moving branch head. Promotion to `dev` is not a registry release or release
+qualification, and the package version alone does not establish compatibility.
+
 ## Start here
 
 Read the [user guide](docs/user-guide/README.md), then run the examples:
@@ -84,9 +96,10 @@ workflow. This repository currently ships Rust development libraries and local
 tests. Single-host serving and replay executables are outside its delivery
 scope.
 
-The public API retains plugin ABI version 2 for integration work. Its presence
-does not establish that dynamic plugin loading or online upgrades are available
-in the production cluster.
+Configured hosts use the public Core V3 and Projector V1 interfaces with a
+matched host build. The legacy plugin ABI version 2 remains a separate surface;
+its presence does not provide compatibility with those configured interfaces
+or establish support for online upgrades.
 
 ## Development
 
