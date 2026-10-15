@@ -612,6 +612,7 @@ version = "0.3.0"
 dependencies = [
  "serde",
  "sha2 0.11.0",
+ "statevec-model",
  "test-case",
 ]
 

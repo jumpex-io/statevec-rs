@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+statevec_model.workspace = true
 serde.workspace = true
 sha2 = "0.11.0"
 

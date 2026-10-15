@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub mod applied_binding;
+pub mod command;
 mod clock;
 mod digest;
 pub mod outcome;

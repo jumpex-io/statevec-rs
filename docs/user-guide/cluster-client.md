@@ -15,6 +15,31 @@ statevec-frame = { git = "https://github.com/jumpex-io/statevec-rs.git", branch 
 
 Keep `Cargo.lock` under version control to pin the reviewed revision.
 
+## Command payload codec
+
+Use `statevec_frame::command::encode_runtime_binary_v0_command_payload(&Command)`
+and `RuntimeBinaryV0CommandDecoder::{decode_checked, decode_checked_fields}`.
+`Command` is the public `statevec_model::command::Command` (also re-exported by
+`statevec` and `statevec-api`). Native engine compatibility imports re-export
+this exact implementation. No private engine crate is needed by a client or
+signing service.
+
+The codec tuple remains `runtime_binary_v0`, version 0, with the existing
+30-byte little-endian header. The body length must fit u32 and header plus body
+must fit usize; deployment request limits are checked separately by ingress.
+Command kind, presence flags and sequence/time fields have their existing
+meaning. Signed intent bytes and stored recovery-journal payloads do not change.
+Switch imports, not stored bytes; do not decode/re-encode uncertain original
+intents as a recovery migration.
+
+`CommandPayloadFailure` is exhaustive: `UnsupportedCodec`,
+`UnsupportedCodecVersion`, `Truncated`, `WrongMagic`, `UnsupportedVersion`,
+`ReservedFlags`, `InvalidKind`, `LengthOverflow`, `TrailingBytes`,
+`SequenceWithoutFlag`, and `TimeWithoutFlag`. Match these typed variants, not
+Display text. The codec neither signs nor submits commands and its success is
+not an admission receipt. These additions are on the unreleased 0.3.0 dev line;
+pin a published revision containing them before external deployment.
+
 ## Prepare and submit
 
 Encode commands using your application's schema. `ClientStreamBatch::try_new`
