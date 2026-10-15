@@ -10,6 +10,7 @@ events and local testing with the open-source StateVec Rust libraries.
 | [Business logic](statevec-business-development/references/business-logic.md) | Handlers, typed errors, rejection codes and determinism |
 | [Integration and testing](statevec-business-development/references/integration-and-testing.md) | Local execution, production integration and version changes |
 | [Cluster client](cluster-client.md) | Submission, outcomes and recovery with the public client SDK |
+| [Administration](administration.md) | Official admin CLI, versioned JSON and uncertain membership outcomes |
 | [Projectors](projectors.md) | Complete committed output, read models and durable checkpoint coordination |
 | [Core plugins (experimental)](core-plugins.md) | Core V3 authoring and dynamic-library exports; host integration is in progress |
 
