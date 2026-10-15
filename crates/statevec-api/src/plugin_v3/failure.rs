@@ -1,4 +1,4 @@
-use statevec_model::{CommandKind, CommandSchemaFailure, RecordKey, ReservedBytesZeroError};
+use statevec_model::{CommandKind, CommandSchemaFailure, RecordKey, RecordValueError, ReservedBytesZeroError};
 
 /// Static input-language failure. Enum names are diagnostic metadata: the
 /// command and field ordinal identify the schema, without sending a Rust string
@@ -61,9 +61,11 @@ pub enum AccessFailure {
     UnknownUniqueKey { kind: u16, uk_id: u8 },
     MissingRecord { key: RecordKey },
     SysIdAlreadyUsed { sys_id: u64 },
+    SysIdOutOfRange { sys_id: u64 },
     RevisionOverflow { key: RecordKey },
     ImmutableFieldUpdate { key: RecordKey, field_index: u32 },
     UniqueKeyUpdate { key: RecordKey },
     ReservedBytesInvariant(ReservedBytesZeroError),
+    RecordValues(RecordValueError),
     UkConflict { kind: u16, uk_id: u8, sys_id: u64, existing_sys_id: u64 },
 }

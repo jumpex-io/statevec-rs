@@ -1,5 +1,5 @@
 use crate::{BusinessRejectCode, plugin_v3::*};
-use statevec_model::{RecordKey, ReservedBytesZeroError};
+use statevec_model::{RecordKey, RecordValueError, ReservedBytesZeroError};
 use test_case::test_case;
 
 const KEY: RecordKey = RecordKey { kind: 0x1234, sys_id: u64::MAX };
@@ -69,6 +69,12 @@ fn storage_categories_do_not_require_diagnostic_strings(failure: StorageFailure,
 #[test_case(AccessFailure::ReservedBytesInvariant(ReservedBytesZeroError::ReservedSpanOutOfBounds { kind: 0x1234, field_index: 0x5678_9abc, offset: 0x8765_4321, len: 0xfedc_ba98, data_size: 64 }), 11, [0x5678_9abc_1234, 0xfedc_ba98_8765_4321, 64]; "span out of bounds")]
 #[test_case(AccessFailure::ReservedBytesInvariant(ReservedBytesZeroError::ReservedSpanNonZero { kind: 0x1234, field_index: 0x5678_9abc, offset: 0x8765_4321, len: 0xfedc_ba98 }), 12, [0x5678_9abc_1234, 0xfedc_ba98_8765_4321, 0]; "nonzero span")]
 #[test_case(AccessFailure::UkConflict { kind: 0x1234, uk_id: 0xab, sys_id: u64::MAX, existing_sys_id: 17 }, 13, [0xab_1234, u64::MAX, 17]; "uk conflict")]
+#[test_case(AccessFailure::SysIdOutOfRange { sys_id: u64::MAX }, 14, [u64::MAX, 0, 0]; "sys id exhausted")]
+#[test_case(AccessFailure::RecordValues(RecordValueError::PayloadTooShort { kind: 0x1234, required: 64, actual: 1 }), 15, [0x1234, 64, 1]; "record values short")]
+#[test_case(AccessFailure::RecordValues(RecordValueError::FieldLayout { kind: 0x1234, field_index: 0x5678_9abc, offset: 0x8765_4321, len: 0xfedc_ba98 }), 16, [0x5678_9abc_1234, 0xfedc_ba98_8765_4321, 0]; "record field layout")]
+#[test_case(AccessFailure::RecordValues(RecordValueError::MissingDefinition { kind: 0x1234, field_index: 0x5678_9abc }), 17, [0x5678_9abc_1234, 0, 0]; "record enum definition")]
+#[test_case(AccessFailure::RecordValues(RecordValueError::InvalidValue { kind: 0x1234, field_index: 0x5678_9abc, value: 255 }), 18, [0x5678_9abc_1234, 255, 0]; "record enum value")]
+#[test_case(AccessFailure::RecordValues(RecordValueError::FixedBytesLength { kind: 0x1234, field_index: 0x5678_9abc, len: 65535, capacity: 64 }), 19, [0x5678_9abc_1234, 65535, 64]; "record fixed bytes length")]
 fn access_causes_preserve_fields_without_truncation(failure: AccessFailure, cause: u32, detail: [u64; 3]) {
     let expected = SvStatus { tag: 3, cause, detail };
 
@@ -119,6 +125,14 @@ fn decode(status: SvStatus, decoder: Decoder) -> Result<(), StatusDecodeFailure>
 #[test_case(Decoder::Access, 3, 11, 0, 0xffff_ffff_ffff; "packed kind field high bits")]
 #[test_case(Decoder::Access, 3, 11, 2, 0xffff_ffff; "span data size width")]
 #[test_case(Decoder::Access, 3, 13, 0, 0xff_ffff; "packed kind uk high bits")]
+#[test_case(Decoder::Access, 3, 15, 0, 65535; "record kind width")]
+#[test_case(Decoder::Access, 3, 16, 0, 0xffff_ffff_ffff; "record layout packed high bits")]
+#[test_case(Decoder::Access, 3, 17, 0, 0xffff_ffff_ffff; "record definition packed high bits")]
+#[test_case(Decoder::Access, 3, 18, 0, 0xffff_ffff_ffff; "record value packed high bits")]
+#[test_case(Decoder::Access, 3, 18, 1, 255; "record enum byte width")]
+#[test_case(Decoder::Access, 3, 19, 0, 0xffff_ffff_ffff; "record bytes packed high bits")]
+#[test_case(Decoder::Access, 3, 19, 1, 65535; "record bytes length width")]
+#[test_case(Decoder::Access, 3, 19, 2, 0xffff_ffff; "record bytes capacity width")]
 fn checked_detail_width_precedes_narrowing(decoder: Decoder, tag: u32, cause: u32, slot: u8, maximum: u64) {
     let mut status = SvStatus { tag, cause, detail: [0; 3] };
     status.detail[usize::from(slot)] = maximum;
@@ -137,6 +151,12 @@ fn checked_detail_width_precedes_narrowing(decoder: Decoder, tag: u32, cause: u3
 #[test_case(Decoder::Access, 3, 2, 1; "access schema spare")]
 #[test_case(Decoder::Access, 3, 5, 2; "access sysid spare")]
 #[test_case(Decoder::Access, 3, 12, 2; "packed span spare")]
+#[test_case(Decoder::Access, 3, 14, 1; "exhausted sysid first spare")]
+#[test_case(Decoder::Access, 3, 14, 2; "exhausted sysid second spare")]
+#[test_case(Decoder::Access, 3, 16, 2; "record layout spare")]
+#[test_case(Decoder::Access, 3, 17, 1; "record definition first spare")]
+#[test_case(Decoder::Access, 3, 17, 2; "record definition second spare")]
+#[test_case(Decoder::Access, 3, 18, 2; "record value spare")]
 fn unused_details_must_be_zero(decoder: Decoder, tag: u32, cause: u32, slot: u8) {
     let mut status = SvStatus { tag, cause, detail: [0; 3] };
     status.detail[usize::from(slot)] = 1;
@@ -147,7 +167,7 @@ fn unused_details_must_be_zero(decoder: Decoder, tag: u32, cause: u32, slot: u8)
 #[test_case(Decoder::Schema, 2, 0; "zero schema cause")]
 #[test_case(Decoder::Schema, 2, 8; "unknown schema cause")]
 #[test_case(Decoder::Access, 3, 0; "zero access cause")]
-#[test_case(Decoder::Access, 3, 14; "unknown access cause")]
+#[test_case(Decoder::Access, 3, 20; "unknown access cause")]
 fn unknown_causes_never_become_a_known_failure(decoder: Decoder, tag: u32, cause: u32) {
     assert_eq!(decode(SvStatus { tag, cause, detail: [0; 3] }, decoder), Err(StatusDecodeFailure::UnknownCause { tag, cause }));
 }

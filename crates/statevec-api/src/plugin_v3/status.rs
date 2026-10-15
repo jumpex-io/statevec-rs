@@ -1,6 +1,6 @@
 use super::{AccessFailure, SchemaFailure, StorageFailure};
 use crate::BusinessRejectCode;
-use statevec_model::{RecordKey, ReservedBytesZeroError};
+use statevec_model::{RecordKey, RecordValueError, ReservedBytesZeroError};
 
 const BUSINESS: u32 = 1;
 const SCHEMA: u32 = 2;
@@ -167,6 +167,40 @@ impl SvStatus {
                     existing_sys_id: self.detail[2],
                 }
             }
+            14 => {
+                self.require_zero(1)?;
+                self.require_zero(2)?;
+                AccessFailure::SysIdOutOfRange { sys_id: self.detail[0] }
+            }
+            15 => AccessFailure::RecordValues(RecordValueError::PayloadTooShort {
+                kind: self.u16(0)?, required: self.usize(1)?, actual: self.usize(2)?,
+            }),
+            16..=19 => {
+                self.bounded(0, (1 << 48) - 1)?;
+                let kind = self.detail[0] as u16;
+                let field_index = (self.detail[0] >> 16) as u32;
+                AccessFailure::RecordValues(match self.cause {
+                    16 => {
+                        self.require_zero(2)?;
+                        RecordValueError::FieldLayout {
+                            kind, field_index, offset: self.detail[1] as u32, len: (self.detail[1] >> 32) as u32,
+                        }
+                    }
+                    17 => {
+                        self.require_zero(1)?;
+                        self.require_zero(2)?;
+                        RecordValueError::MissingDefinition { kind, field_index }
+                    }
+                    18 => {
+                        self.require_zero(2)?;
+                        RecordValueError::InvalidValue { kind, field_index, value: self.u8(1)? }
+                    }
+                    19 => RecordValueError::FixedBytesLength {
+                        kind, field_index, len: self.u16(1)?, capacity: self.u32(2)?,
+                    },
+                    _ => unreachable!(),
+                })
+            }
             _ => return Err(self.unknown_cause()),
         })
     }
@@ -250,6 +284,7 @@ impl From<&AccessFailure> for SvStatus {
             AccessFailure::UnknownUniqueKey { kind, uk_id } => (3, [kind.into(), uk_id.into(), 0]),
             AccessFailure::MissingRecord { key } => (4, [key.kind.into(), key.sys_id, 0]),
             AccessFailure::SysIdAlreadyUsed { sys_id } => (5, [sys_id, 0, 0]),
+            AccessFailure::SysIdOutOfRange { sys_id } => (14, [sys_id, 0, 0]),
             AccessFailure::RevisionOverflow { key } => (6, [key.kind.into(), key.sys_id, 0]),
             AccessFailure::ImmutableFieldUpdate { key, field_index } => (7, [key.kind.into(), key.sys_id, field_index.into()]),
             AccessFailure::UniqueKeyUpdate { key } => (8, [key.kind.into(), key.sys_id, 0]),
@@ -263,6 +298,18 @@ impl From<&AccessFailure> for SvStatus {
             },
             AccessFailure::UkConflict { kind, uk_id, sys_id, existing_sys_id } =>
                 (13, [pack_kind_field(kind, uk_id.into()), sys_id, existing_sys_id]),
+            AccessFailure::RecordValues(ref source) => match *source {
+                RecordValueError::PayloadTooShort { kind, required, actual } =>
+                    (15, [kind.into(), required as u64, actual as u64]),
+                RecordValueError::FieldLayout { kind, field_index, offset, len } =>
+                    (16, [pack_kind_field(kind, field_index), pack_u32_pair(offset, len), 0]),
+                RecordValueError::MissingDefinition { kind, field_index } =>
+                    (17, [pack_kind_field(kind, field_index), 0, 0]),
+                RecordValueError::InvalidValue { kind, field_index, value } =>
+                    (18, [pack_kind_field(kind, field_index), value.into(), 0]),
+                RecordValueError::FixedBytesLength { kind, field_index, len, capacity } =>
+                    (19, [pack_kind_field(kind, field_index), len.into(), capacity.into()]),
+            },
         };
         Self { tag: ACCESS, cause, detail }
     }
