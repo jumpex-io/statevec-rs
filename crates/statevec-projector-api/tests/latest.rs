@@ -1,9 +1,9 @@
 #[allow(dead_code)]
-#[path = "../examples/projector_v1_latest/author.rs"]
+#[path = "../examples/projector_v2_latest/author.rs"]
 mod author;
 use author::model::Model;
 use statevec_model::RecordKey;
-use statevec_projector_api::plugin_v1::*;
+use statevec_projector_api::plugin_v2::*;
 
 #[test]
 fn rebuild_then_deltas_preserve_record_kinds_and_before_images() {

@@ -87,18 +87,6 @@ pub enum ProjectedRecordChange {
     Delete { key: RecordKey, revision: u64, before: Vec<u8> },
 }
 
-/// Requested recovery mode; the runtime checks it against its actual startup base.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ProjectorRecovery {
-    /// Replay retained history with automatic engine checkpoints disabled.
-    ReplayOnly,
-    /// No offset requires genesis; a saved offset joins its actual term/index.
-    Continuous { offset: Option<crate::ConsumeOffset> },
-    /// No offset persistence; rebuild from the admitted native state source.
-    LatestState,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProjectorRecoveryMode { ContinuousHistory, LatestStateOnly }
@@ -137,7 +125,7 @@ pub enum ProjectorCheckpointStatus {
     Disabled,
     ReplayOnly,
     Recovering { projector_raft_index: u64 },
-    Active { durable_raft_index: u64, waiting_for_projector: Option<u64> },
+    Active { durable_raft_index: u64, engine_checkpoint_blocked_at: Option<u64> },
     Rebuilding { target_raft_index: u64 },
     LatestStateActive { baseline_raft_index: u64 },
 }

@@ -20,7 +20,7 @@ impl StateFixture {
         Self { base: Fixture::new(), reads: AtomicU64::new(0), finishes: AtomicU64::new(0), fault,
             info: SvStateInfo { position: SvPosition { manifest: 1, raft_index: 4, raft_term: 2, ..Default::default() }, record_count: 1 } }
     }
-    fn table(&self) -> SvProjectorHostV1 {
+    fn table(&self) -> SvProjectorHostV2 {
         let mut table = self.base.table();
         table.context = (self as *const Self).cast_mut().cast();
         table.h.provided_caps = PROJECTOR_BASE_CAPABILITIES | LATEST_STATE_CAPABILITY;
@@ -36,7 +36,7 @@ impl StateFixture {
             rebuild_target: self.info.position.raft_index, ..Default::default() }
     }
     fn run(&self, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(), ProjectorFailure>) -> SvProjectorCompletion {
-        unsafe { super::super::with_host(&self.table(), &self.start(), run) }.unwrap()
+        unsafe { super::super::host::with_host(&self.table(), &self.start(), run) }.unwrap()
     }
 }
 unsafe fn state<'a>(raw: *const c_void) -> &'a StateFixture { unsafe { &*raw.cast::<StateFixture>() } }
@@ -251,9 +251,9 @@ fn state_acquire_rejects_a_well_formed_source_at_the_wrong_target(source_index: 
     let start = f.start(); // Startup promised S=4; keep this independent of the returned source.
     assert_eq!(start.rebuild_target, 4);
     f.info.position.raft_index = source_index;
-    let cause = ProjectorFailure::AbiContract(ProjectorAbiFailure::InvalidHandle);
+    let cause = ProjectorFailure::AbiContract(ProjectorAbiFailure::BindingMismatch);
 
-    let c = unsafe { super::super::with_host(&f.table(), &start, |io| {
+    let c = unsafe { super::super::host::with_host(&f.table(), &start, |io| {
         let mut source = io.split().source;
         assert!(matches!(source.try_next(), Err(actual) if actual == cause), "well-formed metadata at a different S must refuse acquisition");
         Ok(()) // Handling the error cannot make the malformed host evidence successful.

@@ -5,14 +5,21 @@ can maintain query tables, aggregates or a historical event view. Depend on
 `statevec-projector-api` from the same release or Git revision as the other
 StateVec libraries.
 
-The production integration supplies a source receiver and runtime control
-handle. The SDK defines the consumer interfaces; attachment, process startup
-and durable history recovery are supplied by the runtime.
+Use `plugin_v2`: implement `ProjectorModule::configure`,
+`ConfiguredProjector::prepare`, and `PreparedProjector::run`. Export with
+`export_projector_plugin_v2!`. Run receives a scoped `ProjectorIo` on the SDK
+worker, separate from the engine thread. Its source, control and scoped services
+remain borrowed until actual joins complete. Attachment, process startup and
+durable history recovery stay with the native host.
+
+The separate `native` namespace contains owned-frame/receiver/control traits for
+runtime integration. It is not a second step of the plugin API. Raw C tables and
+host-side decoding live in `plugin_v2::{ffi, host}`.
 
 ## Consume complete frames
 
-`ProjectionReceiver` returns an owned frame. `CommittedFrame::transactions`
-exposes ordered members, each with its actual result and `TransactionProjection`.
+`ProjectorSource` returns a `FrameLoan`. Its `view()` exposes ordered transaction
+views, each with its actual result, events and record changes.
 An output includes the schema identity, replicated transaction time, every event,
 and complete record data without allocator headers: Insert carries `after`,
 Update carries `before` and `after`, and Delete carries `before`. Event ordinals
@@ -36,10 +43,10 @@ The live/replay context is diagnostic. Use your stored source position to avoid
 applying an already covered frame twice. Reference times may be zero or decrease.
 
 ```rust
-use statevec_projector_api::{CommittedFrame, CommittedTransaction};
+use statevec_projector_api::plugin_v2::{FrameView, ProjectorFailure};
 
-fn event_count<F: CommittedFrame>(frame: &F) -> usize {
-    frame.transactions().iter().map(|tx| tx.output().events.len()).sum()
+fn event_count(frame: &FrameView<'_>) -> Result<usize, ProjectorFailure> {
+    (0..frame.transaction_count()).try_fold(0, |count, i| Ok(count + frame.transaction(i)?.event_count()))
 }
 ```
 
@@ -49,17 +56,14 @@ not acknowledge a durable projector checkpoint.
 
 ## Keep the source cut with your durable model
 
-`frame.checkpoint_cut()` returns the source's cut token. Keep it with the model
-version it describes. Application library types can be generic over
-`C: CheckpointCut`; the production integration supplies the concrete type.
-`cut.position()` exposes identity, source position and actual execution frontier
-for inspection. Those readable fields cannot reconstruct a token. For a
+`loan.checkpoint_cut()` returns a `SourceCut`. Keep it with the model version it
+describes. `loan.view().position()` exposes source metadata for inspection, but
+those readable fields cannot reconstruct a token. For a
 continuous-history source, `cut.offset()` returns `Some(ConsumeOffset)` with
-these four fields; latest-state cuts return `None`. The dynamic V1 facade uses
-the same `Option<ConsumeOffset>` result as the native cut. A continuous consumer
+these four fields; latest-state cuts return `None`. A continuous consumer
 must handle `None` as a mode mismatch; never replace it with a zero offset or
 interpret it as a request to initialize history. This is a source-level change
-from the earlier local V1 draft, not a wire-layout or version-negotiation change.
+from the earlier local draft; SDK 0.4.0 now uses the paired V2 ABI.
 
 The stored continuous offset is:
 
@@ -84,18 +88,22 @@ empty barrier. Do not round them through a floating-point JSON consumer.
 
 Save your effects and offset together in a database transaction when possible.
 If you use separate stores, save effects first and make replay idempotent.
-After that durability boundary, call `cut.checkpointed()` and offer it through
-`ProjectorControl::enqueue_projector_checkpoint`. None of receiving a frame,
+After that durability boundary, call `cut.declare_durable()` and submit the
+`DurableOffsetReport` through `control.report_durable_offset`. None of receiving a frame,
 dropping it, encoding/saving its offset or obtaining a token automatically
 acknowledges it. The native owner validates the offer; it does not persist a
-second consumer offset. Native `ReplayOnly` cuts have no durable offset.
+second consumer offset. Latest-state declaration returns the local
+`NotContinuousHistory` error, without a host call or failure latch. The report
+is immutable Copy evidence of your declaration, not proof of persistence or
+exclusive custody. Only the reply establishes the owner's acceptance.
 
-An unsuccessful queue offer preserves the unqueued publication in the runtime's
-typed `RequestFailure`. Losing an acknowledgement after a successful offer does
+`Offer::Queued` means queued, not accepted: poll for
+`ReplyPoll::Ready(ControlDecision::Accepted)` or an explicit Rejected cause.
+An unsuccessful queue offer preserves the caller's report. Losing a reply does
 not undo acceptance. Re-offer the exact cut if needed; do not
 change identity to manufacture a new attempt.
 
-When reopening, use `ProjectorRecovery::Continuous { offset }` with metadata
+When reopening, use `plugin_v2::ProjectorRecovery::ContinuousHistory { offset }` with metadata
 decoded from your actual durable store. Only confirmed absence means `None`;
 read/corruption errors must not become a fresh start. The runtime checks source
 IDs and joins the actual committed term/index through checkpoint restore or
@@ -107,25 +115,37 @@ a different cluster with exactly the same configuration can reuse that ID; an
 old store's term/index may coincidentally match. Do not reuse a disaster-recovery
 offset for unrelated history: the four fields deliberately omit a content hash.
 
-## Migrating from 0.2.1 to 0.3.0
+## SDK 0.4.0 paired cutover
 
-This is a source-breaking consumer change. Replace Fresh/Restore recovery with
-Continuous and its optional `ConsumeOffset`. Replace the old generation/manifest
-publication constructor with `cut.checkpointed()`; use `offset()` instead of
-`restore_observation()`. Replace generation/cut rejection matches with offset
-regression/conflict, and allow for future variants of the non-exhaustive public
-enums. Rich positions now contain `ProjectionAppliedIdentity` from the complete
-native AppliedBatch, not an encoded-entry digest. Core V3 and execution identity
-are unchanged. Persisted stores need an application-reviewed migration: use the
-correct consumer namespace and a truthful complete offset, not made-up defaults.
-Record-change matches must also accept Update's `before` and Delete's `before`.
-The local V1 draft has two borrowed image spans (64-byte change DTO, operations
-0/1/2); rebuild host and plugin together. No extra version/capability negotiation
-is introduced by this local amendment.
+Replace `plugin_v1` with `plugin_v2`, `CheckpointCut` with `SourceCut`, and
+`OffsetCheckpoint`/`checkpointed()` with `DurableOffsetReport`/`declare_durable()`.
+The deprecated `offer_checkpoint` alias is removed. Native traits and native-only
+ReplayOnly recovery move to `native`; configured recovery has only
+ContinuousHistory and LatestStateOnly. Host integration uses `plugin_v2::host`.
+Rebuild the SDK, native host and plugins together. Discovery rejects old major
+tables before configure/start; there is no mixed-version fallback. All nine SDK
+crates use 0.4.0. Core V3, four-field offset JSON and persisted business/native
+formats remain unchanged.
 
-## Borrowed V1 delivery
+`EngineCheckpointPolicy::min_capture_residence_ms` is the engine's delay after
+adopting a selected checkpoint before successor capture, not an application
+publication interval. Native configuration keeps its existing spelling.
+`Active::engine_checkpoint_blocked_at` observes a verified engine candidate
+waiting for durable coverage; it grants no selection authority.
 
-The `plugin_v1` module also provides a scoped borrower for a native V1 host
+Use `PendingDurableOffset` to retain one exact report through queue pressure and
+unknown replies. Each `progress()` polls at most once and offers at most once;
+disconnection drops the old reply before retry. Accepted clears the declaration;
+Rejected, Closed and call failures remain explicit terminal outcomes and retain
+it. Same-index/same-term retry is native-idempotent within the live attachment;
+later progress or another term may still reject. The helper does no persistence,
+status polling or scheduling. The application decides whether OwnerNotRunning
+during its own stop is expected. `PendingRebuildConfirmation` uses the same
+private mechanics for a different fact: EOF plus installed baseline, not durable P.
+
+## Borrowed V2 delivery
+
+The `plugin_v2` module also provides a scoped borrower for a native V2 host
 table. `ProjectorIo::split()` separates `source`, `control`, `services` and
 `stop`. `source.try_next()` / `next_timeout()` return a `FrameLoan`, `StateLoan`,
 Empty, TimedOut, Stop or Disconnected. `loan.view()` exposes ordered transactions,
@@ -134,14 +154,14 @@ outlive the loan; releasing the loan does not save or acknowledge an offset.
 
 For continuous history, obtain the `Some(offset)` from
 `loan.checkpoint_cut().offset()`. After saving your effects and that offset, offer the cut's
-`checkpointed()` value with `control.report_durable_offset()`. Queue Full, Closed and
+`declare_durable()` value with `control.report_durable_offset()`. Queue Full, Closed and
 the four-live-reply capacity limit are distinct from a queued owner's refusal.
 A `ReplyHandle` polls without blocking; dropping a pending reply does not cancel
 the submitted operation. Control and reply handles may move to scoped services
 created with `services.spawn()`, not to unscoped threads or static storage. All
 those services are joined before the enclosing host borrow ends.
 
-The unsafe `with_host` entry is for an integration that already owns a validated
+The unsafe `plugin_v2::host::with_host` entry is for an integration that already owns a validated
 host table, startup binding and callback resources that remain alive through all
 actual joins. Application authors normally use the generated exporter instead.
 
@@ -161,12 +181,12 @@ an explicit model/read/service failure retains precedence over abandonment.
 Implement `ProjectorModule` to check configuration, `ConfiguredProjector` to
 prepare application resources, and `PreparedProjector` to report the actual
 recovery offset and consume frames in `run`. Export the module with
-`statevec_projector_api::export_projector_plugin_v1!`. The generated V1 table
+`statevec_projector_api::export_projector_plugin_v2!`. The generated V2 table
 owns configure/prepare/start, failure observation, explicit stop, actual worker
 and scoped-service joins, and explicit destruction. A failed thread spawn leaves
 the prepared value with its caller; a successful spawn transfers it once.
 
-The `projector_v1_delivery` cdylib example exports such a module using only public
+The `projector_v2_delivery` cdylib example exports such a module using only public
 SDK crates, alongside a low-level transport conformance probe. Its temporary JSON
 report proves loaded delivery; it is not a durable business database or an offset
 store. The configured example never offers a checkpoint and reports no recovery
@@ -210,14 +230,14 @@ confirmed leftovers only while all writers using that directory are stopped;
 leave selected offset files and stable `.lock` sidecars intact.
 
 Persist business effects first, then call `persist_offset`, then submit the real
-frame's `checkpointed()` value with `report_durable_offset`. Reporting only queues
+frame's `declare_durable()` value with `report_durable_offset`. Reporting only queues
 host validation and requires its reply; it does not write your offset. DB users
 may store the four fields directly in the transaction containing their effects.
 The file helper stores no business model and makes no cross-store atomicity claim.
 
 ## Durable history reference consumer
 
-Build `cargo build -p statevec-projector-api --example projector_v1_history`.
+Build `cargo build -p statevec-projector-api --example projector_v2_history`.
 Its configuration object accepts `database_path` and optional `offset_path` and
 `status_path`, with relative paths resolved against the configuration directory.
 With no offset_path it commits events, current record images and the four
@@ -247,7 +267,7 @@ storage contract; the file helper's sync tests do not qualify those combinations
 
 ## Latest-state reference consumer
 
-Build `cargo build -p statevec-projector-api --example projector_v1_latest`.
+Build `cargo build -p statevec-projector-api --example projector_v2_latest`.
 Its strict configuration object is `{"report_path":"updates.jsonl"}`. Relative
 paths resolve against the configuration directory. This latest-only consumer
 starts with an empty private model on every invocation, enumerates the actual

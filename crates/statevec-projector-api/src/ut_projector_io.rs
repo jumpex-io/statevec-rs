@@ -5,11 +5,13 @@ use ffi::*;
 use std::{ffi::c_void, sync::atomic::{AtomicBool, AtomicU64, Ordering}};
 #[path = "ut_projector_state.rs"]
 mod state_tests;
-unsafe fn with_host(table: &SvProjectorHostV1, id: &str, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(), ProjectorFailure>) -> Result<SvProjectorCompletion, ProjectorAbiFailure> {
+#[path = "ut_projector_semantics.rs"]
+mod semantics_tests;
+unsafe fn with_host(table: &SvProjectorHostV2, id: &str, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(), ProjectorFailure>) -> Result<SvProjectorCompletion, ProjectorAbiFailure> {
     // Mechanical table input, never a native source/cut attestation.
     let start = SvProjectorStart { identity: SvProjectionIdentity { manifest: 1, ..Default::default() }, peer_id: 1,
         projector_id: SvProjectorId::encode(id).unwrap(), recovery_mode: 1, ..Default::default() };
-    unsafe { super::with_host(table, &start, run) }
+    unsafe { super::host::with_host(table, &start, run) }
 }
 pub(super) struct Fixture {
     stopped: AtomicBool, delivered: AtomicBool, offers: AtomicU64, releases: AtomicU64,
@@ -19,11 +21,11 @@ pub(super) struct Fixture {
 }
 impl Fixture {
     pub(super) fn new() -> Self { Self { stopped: AtomicBool::new(false), delivered: AtomicBool::new(false), offers: AtomicU64::new(0), releases: AtomicU64::new(0), frame_releases: AtomicU64::new(0), retain_frame: false, fail_frame: false, fail_reply: false, receives: AtomicU64::new(0), fail_stop: false, info_failure: None, bad_frame: false, changes: false, inactive_image: false, calls: std::sync::Mutex::new(Vec::new()) } }
-    pub(super) fn table(&self) -> SvProjectorHostV1 {
-        SvProjectorHostV1 {
-            h: SvHeader { abi_major: 1, kind: PROJECTOR_HOST_KIND, table_bytes: std::mem::size_of::<SvProjectorHostV1>() as u64, provided_caps: 0x3f, required_caps: 0x3f }, context: (self as *const Self).cast_mut().cast(),
+    pub(super) fn table(&self) -> SvProjectorHostV2 {
+        SvProjectorHostV2 {
+            h: SvHeader { abi_major: 2, kind: PROJECTOR_HOST_KIND, table_bytes: std::mem::size_of::<SvProjectorHostV2>() as u64, provided_caps: 0x3f, required_caps: 0x3f }, context: (self as *const Self).cast_mut().cast(),
             receive: Some(receive), stop_receive: Some(stop), frame_info: Some(info), transaction: Some(transaction), event: Some(event), change: Some(change), release_frame: Some(release_frame),
-            offer_checkpoint: Some(checkpoint), offer_status: Some(offer), poll_reply: Some(poll), release_reply: Some(release_reply), stopping: Some(stopping), notify: Some(notify),
+            report_durable_offset: Some(checkpoint), offer_status: Some(offer), poll_reply: Some(poll), release_reply: Some(release_reply), stopping: Some(stopping), notify: Some(notify),
             state_info: Some(state_info), state_next: Some(state_next), finish_state: Some(finish_state), release_state: Some(release_frame), offer_rebuild: Some(rebuild),
         }
     }
@@ -72,10 +74,10 @@ unsafe extern "C" fn offer(raw: *mut c_void, tag: *mut u32, cookie: *mut u64) ->
     let c = unsafe { fixture(raw) }.offers.fetch_add(1, Ordering::SeqCst) + 10;
     unsafe { tag.write(0); cookie.write(c); } SvStatus::SUCCESS
 }
-unsafe extern "C" fn checkpoint(raw: *mut c_void, _: *const SvOffsetCheckpoint, tag: *mut u32, cookie: *mut u64) -> SvStatus { unsafe { offer(raw, tag, cookie) } }
+unsafe extern "C" fn checkpoint(raw: *mut c_void, _: *const SvDurableOffsetReport, tag: *mut u32, cookie: *mut u64) -> SvStatus { unsafe { offer(raw, tag, cookie) } }
 unsafe extern "C" fn rebuild(raw: *mut c_void, _: *const SvRebuildCut, tag: *mut u32, cookie: *mut u64) -> SvStatus { unsafe { offer(raw, tag, cookie) } }
 unsafe extern "C" fn poll(_: *mut c_void, _: u64, value: *mut SvControlReply) -> SvStatus {
-    unsafe { value.write(ControlReply::Status(crate::ProjectorCheckpointStatus::Active { durable_raft_index: 0, waiting_for_projector: None }).into()); } SvStatus::SUCCESS
+    unsafe { value.write(ControlReply::Status(crate::ProjectorCheckpointStatus::Active { durable_raft_index: 0, engine_checkpoint_blocked_at: None }).into()); } SvStatus::SUCCESS
 }
 unsafe extern "C" fn release_reply(raw: *mut c_void, cookie: *mut u64) -> SvStatus {
     let f = unsafe { fixture(raw) }; f.releases.fetch_add(1, Ordering::SeqCst);
@@ -218,7 +220,7 @@ fn external_offer_does_not_hold_the_reply_slot_lock() {
     let (release, proceed) = mpsc::channel();
     let state = Offers { entered, proceed: Mutex::new(proceed), calls: AtomicU64::new(0) };
     let fixture = Fixture::new();
-    let table = SvProjectorHostV1 { context: (&state as *const Offers).cast_mut().cast(),
+    let table = SvProjectorHostV2 { context: (&state as *const Offers).cast_mut().cast(),
         offer_status: Some(held_offer), stop_receive: Some(ok_stop), notify: Some(ok_notify), ..fixture.table() };
     let mut progressed = false;
     let completion = unsafe { with_host(&table, "history", |io| {
@@ -255,7 +257,7 @@ fn in_progress_physical_offers_reserve_the_four_reply_slots() {
     let (release, proceed) = mpsc::channel();
     let state = Offers { entered, proceed: Mutex::new(proceed), calls: AtomicU64::new(0) };
     let fixture = Fixture::new();
-    let table = SvProjectorHostV1 { context: (&state as *const Offers).cast_mut().cast(),
+    let table = SvProjectorHostV2 { context: (&state as *const Offers).cast_mut().cast(),
         offer_status: Some(held_offer), stop_receive: Some(ok_stop), notify: Some(ok_notify), ..fixture.table() };
     let completion = unsafe { with_host(&table, "history", |io| {
         let parts = io.split();
@@ -322,7 +324,7 @@ fn record_change_decodes_literal_abi_operation_values(index: usize) {
 #[test_case::test_case(2; "delete_after_must_be_empty")]
 fn record_change_rejects_nonempty_inactive_image(index: usize) {
     let fixture = Fixture { changes: true, inactive_image: true, ..Fixture::new() };
-    let expected = ProjectorFailure::AbiContract(ProjectorAbiFailure::Reserved { actual: 1 });
+    let expected = ProjectorFailure::AbiContract(ProjectorAbiFailure::ChangeShape);
     let completion = unsafe { with_host(&fixture.table(), "history", |io| {
         let mut source = io.split().source;
         let Delivery::Frame(loan) = source.try_next()? else { panic!("mechanical frame") };
@@ -387,13 +389,12 @@ fn noncanonical_control_replies_refuse(reply: SvControlReply) { assert!(reply.de
 
 #[test]
 fn recovery_and_readiness_values_round_trip_without_native_authority() {
-    for recovery in [crate::ProjectorRecovery::Continuous { offset: None }, crate::ProjectorRecovery::LatestState] {
+    for recovery in [crate::plugin_v2::ProjectorRecovery::ContinuousHistory { offset: None }, crate::plugin_v2::ProjectorRecovery::LatestStateOnly] {
         assert_eq!(SvRecovery::encode(&recovery).unwrap().decode().unwrap(), recovery);
     }
-    assert!(SvRecovery::encode(&crate::ProjectorRecovery::ReplayOnly).is_err());
     let mut inactive = SvRecovery::default(); inactive.offset.raft_index = 1;
     assert!(inactive.decode().is_err());
-    for value in [crate::ProjectorCheckpointStatus::Recovering { projector_raft_index: 9 }, crate::ProjectorCheckpointStatus::Active { durable_raft_index: 9, waiting_for_projector: Some(10) }] {
+    for value in [crate::ProjectorCheckpointStatus::Recovering { projector_raft_index: 9 }, crate::ProjectorCheckpointStatus::Active { durable_raft_index: 9, engine_checkpoint_blocked_at: Some(10) }] {
         assert_eq!(SvControlReply::from(ControlReply::Status(value)).decode().unwrap(), ControlReply::Status(value));
     }
 }

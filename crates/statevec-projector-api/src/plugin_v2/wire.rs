@@ -1,0 +1,17 @@
+//! One definition of each scalar vocabulary; raw DTOs still use fixed u32s.
+macro_rules! vocabulary {
+    ($module:ident { $($name:ident = $value:literal),+ $(,)? }) => {
+        pub mod $module { $(pub const $name: u32 = $value;)+ }
+    };
+}
+vocabulary!(receive_tag { FRAME=0, EMPTY=1, DISCONNECTED=2, STOP=3, TIMED_OUT=4, STATE=5 });
+vocabulary!(offer_tag { QUEUED=0, OWNER_QUEUE_FULL=1, CLOSED=2, REPLY_CAPACITY_EXHAUSTED=3 });
+vocabulary!(state_tag { RECORD=0, END=1, STOP=2, PROGRESS=3 });
+vocabulary!(reply_tag { PENDING=0, ACCEPTED=1, REJECTED=2, STATUS=3, DISCONNECTED=4 });
+vocabulary!(status_kind { DISABLED=0, REPLAY_ONLY=1, RECOVERING=2, ACTIVE=3, BLOCKED=4, REBUILDING=5, LATEST_ACTIVE=6 });
+vocabulary!(rejection_reason {
+    NOT_ATTACHED=0, CHECKPOINTS_DISABLED=1, RESTORE_NOT_VERIFIED=2, OWNER_NOT_RUNNING=3,
+    IDENTITY_MISMATCH=4, BEYOND_APPLIED=5, OFFSET_REGRESSED=6, OFFSET_CONFLICT=7,
+    WRONG_RECOVERY_MODE=8, PROJECTOR_IDENTITY_MISMATCH=9, NOT_REBUILDING=10,
+    REBUILD_NOT_COMPLETE=11, REBUILD_MISMATCH=12,
+});

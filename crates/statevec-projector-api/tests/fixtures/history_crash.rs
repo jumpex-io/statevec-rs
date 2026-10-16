@@ -1,6 +1,6 @@
 //! Test-only physical callback cuts around the unchanged public history author.
 //! No frame, publication, persisted offset or native acceptance is manufactured.
-use statevec_projector_api::{ProjectorCheckpointStatus, plugin_v1::{ControlReply, ffi::*}};
+use statevec_projector_api::{ProjectorCheckpointStatus, plugin_v2::{host::ControlReply, ffi::*}};
 use std::{io::{Read, Write}, os::unix::net::UnixStream, path::{Path, PathBuf},
     sync::{Mutex, OnceLock, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
 
@@ -37,7 +37,7 @@ impl Cut {
             frame: Mutex::new(None), channel: Mutex::new(channel),
             lost: AtomicBool::new(false), paused: AtomicBool::new(false) })
     }
-    pub fn frame(&self, host: &SvProjectorHostV1, info: SvFrameInfo) {
+    pub fn frame(&self, host: &SvProjectorHostV2, info: SvFrameInfo) {
         *self.frame.lock().unwrap() = Some(info);
         if self.boundary == Boundary::FailSave && info.position.raft_index == self.index
             && !self.paused.swap(true, Ordering::SeqCst) {
@@ -49,7 +49,7 @@ impl Cut {
             eprintln!("history-cut renameat EIO armed index={}", self.index);
         }
     }
-    pub fn before_offer(&self, host: &SvProjectorHostV1, publication: SvOffsetCheckpoint) {
+    pub fn before_offer(&self, host: &SvProjectorHostV2, publication: SvDurableOffsetReport) {
         let frame = self.frame.lock().unwrap().expect("report follows real frame metadata");
         assert_eq!(publication.cut, frame.cut, "retry must keep the exact issued cut");
         if frame.position.raft_index != self.index { return; }
@@ -62,7 +62,7 @@ impl Cut {
             self.pause(host, label);
         }
     }
-    fn pause(&self, host: &SvProjectorHostV1, label: &str) {
+    fn pause(&self, host: &SvProjectorHostV2, label: &str) {
         let durable = durable_index(host);
         let mut channel = self.channel.lock().unwrap();
         writeln!(channel, "{}", serde_json::json!({"cut":label,"index":self.index,"native_durable":durable})).unwrap();
@@ -95,7 +95,7 @@ fn refuse_offset_replace() {
     assert_eq!(unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) }, 0);
     assert_eq!(unsafe { libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &program) }, 0);
 }
-fn durable_index(host: &SvProjectorHostV1) -> u64 {
+fn durable_index(host: &SvProjectorHostV2) -> u64 {
     let mut tag = 0;
     let mut reply = 0;
     assert_eq!(unsafe { host.offer_status.unwrap()(host.context, &mut tag, &mut reply) }, SvStatus::SUCCESS);

@@ -1,5 +1,5 @@
 use super::*;
-use crate::plugin_v1::{ffi::{SvConsumeOffset, SvProjectorId}, ProjectorAbiFailure};
+use crate::plugin_v2::{ffi::{SvConsumeOffset, SvProjectorId}, ProjectorAbiFailure};
 use test_case::test_case;
 
 fn offset(projector_id: &str) -> ConsumeOffset {

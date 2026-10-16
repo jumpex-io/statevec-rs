@@ -28,7 +28,7 @@ impl ConfiguredProjector for Config {
         assert_eq!(input.projector_id, "history");
         assert_eq!(input.cluster_id, "00".repeat(32));
         assert_eq!(input.schema_idl, b"{}");
-        assert!(input.learner_only && input.external_retention && input.checkpoint_policy.is_some());
+        assert!(input.checkpoint_policy.is_some());
         note(&self.log, "prepare");
         if matches!(self.case, Case::PrepareHostError) { return Err(ProjectorFailure::HostPanicked); }
         Ok(Prepared { log: self.log.clone(), case: self.case })
@@ -42,11 +42,11 @@ impl Drop for Prepared {
     }
 }
 impl PreparedProjector for Prepared {
-    fn recovery(&self) -> crate::ProjectorRecovery {
+    fn recovery(&self) -> crate::plugin_v2::ProjectorRecovery {
         match self.case {
             Case::RecoveryPanic => std::panic::panic_any(PanicPayload),
-            Case::InvalidRecovery | Case::DropPanic => crate::ProjectorRecovery::ReplayOnly,
-            _ => crate::ProjectorRecovery::Continuous { offset: None },
+            Case::InvalidRecovery | Case::DropPanic => crate::plugin_v2::ProjectorRecovery::LatestStateOnly,
+            _ => crate::plugin_v2::ProjectorRecovery::ContinuousHistory { offset: None },
         }
     }
     fn delivery_limits(&self) -> DeliveryLimits {
@@ -81,23 +81,42 @@ impl PreparedProjector for Prepared {
 
 unsafe extern "C" fn unused_configure(_: SvBytes, _: SvBytes, _: *mut *mut c_void) -> SvStatus { unreachable!() }
 static TABLE: __export::ProjectorExportTable = __export::ProjectorExportTable::new::<Module>(unused_configure);
-fn table() -> SvProjectorV1 {
+fn table() -> SvProjectorV2 {
     let mut discovery = SvDiscovery { table: std::ptr::null(), table_bytes: 0 };
     assert_eq!(unsafe { TABLE.discover(std::mem::size_of::<SvDiscovery>() as u64, &mut discovery) }, 0);
     assert_eq!(discovery.table_bytes, 112);
-    unsafe { *discovery.table.cast::<SvProjectorV1>() }
+    unsafe { *discovery.table.cast::<SvProjectorV2>() }
 }
 fn input() -> SvProjectorPrepare {
     SvProjectorPrepare {
         identity: SvProjectionIdentity { manifest: 1, ..Default::default() }, peer_id: 1,
         projector_id: SvProjectorId::encode("history").unwrap(), schema_idl: SvBytes::borrowed(b"{}"),
-        learner_only: 1, external_retention: 1, checkpoint_interval_indices: 1, min_selected_duration_ms: 1,
+        learner_only: 1, external_retention: 1, checkpoint_interval_indices: 1, min_capture_residence_ms: 1,
         recovery_mode: 1, reserved: 0,
     }
 }
 fn startup() -> SvProjectorStart {
     let input = input();
     SvProjectorStart { identity: input.identity, peer_id: input.peer_id, projector_id: input.projector_id, recovery_mode: 1, ..Default::default() }
+}
+
+#[test_case::test_case(0, 1, 1, 19; "zero_peer")]
+#[test_case::test_case(1, 0, 1, 20; "missing_interval")]
+#[test_case::test_case(1, 1, 0, 20; "missing_residence")]
+fn prepare_reports_the_actual_context_cause_before_plugin_code(peer: u64, interval: u64, residence: u64, cause: u32) {
+    let (mut config, log) = configured(Case::Normal);
+    let mut input = input();
+    input.peer_id = peer;
+    input.checkpoint_interval_indices = interval;
+    input.min_capture_residence_ms = residence;
+    let mut prepared = std::ptr::dangling_mut::<c_void>();
+    let mut recovery = SvRecovery::default();
+    let mut limits = SvDeliveryLimits::default();
+    let status = unsafe { table().prepare.unwrap()(config, &input, &mut prepared, &mut recovery, &mut limits) };
+    assert_eq!(status, SvStatus { tag: 9, cause, detail: [0; 3] });
+    assert!(prepared.is_null());
+    assert!(!log.lock().unwrap().iter().any(|(event, _)| *event == "prepare"));
+    assert_eq!(unsafe { table().destroy_configured.unwrap()(&mut config) }, SvStatus::SUCCESS);
 }
 fn configured(case: Case) -> (*mut c_void, Log) {
     let log = Arc::new(Mutex::new(Vec::new()));
@@ -111,7 +130,7 @@ fn prepared(config: *mut c_void) -> *mut c_void {
     let (mut output, mut recovery, mut limits) = (std::ptr::null_mut(), SvRecovery::default(), SvDeliveryLimits::default());
     assert_eq!(unsafe { table().prepare.unwrap()(config, &input(), &mut output, &mut recovery, &mut limits) }, SvStatus::SUCCESS);
     assert!(!output.is_null());
-    assert_eq!(recovery.decode().unwrap(), crate::ProjectorRecovery::Continuous { offset: None });
+    assert_eq!(recovery.decode().unwrap(), crate::plugin_v2::ProjectorRecovery::ContinuousHistory { offset: None });
     assert_eq!(limits.decode().unwrap().frame_capacity.get(), 1);
     output
 }
@@ -132,7 +151,7 @@ impl Drop for Running<'_> {
 fn explicit_stop_failure_remains_separate_from_an_existing_run_error() {
     unsafe extern "C" fn fail_stop(_: *mut c_void) -> SvStatus { (&ProjectorFailure::HostPanicked).into() }
     let fixture = io_tests::Fixture::new();
-    let host = SvProjectorHostV1 { stop_receive: Some(fail_stop), ..fixture.table() };
+    let host = SvProjectorHostV2 { stop_receive: Some(fail_stop), ..fixture.table() };
     let (mut config, _) = configured(Case::RunError);
     let mut prepared = prepared(config);
     let mut running = Running { worker: std::ptr::null_mut(), _host: &fixture };
@@ -152,7 +171,7 @@ fn explicit_stop_failure_remains_separate_from_an_existing_run_error() {
     assert_eq!(report.run_failure, (&ProjectorFailure::Application { code: 42 }).into());
     assert_eq!(report.joined, 1);
     assert_eq!(stopped, (&ProjectorFailure::HostPanicked).into(), "explicit stop is a separate returned cause, not a second run error");
-    assert_eq!(decode_call(stopped, ProjectorOperation::RequestStop), Ok(Some(ProjectorCallFailure::Failure(ProjectorFailure::HostPanicked))));
+    assert_eq!(decode_call(stopped, ProjectorOperation::RequestStop), Ok(Some(ProjectorCallFailure::Operation(ProjectorFailure::HostPanicked))));
     assert!(report.decode(decode_observation(observed).unwrap()).is_ok());
 }
 
@@ -178,7 +197,7 @@ fn finished_notification_observes_ready_before_the_physical_join(failure: Option
     let (release, proceed) = mpsc::channel();
     let notification = Notification { entered, proceed: Mutex::new(proceed), result: failure.as_ref().map(SvStatus::from).unwrap_or(SvStatus::SUCCESS) };
     let fixture = io_tests::Fixture::new();
-    let host = SvProjectorHostV1 { context: (&notification as *const Notification).cast_mut().cast(),
+    let host = SvProjectorHostV2 { context: (&notification as *const Notification).cast_mut().cast(),
         stop_receive: Some(stop), notify: Some(notify), ..fixture.table() };
     let (mut config, _) = configured(Case::Normal);
     let mut prepared = prepared(config);
@@ -265,6 +284,24 @@ fn prepare_refusals_transfer_no_handle_or_metadata(case: Case) {
     assert_eq!(log.lock().unwrap().iter().filter(|(event, _)| *event == "prepared_drop").count(), usize::from(!matches!(case, Case::PrepareHostError)));
 }
 
+#[test]
+fn old_host_major_refuses_before_spawn_and_preserves_prepared() {
+    let fixture = io_tests::Fixture::new();
+    let (mut config, log) = configured(Case::Normal);
+    let mut prepared = prepared(config);
+    let original = prepared;
+    let mut host = fixture.table();
+    host.h.abi_major = 1; // Independent old header; current size/caps/callbacks.
+    let mut worker = std::ptr::dangling_mut::<c_void>();
+    let result = unsafe { table().start.unwrap()(&mut prepared, &host, &startup(), &mut worker) };
+    assert_eq!(result, SvStatus { tag: 9, cause: 4, detail: [2, 1, 0] });
+    assert_eq!(prepared, original);
+    assert!(worker.is_null());
+    assert!(!log.lock().unwrap().iter().any(|(event, _)| *event == "run"));
+    assert_eq!(unsafe { table().destroy_prepared.unwrap()(&mut prepared) }, SvStatus::SUCCESS);
+    assert_eq!(unsafe { table().destroy_configured.unwrap()(&mut config) }, SvStatus::SUCCESS);
+}
+
 #[test_case::test_case(false; "wrong_start_identity")]
 #[test_case::test_case(true; "short_host_header")]
 fn start_refusal_preserves_identical_prepared_custody(short: bool) {
@@ -330,7 +367,7 @@ fn physical_worker_spawn_refusal_returns_prepared_to_the_bootstrap_thread() {
     let mut worker = std::ptr::null_mut();
     let result = unsafe { table().start.unwrap()(&mut prepared, &fixture.table(), &startup(), &mut worker) };
     assert!(matches!(decode_call(result, ProjectorOperation::Start).unwrap(),
-        Some(ProjectorCallFailure::Failure(ProjectorFailure::Io { stage: ProjectorIoStage::WorkerSpawn, os_code: Some(libc::EPERM), .. }))));
+        Some(ProjectorCallFailure::Operation(ProjectorFailure::Io { stage: ProjectorIoStage::WorkerSpawn, os_code: Some(libc::EPERM), .. }))));
     assert_eq!(prepared, original);
     assert!(worker.is_null());
     assert_eq!(unsafe { table().destroy_prepared.unwrap()(&mut prepared) }, SvStatus::SUCCESS);

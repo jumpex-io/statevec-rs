@@ -9,10 +9,10 @@ guide, examples and a small in-memory engine for local business tests.
 
 ## Development compatibility
 
-The `dev` branch contains unreleased **0.3.0** work. It includes source-breaking
-changes from 0.2.1, notably the
-[Projector recovery and offset API](docs/user-guide/projectors.md#migrating-from-021-to-030).
-Following `dev` is not a compatible update to an existing 0.2.1 consumer.
+The `dev` branch contains unreleased **0.4.0** work. It includes source-breaking
+changes from 0.3.0 and earlier, notably the
+[Projector semantic API and ABI 2](docs/user-guide/projectors.md#sdk-040-paired-cutover).
+Following `dev` is not a compatible update to an existing 0.3.0 consumer.
 Update the application explicitly and rebuild its plugins against the matched
 host/SDK revision. Keep all StateVec crates at that same reviewed Git revision;
 use an exact `rev` and retain the lockfile for reproducible deployments, not a

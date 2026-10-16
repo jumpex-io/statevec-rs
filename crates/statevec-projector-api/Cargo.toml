@@ -1,6 +1,6 @@
 [package]
 name = "statevec-projector-api"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.91"
 description = "Committed business output and checkpoint interfaces for StateVec projectors."
@@ -28,35 +28,35 @@ tempfile.workspace = true
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [[example]]
-name = "projector_v1_delivery"
+name = "projector_v2_delivery"
 crate-type = ["cdylib"]
 
 [[example]]
-name = "projector_v1_observer"
+name = "projector_v2_observer"
 crate-type = ["cdylib"]
 
 [[example]]
-name = "projector_v1_history"
+name = "projector_v2_history"
 crate-type = ["cdylib"]
 
 [[example]]
-name = "projector_v1_latest"
+name = "projector_v2_latest"
 crate-type = ["cdylib"]
 
 # Real latest author paused at a physical read or before the native rebuild offer.
 [[example]]
-name = "projector_v1_latest_probe"
+name = "projector_v2_latest_probe"
 path = "tests/fixtures/latest_probe.rs"
 crate-type = ["cdylib"]
 
 # Physical queue/reply faults around the same public history author.
 [[example]]
-name = "projector_v1_history_probe"
+name = "projector_v2_history_probe"
 path = "tests/fixtures/history_probe.rs"
 crate-type = ["cdylib"]
 
 # Qualification fixture, not an application/durability example.
 [[example]]
-name = "projector_v1_lifecycle_probe"
+name = "projector_v2_lifecycle_probe"
 path = "tests/fixtures/lifecycle_probe.rs"
 crate-type = ["cdylib"]

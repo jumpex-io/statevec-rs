@@ -3,7 +3,7 @@
 //! and substitutes only declared release/notification outcomes. It neither
 //! constructs frames/cuts nor fabricates completion reports.
 #![cfg(target_os = "linux")]
-use statevec_projector_api::{plugin_v1::{ffi::*, *}, ProjectorRecovery};
+use statevec_projector_api::{plugin_v2::{ffi::*, *}, plugin_v2::ProjectorRecovery};
 use std::{ffi::c_void, io::{Read, Write}, num::NonZeroUsize,
     os::unix::net::UnixStream, path::PathBuf, sync::{Arc, Mutex, atomic::{AtomicBool, AtomicUsize, Ordering}}, time::{Duration, Instant}};
 
@@ -44,8 +44,8 @@ impl ConfiguredProjector for Configured {
 }
 impl PreparedProjector for Prepared {
     fn recovery(&self) -> ProjectorRecovery {
-        if matches!(self.harness.config.case, Case::StateError | Case::StateRetained) { ProjectorRecovery::LatestState }
-        else { ProjectorRecovery::Continuous { offset: None } }
+        if matches!(self.harness.config.case, Case::StateError | Case::StateRetained) { ProjectorRecovery::LatestStateOnly }
+        else { ProjectorRecovery::ContinuousHistory { offset: None } }
     }
     fn delivery_limits(&self) -> DeliveryLimits { DeliveryLimits {
         frame_capacity: NonZeroUsize::new(2).unwrap(), maximum_accounted_bytes: NonZeroUsize::new(1024 * 1024).unwrap(),

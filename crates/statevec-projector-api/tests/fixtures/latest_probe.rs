@@ -2,9 +2,9 @@
 //! actual state read or its first rebuild offer. No model, source, EOF, cut,
 //! native status or ACK is synthesized. The harness owns the SIGKILL decision.
 #![cfg(target_os = "linux")]
-#[path = "../../examples/projector_v1_latest/author.rs"]
+#[path = "../../examples/projector_v2_latest/author.rs"]
 mod author;
-use statevec_projector_api::{ProjectorCheckpointStatus, plugin_v1::{__export, ControlReply, ProjectorFailure, ffi::*}};
+use statevec_projector_api::{ProjectorCheckpointStatus, plugin_v2::{__export, host::ControlReply, ProjectorFailure, ffi::*}};
 use std::{ffi::c_void, io::{Read, Write}, mem::{ManuallyDrop, size_of}, os::unix::net::UnixStream,
     path::PathBuf, ptr, sync::{Mutex, OnceLock, atomic::{AtomicBool, AtomicUsize, Ordering}}, time::{Duration, Instant}};
 
@@ -34,15 +34,15 @@ unsafe extern "C" fn configure(config: SvBytes, base_dir: SvBytes, out: *mut *mu
     })
 }
 static BASE: __export::ProjectorExportTable = __export::ProjectorExportTable::new::<author::Latest>(configure);
-fn base() -> SvProjectorV1 {
+fn base() -> SvProjectorV2 {
     let mut out = SvDiscovery { table: ptr::null(), table_bytes: 0 };
     assert_eq!(unsafe { BASE.discover(size_of::<SvDiscovery>() as u64, &mut out) }, 0);
-    unsafe { *out.table.cast::<SvProjectorV1>() }
+    unsafe { *out.table.cast::<SvProjectorV2>() }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Cut { BeforeInstall, BeforeOffer }
 struct Proxy {
-    original: SvProjectorHostV1,
+    original: SvProjectorHostV2,
     channel: Mutex<UnixStream>,
     cut: Cut,
     target: u64,
@@ -118,7 +118,7 @@ forward!(transaction(frame:u64,index:u64,out:*mut SvTransactionInfo));
 forward!(event(frame:u64,tx:u64,index:u64,out:*mut SvEvent));
 forward!(change(frame:u64,tx:u64,index:u64,out:*mut SvRecordChange));
 forward!(release_frame(frame:*mut u64));
-forward!(offer_checkpoint(value:*const SvOffsetCheckpoint,tag:*mut u32,reply:*mut u64));
+forward!(report_durable_offset(value:*const SvDurableOffsetReport,tag:*mut u32,reply:*mut u64));
 forward!(offer_status(tag:*mut u32,reply:*mut u64));
 forward!(poll_reply(reply:u64,out:*mut SvControlReply));
 forward!(release_reply(reply:*mut u64));
@@ -155,13 +155,13 @@ unsafe extern "C" fn offer_rebuild(raw:*mut c_void,cut:*const SvRebuildCut,tag:*
     })
 }
 impl Proxy {
-    fn table(&self) -> SvProjectorHostV1 {
+    fn table(&self) -> SvProjectorHostV2 {
         let mut table = self.original;
         table.context = (self as *const Self).cast_mut().cast();
         table.receive = Some(receive); table.stop_receive = Some(stop_receive);
         table.frame_info = Some(frame_info); table.transaction = Some(transaction);
         table.event = Some(event); table.change = Some(change); table.release_frame = Some(release_frame);
-        table.offer_checkpoint = Some(offer_checkpoint); table.offer_status = Some(offer_status);
+        table.report_durable_offset = Some(report_durable_offset); table.offer_status = Some(offer_status);
         table.poll_reply = Some(poll_reply); table.release_reply = Some(release_reply);
         table.stopping = Some(stopping); table.notify = Some(notify);
         table.state_info = Some(state_info); table.state_next = Some(state_next);
@@ -170,8 +170,8 @@ impl Proxy {
         table
     }
 }
-struct Worker { inner:*mut c_void, _proxy:Box<Proxy>, table:Box<SvProjectorHostV1> }
-unsafe extern "C" fn start(prepared:*mut *mut c_void,host:*const SvProjectorHostV1,input:*const SvProjectorStart,out:*mut *mut c_void)->SvStatus {
+struct Worker { inner:*mut c_void, _proxy:Box<Proxy>, table:Box<SvProjectorHostV2> }
+unsafe extern "C" fn start(prepared:*mut *mut c_void,host:*const SvProjectorHostV2,input:*const SvProjectorStart,out:*mut *mut c_void)->SvStatus {
     if prepared.is_null() || host.is_null() || input.is_null() || out.is_null() {
         return unsafe { base().start.unwrap()(prepared,host,input,out) };
     }
@@ -190,7 +190,7 @@ unsafe extern "C" fn start(prepared:*mut *mut c_void,host:*const SvProjectorHost
             paused:AtomicBool::new(false),records:AtomicUsize::new(0),eof:AtomicBool::new(false),finished:AtomicBool::new(false) });
         let table = Box::new(proxy.table());
         let mut worker = ManuallyDrop::new(Box::new(Worker { inner:ptr::null_mut(),_proxy:proxy,table }));
-        let table = &*worker.table as *const SvProjectorHostV1;
+        let table = &*worker.table as *const SvProjectorHostV2;
         let status = unsafe { base().start.unwrap()(prepared,table,input,&mut worker.inner) };
         if !worker.inner.is_null() { unsafe { *out = Box::into_raw(ManuallyDrop::into_inner(worker)).cast(); } }
         else if !status.is_success() && unsafe { *prepared == original } { drop(ManuallyDrop::into_inner(worker)); }
@@ -216,20 +216,20 @@ unsafe extern "C" fn join(raw:*mut *mut c_void,out:*mut SvProjectorCompletion)->
         status
     })
 }
-struct StaticTable(SvProjectorV1);
+struct StaticTable(SvProjectorV2);
 // SAFETY: immutable generated function pointers and process-static target;
 // worker-owned contexts remain in the separate retained Proxy allocation.
 unsafe impl Send for StaticTable {}
 unsafe impl Sync for StaticTable {}
 static TABLE: OnceLock<StaticTable> = OnceLock::new();
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn statevec_projector_plugin_entry_v1(size:u64,out:*mut SvDiscovery)->u32 {
+pub unsafe extern "C" fn statevec_projector_plugin_entry_v2(size:u64,out:*mut SvDiscovery)->u32 {
     if out.is_null() || size < size_of::<SvDiscovery>() as u64 { return 1; }
     let table = TABLE.get_or_init(|| {
         let mut table = base();
         table.start = Some(start); table.poll_worker = Some(poll); table.request_stop = Some(stop); table.join = Some(join);
         StaticTable(table)
     });
-    unsafe { out.write(SvDiscovery { table:(&table.0 as *const SvProjectorV1).cast(),table_bytes:size_of::<SvProjectorV1>() as u64 }); }
+    unsafe { out.write(SvDiscovery { table:(&table.0 as *const SvProjectorV2).cast(),table_bytes:size_of::<SvProjectorV2>() as u64 }); }
     0
 }

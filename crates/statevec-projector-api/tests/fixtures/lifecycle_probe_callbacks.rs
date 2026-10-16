@@ -1,13 +1,13 @@
 //! Per-worker physical callback interposer. All cookies, frames and replies
 //! still come from the actual bridge. No registry or shared ambient fault state.
 use super::*;
-pub(super) struct Callbacks { pub original: SvProjectorHostV1, pub harness: Arc<Harness> }
+pub(super) struct Callbacks { pub original: SvProjectorHostV2, pub harness: Arc<Harness> }
 impl Callbacks {
-    pub fn table(&mut self) -> SvProjectorHostV1 { SvProjectorHostV1 {
+    pub fn table(&mut self) -> SvProjectorHostV2 { SvProjectorHostV2 {
         h: self.original.h, context: (self as *mut Self).cast(),
         receive: Some(receive), stop_receive: Some(stop_receive), frame_info: Some(frame_info),
         transaction: Some(transaction), event: Some(event), change: Some(change), release_frame: Some(release_frame),
-        offer_checkpoint: Some(offer_checkpoint), offer_status: Some(offer_status), poll_reply: Some(poll_reply),
+        report_durable_offset: Some(report_durable_offset), offer_status: Some(offer_status), poll_reply: Some(poll_reply),
         release_reply: Some(release_reply), stopping: Some(stopping), notify: Some(notify),
         state_info: Some(state_info), state_next: Some(state_next), finish_state: Some(finish_state),
         release_state: Some(release_state), offer_rebuild: Some(offer_rebuild),
@@ -27,7 +27,7 @@ forward!(frame_info(cookie: u64, out: *mut SvFrameInfo));
 forward!(transaction(cookie: u64, tx: u64, out: *mut SvTransactionInfo));
 forward!(event(cookie: u64, tx: u64, index: u64, out: *mut SvEvent));
 forward!(change(cookie: u64, tx: u64, index: u64, out: *mut SvRecordChange));
-forward!(offer_checkpoint(cut: *const SvOffsetCheckpoint, tag: *mut u32, reply: *mut u64));
+forward!(report_durable_offset(cut: *const SvDurableOffsetReport, tag: *mut u32, reply: *mut u64));
 forward!(offer_status(tag: *mut u32, reply: *mut u64));
 forward!(poll_reply(cookie: u64, out: *mut SvControlReply));
 forward!(state_info(cookie: u64, out: *mut SvStateInfo));

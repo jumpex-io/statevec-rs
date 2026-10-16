@@ -42,7 +42,7 @@ impl ConfiguredProjector for Value {
     fn prepare(&self, _: ProjectorPrepare<'_>) -> Result<Value, ProjectorFailure> { Ok(Value(self.0.clone())) }
 }
 impl PreparedProjector for Value {
-    fn recovery(&self) -> crate::ProjectorRecovery { crate::ProjectorRecovery::Continuous { offset: None } }
+    fn recovery(&self) -> crate::plugin_v2::ProjectorRecovery { crate::plugin_v2::ProjectorRecovery::ContinuousHistory { offset: None } }
     fn delivery_limits(&self) -> DeliveryLimits { DeliveryLimits {
         frame_capacity: NonZeroUsize::new(1).unwrap(), maximum_accounted_bytes: NonZeroUsize::new(4096).unwrap(),
     } }
@@ -71,13 +71,13 @@ fn generated_poll_allocates_nothing_and_cannot_join_or_call_a_held_service() {
     let input = SvProjectorPrepare {
         identity: SvProjectionIdentity { manifest: 1, ..Default::default() }, peer_id: 1,
         projector_id: SvProjectorId::encode("history").unwrap(), schema_idl: SvBytes::borrowed(b"{}"),
-        learner_only: 1, external_retention: 1, checkpoint_interval_indices: 1, min_selected_duration_ms: 1,
+        learner_only: 1, external_retention: 1, checkpoint_interval_indices: 1, min_capture_residence_ms: 1,
         recovery_mode: 1, reserved: 0,
     };
     let start = SvProjectorStart { identity: input.identity, peer_id: 1, projector_id: input.projector_id, recovery_mode: 1, ..Default::default() };
     let mut discovery = SvDiscovery { table: std::ptr::null(), table_bytes: 0 };
     assert_eq!(unsafe { EXPORT.discover(std::mem::size_of::<SvDiscovery>() as u64, &mut discovery) }, 0);
-    let table = unsafe { *discovery.table.cast::<SvProjectorV1>() };
+    let table = unsafe { *discovery.table.cast::<SvProjectorV2>() };
     let (mut config, mut prepared, mut worker) = (std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
     let (mut recovery, mut limits) = (SvRecovery::default(), SvDeliveryLimits::default());
     assert_eq!(unsafe { __export::configure(&Module(held.clone()), SvBytes::borrowed(b"{}"), SvBytes::borrowed(b"/tmp"), &mut config) }, SvStatus::SUCCESS);
@@ -86,7 +86,7 @@ fn generated_poll_allocates_nothing_and_cannot_join_or_call_a_held_service() {
 
     // Release before join even if an assertion fails; the borrowed host lives
     // through both guards. No sleep or timing threshold establishes this cut.
-    struct Join { worker: *mut c_void, config: *mut c_void, table: SvProjectorV1 }
+    struct Join { worker: *mut c_void, config: *mut c_void, table: SvProjectorV2 }
     impl Drop for Join { fn drop(&mut self) { unsafe {
         self.table.request_stop.unwrap()(self.worker);
         let mut out = SvProjectorCompletion::EMPTY;

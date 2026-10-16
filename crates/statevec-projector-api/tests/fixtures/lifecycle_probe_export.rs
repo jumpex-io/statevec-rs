@@ -23,13 +23,13 @@ fn count<T>(f: impl FnOnce() -> T) -> (T, usize) {
     (value, ALLOCS.with(|n| n.get().unwrap()))
 }
 struct Holding { inner: *mut c_void, harness: Arc<Harness> }
-struct Worker { inner: *mut c_void, callbacks: Box<callbacks::Callbacks>, _table: Box<SvProjectorHostV1> }
+struct Worker { inner: *mut c_void, callbacks: Box<callbacks::Callbacks>, _table: Box<SvProjectorHostV2> }
 unsafe extern "C" fn unused(_: SvBytes, _: SvBytes, _: *mut *mut c_void) -> SvStatus { unreachable!() }
 static GENERATED: __export::ProjectorExportTable = __export::ProjectorExportTable::new::<Module>(unused);
-fn generated() -> SvProjectorV1 {
+fn generated() -> SvProjectorV2 {
     let mut discovery = SvDiscovery { table: ptr::null(), table_bytes: 0 };
     assert_eq!(unsafe { GENERATED.discover(size_of::<SvDiscovery>() as u64, &mut discovery) }, 0);
-    unsafe { *discovery.table.cast::<SvProjectorV1>() }
+    unsafe { *discovery.table.cast::<SvProjectorV2>() }
 }
 fn caught(f: impl FnOnce() -> SvStatus) -> SvStatus {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
@@ -62,7 +62,7 @@ unsafe extern "C" fn prepare(raw: *const c_void, input: *const SvProjectorPrepar
         result
     })
 }
-unsafe extern "C" fn start(raw: *mut *mut c_void, host: *const SvProjectorHostV1, input: *const SvProjectorStart, out: *mut *mut c_void) -> SvStatus {
+unsafe extern "C" fn start(raw: *mut *mut c_void, host: *const SvProjectorHostV2, input: *const SvProjectorStart, out: *mut *mut c_void) -> SvStatus {
     caught(|| {
         unsafe { *out = ptr::null_mut(); }
         let c = unsafe { &mut *(*raw).cast::<Holding>() };
@@ -73,7 +73,7 @@ unsafe extern "C" fn start(raw: *mut *mut c_void, host: *const SvProjectorHostV1
         // must not make this interposer free callbacks before the real host
         // can retain them. Default to retained even if our own report panics.
         let mut worker = ManuallyDrop::new(Box::new(Worker { inner: ptr::null_mut(), callbacks, _table: table }));
-        let table = &*worker._table as *const SvProjectorHostV1;
+        let table = &*worker._table as *const SvProjectorHostV2;
         let result = unsafe { generated().start.unwrap()(&mut c.inner, table, input, &mut worker.inner) };
         let unchanged = c.inner == original;
         if c.inner.is_null() {
@@ -131,17 +131,17 @@ unsafe fn destroy(raw: *mut *mut c_void, configured: bool) -> SvStatus {
 }
 unsafe extern "C" fn destroy_prepared(raw: *mut *mut c_void) -> SvStatus { unsafe { destroy(raw, false) } }
 unsafe extern "C" fn destroy_configured(raw: *mut *mut c_void) -> SvStatus { unsafe { destroy(raw, true) } }
-struct Table(SvProjectorV1);
+struct Table(SvProjectorV2);
 // Immutable table of static functions and static target bytes only.
 unsafe impl Sync for Table {}
 unsafe impl Send for Table {}
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn statevec_projector_plugin_entry_v1(bytes: u64, out: *mut SvDiscovery) -> u32 {
+pub unsafe extern "C" fn statevec_projector_plugin_entry_v2(bytes: u64, out: *mut SvDiscovery) -> u32 {
     static TABLE: OnceLock<Table> = OnceLock::new();
     if bytes != size_of::<SvDiscovery>() as u64 || out.is_null() { return 1; }
-    let table = TABLE.get_or_init(|| Table(SvProjectorV1 { configure: Some(configure), prepare: Some(prepare), start: Some(start),
+    let table = TABLE.get_or_init(|| Table(SvProjectorV2 { configure: Some(configure), prepare: Some(prepare), start: Some(start),
         poll_worker: Some(poll), request_stop: Some(stop), join: Some(join), destroy_prepared: Some(destroy_prepared),
         destroy_configured: Some(destroy_configured), ..generated() }));
-    unsafe { *out = SvDiscovery { table: (&table.0 as *const SvProjectorV1).cast(), table_bytes: size_of::<SvProjectorV1>() as u64 }; }
+    unsafe { *out = SvDiscovery { table: (&table.0 as *const SvProjectorV2).cast(), table_bytes: size_of::<SvProjectorV2>() as u64 }; }
     0
 }
