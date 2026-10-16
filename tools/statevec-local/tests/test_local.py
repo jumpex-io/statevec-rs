@@ -137,6 +137,48 @@ class Membership(unittest.TestCase):
 
 
 class Processes(unittest.TestCase):
+    def test_stop_between_spawn_and_adoption_reaps_the_child_and_starts_no_next_peer(self):
+        real_popen = subprocess.Popen
+        for kind in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(signal=kind), tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory)
+                manifest = root / "artifacts.json"
+                record_artifacts(manifest, {name: sys.executable for name in ("node", "admin", "core")},
+                                 "1" * 40, "2" * 40)
+                initialize(root / "cluster", manifest, {"initial_voters": [1, 2]}, 24100,
+                           {"artifact": "core", "config_path": str(root / "core.json")})
+                deployment = Deployment(root / "cluster", time.monotonic() + 5)
+                created = []
+
+                def spawn_then_stop(_args, **kwargs):
+                    # Change only the child executable at the physical spawn seam.
+                    # Production spawn/adopt/stop and actual signal delivery remain.
+                    kwargs["stdout"] = subprocess.PIPE
+                    child = real_popen([sys.executable, "-c",
+                        "import signal,sys; signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); "
+                        "print('ready',flush=True); signal.pause()"], **kwargs)
+                    created.append(child)
+                    with selectors.DefaultSelector() as selector:
+                        selector.register(child.stdout, selectors.EVENT_READ)
+                        self.assertTrue(selector.select(timeout=2), "child must install its stop handler")
+                        self.assertEqual(child.stdout.readline(), b"ready\n")
+                    signal.raise_signal(kind)
+                    return child
+
+                try:
+                    with patch.object(cluster.subprocess, "Popen", side_effect=spawn_then_stop):
+                        run_foreground(deployment, "fresh")
+                    self.assertEqual(len(created), 1, "stop must prevent the next voter from starting")
+                    self.assertEqual(created[0].returncode, 0, "the accepted child must be stopped and joined")
+                    self.assertEqual(deployment.children, [])
+                    self.assertTrue((deployment.root / "node-1.json").exists(), "stop must preserve config/data")
+                finally:
+                    for child in created:
+                        if child.poll() is None:
+                            child.kill()
+                        child.wait(timeout=2)
+                        child.stdout.close()
+
     def test_partial_start_failure_retires_and_preserves_original_error(self):
         deployment = MagicMock()
         deployment.start.side_effect = FileNotFoundError("second executable")

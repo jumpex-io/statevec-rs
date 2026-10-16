@@ -93,7 +93,12 @@ No journal, root, offset or checkpoint is reset. There is no automatic restart.
 The foreground launcher owns and reaps its direct child processes on partial
 startup, failure, Ctrl-C, SIGTERM and SIGHUP. A five-second stop budget escalates
 to SIGKILL and reports failure; it is never called graceful retirement. Startup
-may wait for an already accepted blocking construction in Node. SIGKILL of the
+signals latch stop rather than raising inside physical process construction:
+an accepted child is registered before cleanup, and the next checked spawn is
+refused. Application startup/service loops must call `check()` at bounded
+intervals (the built-in admin calls are bounded); stop does not interrupt
+arbitrary blocking application code. Node startup may wait for an already
+accepted blocking construction. SIGKILL of the
 launcher itself cannot guarantee child cleanup; service managers should use
 process-group/cgroup containment. Node must exit zero. Applications can explicitly
 permit SIGTERM exit for their own non-Node processes through `spawn`.

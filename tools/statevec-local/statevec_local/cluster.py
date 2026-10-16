@@ -88,11 +88,19 @@ class Deployment:
         if not self.voters or len(set(self.voters+self.learners)) != len(self.voters+self.learners):
             raise ValueError("invalid local deployment peer IDs")
         self.children = []
+        self._stop_requested = False
 
     def binary(self, name):
         return self.spec["files"][name]["path"]
 
+    def request_stop(self):
+        # Signal handlers only latch intent. Raising between physical Popen and
+        # adopt_child would strand an accepted child outside cleanup custody.
+        self._stop_requested = True
+
     def check(self):
+        if self._stop_requested:
+            raise KeyboardInterrupt
         if time.monotonic() >= self.deadline:
             raise TimeoutError(f"local deployment deadline; inspect logs in {self.root}")
         for child in self.children:
@@ -103,6 +111,7 @@ class Deployment:
         self.children.append(Child(name, process, signal_exit_ok))
 
     def spawn(self, name, binary, *args, signal_exit_ok=False):
+        self.check()
         _label(name)
         with (self.root / (name + ".log")).open("ab") as log:
             child = subprocess.Popen([self.binary(binary), *map(str, args)], cwd=self.root,
@@ -184,10 +193,11 @@ class Deployment:
 def run_foreground(deployment, mode):
     """Own the direct child processes through partial startup and all exits."""
     def stop(_signum, _frame):
-        raise KeyboardInterrupt
+        deployment.request_stop()
     previous = {kind: signal.signal(kind, stop) for kind in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
     try:
         deployment.start(mode)
+        deployment.check()
         deployment.deadline = float("inf")
         print(f"processes started; application readiness is separate: {deployment.root}", flush=True)
         while True:
