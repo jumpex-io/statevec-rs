@@ -91,10 +91,12 @@ The two engines share the schema and business transaction interfaces. The
 local engine helps develop business logic; cluster durability, recovery,
 replication and performance are verified by the production platform.
 
-Production deployment uses the platform's node binaries and integration
-workflow. This repository currently ships Rust development libraries and local
-tests. Single-host serving and replay executables are outside its delivery
-scope.
+Production deployment uses the platform's node binaries. The public
+[local launcher](tools/statevec-local/README.md) standardizes artifact selection,
+configuration and foreground multi-process startup without private Rust
+dependencies. Applications provide their plugins and business configuration.
+The actual engine/Node executables still come from the matching host distribution;
+the launcher is not a replacement engine or a claim of release availability.
 
 Configured hosts use the public Core V3 and Projector V1 interfaces with a
 matched host build. The legacy plugin ABI version 2 remains a separate surface;

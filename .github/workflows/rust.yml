@@ -20,3 +20,4 @@ jobs:
       - run: cargo check --workspace --all-targets --locked
       - run: cargo nextest run --workspace --all-targets --locked --no-tests fail
       - run: cargo test --workspace --doc --locked
+      - run: PYTHONPATH=tools/statevec-local python3 -m unittest discover -s tools/statevec-local/tests -v
