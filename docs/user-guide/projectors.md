@@ -56,7 +56,7 @@ not acknowledge a durable projector checkpoint.
 
 ## Keep the source cut with your durable model
 
-`loan.checkpoint_cut()` returns a `SourceCut`. Keep it with the model version it
+`loan.source_cut()` returns a `SourceCut`. Keep it with the model version it
 describes. `loan.view().position()` exposes source metadata for inspection, but
 those readable fields cannot reconstruct a token. For a
 continuous-history source, `cut.offset()` returns `Some(ConsumeOffset)` with
@@ -153,7 +153,7 @@ borrowed events and record changes without copying their payloads. Views cannot
 outlive the loan; releasing the loan does not save or acknowledge an offset.
 
 For continuous history, obtain the `Some(offset)` from
-`loan.checkpoint_cut().offset()`. After saving your effects and that offset, offer the cut's
+`loan.source_cut().offset()`. After saving your effects and that offset, offer the cut's
 `declare_durable()` value with `control.report_durable_offset()`. Queue Full, Closed and
 the four-live-reply capacity limit are distinct from a queued owner's refusal.
 A `ReplyHandle` polls without blocking; dropping a pending reply does not cancel

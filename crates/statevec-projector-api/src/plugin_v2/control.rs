@@ -1,4 +1,4 @@
-use super::completion::FailureSlot;
+use super::io::ScopeFailureSlot;
 use super::{borrow::call, ffi::*, io::{ReleaseDisposition, Held, ReplySlot, ScopeData}, ProjectorAbiFailure as A, ProjectorFailure as F, ProjectorOperation as Op, ControlReply};
 use crate::{ConsumeOffset, ProjectorCheckpointRejection as Rejection, ProjectorCheckpointStatus as Status};
 use std::{cell::Cell, marker::PhantomData};
@@ -12,6 +12,12 @@ pub struct RebuildCut { pub(super) raw: SvRebuildCut }
 /// Local refusal to declare a durable history offset from a latest-state cut.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotContinuousHistory;
+impl std::fmt::Display for NotContinuousHistory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("latest-state source cuts do not define durable history offsets")
+    }
+}
+impl std::error::Error for NotContinuousHistory {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlDecision { Accepted, Rejected(Rejection) }
 impl SourceCut {
@@ -120,7 +126,7 @@ impl<'io> super::ProjectorControlPort<'io> {
                 // returned cookie is a live resource safe to destroy.
                 slots[index] = ReplySlot::Held(Held { cookie, release: ReleaseDisposition::UntrustedTransfer });
                 drop(slots);
-                self.host.record(FailureSlot::ReplyRelease, A::InvalidHandle.into());
+                self.host.record(ScopeFailureSlot::ReplyRelease, A::InvalidHandle.into());
             }
             return Err(cause);
         }
@@ -134,7 +140,7 @@ impl<'io> super::ProjectorControlPort<'io> {
             _ => {
                 if cookie != 0 { slots[index] = ReplySlot::Held(Held { cookie, release: ReleaseDisposition::UntrustedTransfer }); }
                 drop(slots);
-                self.host.record(FailureSlot::ReplyRelease, A::InvalidHandle.into());
+                self.host.record(ScopeFailureSlot::ReplyRelease, A::InvalidHandle.into());
                 Err(A::InvalidHandle.into())
             }
         }

@@ -165,6 +165,8 @@ unsafe extern "C" fn poll_reply(
                 return status;
             }
             if !p.lost.swap(true, Ordering::AcqRel) {
+                let durable = history_crash::durable_index(&p.original);
+                eprintln!("history-probe accepted-before-loss native_durable={durable}");
                 unsafe {
                     out.write(SvControlReply {
                         tag: 4,
@@ -175,6 +177,8 @@ unsafe extern "C" fn poll_reply(
                 }
                 eprintln!("history-probe accepted reply lost");
             } else {
+                let durable = history_crash::durable_index(&p.original);
+                eprintln!("history-probe duplicate-accepted native_durable={durable}");
                 p.completed.store(true, Ordering::Release);
                 eprintln!(
                     "history-probe exact retry accepted attempts={}",

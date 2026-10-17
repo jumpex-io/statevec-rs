@@ -21,23 +21,23 @@ impl From<DeliveryLimits> for SvDeliveryLimits {
 impl SvRecovery {
     pub fn decode(self) -> Result<ProjectorRecovery, A> {
         if self.reserved != 0 { return Err(A::Reserved { actual: self.reserved.into() }); }
-        if self.tag != 1 && self.offset != SvConsumeOffset::default() {
+        if self.tag != recovery_tag::HISTORY_FROM_OFFSET && self.offset != SvConsumeOffset::default() {
             let bytes = self.offset.cluster.iter().chain(&self.offset.projector_id.bytes)
                 .fold(0u64, |value, byte| value | u64::from(*byte));
             return Err(A::Reserved { actual: bytes | self.offset.projector_id.len | self.offset.raft_term | self.offset.raft_index });
         }
         match self.tag {
-            0 => Ok(ProjectorRecovery::ContinuousHistory { offset: None }),
-            1 => Ok(ProjectorRecovery::ContinuousHistory { offset: Some(self.offset.decode()?) }),
-            2 => Ok(ProjectorRecovery::LatestStateOnly),
+            recovery_tag::HISTORY_FROM_GENESIS => Ok(ProjectorRecovery::ContinuousHistory { offset: None }),
+            recovery_tag::HISTORY_FROM_OFFSET => Ok(ProjectorRecovery::ContinuousHistory { offset: Some(self.offset.decode()?) }),
+            recovery_tag::LATEST_STATE => Ok(ProjectorRecovery::LatestStateOnly),
             actual => Err(A::Flag { actual }),
         }
     }
     pub fn encode(value: &ProjectorRecovery) -> Result<Self, A> {
         match value {
-            ProjectorRecovery::ContinuousHistory { offset: None } => Ok(Self::default()),
-            ProjectorRecovery::ContinuousHistory { offset: Some(offset) } => Ok(Self { tag: 1, reserved: 0, offset: SvConsumeOffset::encode(offset).map_err(|_| A::InvalidHandle)? }),
-            ProjectorRecovery::LatestStateOnly => Ok(Self { tag: 2, ..Self::default() }),
+            ProjectorRecovery::ContinuousHistory { offset: None } => Ok(Self { tag: recovery_tag::HISTORY_FROM_GENESIS, ..Self::default() }),
+            ProjectorRecovery::ContinuousHistory { offset: Some(offset) } => Ok(Self { tag: recovery_tag::HISTORY_FROM_OFFSET, reserved: 0, offset: SvConsumeOffset::encode(offset).map_err(|_| A::InvalidHandle)? }),
+            ProjectorRecovery::LatestStateOnly => Ok(Self { tag: recovery_tag::LATEST_STATE, ..Self::default() }),
         }
     }
 }

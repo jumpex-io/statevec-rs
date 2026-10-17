@@ -172,7 +172,7 @@ impl PreparedProjector for Prepared {
             }
             match source.next_timeout(Duration::from_millis(10))? {
                 Delivery::Frame(loan) => {
-                    let cut = loan.checkpoint_cut();
+                    let cut = loan.source_cut();
                     let entry = store::Entry::read(loan.view(), cut.offset().ok_or(ProjectorFailure::Application { code: 1103 })?)?;
                     self.store
                         .commit_entry(&entry)

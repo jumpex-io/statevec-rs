@@ -10,7 +10,7 @@ use std::{sync::mpsc, time::Duration};
 /// Native attachment request; ReplayOnly is not a configured plugin mode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum ProjectorRecovery {
+pub enum AttachmentRecovery {
     ReplayOnly,
     Continuous { offset: Option<ConsumeOffset> },
     LatestState,

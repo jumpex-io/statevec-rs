@@ -93,9 +93,11 @@ unsafe extern "C" fn prepare<M: ProjectorModule>(raw: *const c_void, context: *c
         // never unwind its potentially panicking destructor during another unwind.
         let metadata = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let result = SvRecovery::encode(&value.recovery())?;
-            let valid_mode = matches!((context.recovery_mode, result.tag), (1, 0 | 1) | (2, 2));
+            let valid_mode = matches!((context.recovery_mode, result.tag),
+                (recovery_mode::CONTINUOUS_HISTORY, recovery_tag::HISTORY_FROM_GENESIS | recovery_tag::HISTORY_FROM_OFFSET)
+                | (recovery_mode::LATEST_STATE_ONLY, recovery_tag::LATEST_STATE));
             if !valid_mode { return Err(A::BindingMismatch); }
-            if result.tag == 1 && (result.offset.cluster != context.identity.cluster || result.offset.projector_id != context.projector_id) {
+            if result.tag == recovery_tag::HISTORY_FROM_OFFSET && (result.offset.cluster != context.identity.cluster || result.offset.projector_id != context.projector_id) {
                 return Err(A::BindingMismatch);
             }
             Ok((result, SvDeliveryLimits::from(value.delivery_limits())))

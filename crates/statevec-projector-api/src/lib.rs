@@ -37,7 +37,7 @@
 //!
 //! Whole-frame consumption includes empty progress barriers. Receiving a frame
 //! does not acknowledge a durable checkpoint. Save business effects and the
-//! complete offset before reporting the source cut as checkpointed.
+//! complete offset before reporting the source cut as durable.
 
 pub mod native;
 mod types;

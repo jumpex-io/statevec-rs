@@ -15,7 +15,7 @@ pub(super) const fn support(value: ProjectorRecoverySupport) -> u64 {
     }
 }
 pub(super) fn mode(raw: u32) -> Result<Mode, A> {
-    match raw { 1 => Ok(Mode::ContinuousHistory), 2 => Ok(Mode::LatestStateOnly), actual => Err(A::Flag { actual }) }
+    match raw { recovery_mode::CONTINUOUS_HISTORY => Ok(Mode::ContinuousHistory), recovery_mode::LATEST_STATE_ONLY => Ok(Mode::LatestStateOnly), actual => Err(A::Flag { actual }) }
 }
 pub(super) fn identity(raw: SvProjectionIdentity) -> Result<ProjectionIdentity, A> {
     if raw.reserved != 0 { return Err(A::Reserved { actual: raw.reserved.into() }); }

@@ -1,9 +1,9 @@
-//! Fixed-width V1 C layouts. Integers and nullable callbacks are untrusted at ingress.
+//! Fixed-width V2 C layouts. Integers and nullable callbacks are untrusted at ingress.
 //! A table or copied cut does not prove commitment or borrower retirement.
 use std::ffi::c_void;
 pub use statevec_api::plugin_v3::ffi::{SvBytes, SvDiscovery, SvHeader, SvKey, SvSchemaIdentity};
 pub use super::SvStatus;
-pub use super::wire::{receive_tag, offer_tag, state_tag, reply_tag, status_kind, rejection_reason};
+pub use super::wire::{receive_tag, offer_tag, state_tag, reply_tag, status_kind, rejection_reason, recovery_tag, recovery_mode};
 
 pub const PROJECTOR_ABI_MAJOR: u32 = 2;
 pub const PROJECTOR_KIND: u32 = 2;

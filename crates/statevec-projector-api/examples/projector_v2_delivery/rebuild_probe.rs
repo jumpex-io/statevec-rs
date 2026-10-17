@@ -78,7 +78,7 @@ fn run(io: ProjectorIo<'_>, suffix: bool, report: &mut RebuildReport, acquired: 
     accept(&control, &cut)?;
     if suffix {
         let Delivery::Frame(loan) = source.next_timeout(Duration::from_secs(20))? else { return Err(fail(930)); };
-        if loan.checkpoint_cut().offset().is_some() { return Err(fail(931)); }
+        if loan.source_cut().offset().is_some() { return Err(fail(931)); }
         let view = loan.view();
         report.suffix_index = view.position().raft_index;
         if report.suffix_index != target + 1 { return Err(fail(932)); }
@@ -110,7 +110,7 @@ fn run(io: ProjectorIo<'_>, suffix: bool, report: &mut RebuildReport, acquired: 
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn statevec_projector_rebuild_probe_v1(
+pub unsafe extern "C" fn statevec_projector_rebuild_probe_v2(
     table: *const SvProjectorHostV2, startup: *const SvProjectorStart, suffix: u32,
     acquired: unsafe extern "C" fn(*mut std::ffi::c_void) -> u32, context: *mut std::ffi::c_void,
     report: *mut RebuildReport, completion: *mut SvProjectorCompletion,

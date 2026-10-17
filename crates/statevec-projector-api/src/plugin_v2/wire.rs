@@ -15,3 +15,13 @@ vocabulary!(rejection_reason {
     WRONG_RECOVERY_MODE=8, PROJECTOR_IDENTITY_MISMATCH=9, NOT_REBUILDING=10,
     REBUILD_NOT_COMPLETE=11, REBUILD_MISMATCH=12,
 });
+/// Recovery observations and requested modes are separate wire domains.
+pub mod recovery_tag {
+    pub const HISTORY_FROM_GENESIS: u32 = 0;
+    pub const HISTORY_FROM_OFFSET: u32 = 1;
+    pub const LATEST_STATE: u32 = 2;
+}
+pub mod recovery_mode {
+    pub const CONTINUOUS_HISTORY: u32 = 1;
+    pub const LATEST_STATE_ONLY: u32 = 2;
+}

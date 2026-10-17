@@ -2,6 +2,22 @@ use super::completion::FailureSlot;
 use super::{borrow::*, ffi::*, ProjectorAbiFailure as A, ProjectorFailure as F, ProjectorOperation as Op};
 use std::{cell::Cell, marker::PhantomData, rc::Rc, sync::Mutex};
 
+/// Only operation failures can be recorded here. Service/worker joins have
+/// their own typed results and cannot enter the operation-failure path.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ScopeFailureSlot { Run, FrameRelease, StateRelease, ReplyRelease, Notification }
+impl ScopeFailureSlot {
+    fn code(self) -> u32 {
+        match self {
+            Self::Run => FailureSlot::Run,
+            Self::FrameRelease => FailureSlot::FrameRelease,
+            Self::StateRelease => FailureSlot::StateRelease,
+            Self::ReplyRelease => FailureSlot::ReplyRelease,
+            Self::Notification => FailureSlot::Notification,
+        }.code()
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 pub(super) struct Held { pub cookie: u64, pub release: ReleaseDisposition }
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -41,7 +57,7 @@ impl ScopeData {
     /// is not a pure validator. Cleanup slots cannot preempt a later run error.
     pub fn latch_contract_failure<T>(&self, result: Result<T, F>) -> Result<T, F> {
         if let Err(failure @ (F::HostPanicked | F::AbiContract(_))) = &result {
-            self.record(FailureSlot::Run, *failure);
+            self.record(ScopeFailureSlot::Run, *failure);
         }
         result
     }
@@ -55,27 +71,27 @@ impl ScopeData {
         }
         Ok(())
     }
-    pub fn record(&self, slot: FailureSlot, failure: F) {
+    pub fn record(&self, slot: ScopeFailureSlot, failure: F) {
         let status = SvStatus::from(&failure);
         let first = {
             let mut completion = self.completion.lock().unwrap_or_else(|e| e.into_inner());
             let place = match slot {
-                FailureSlot::Run => &mut completion.run_failure, FailureSlot::FrameRelease => &mut completion.frame_release_failure,
-                FailureSlot::StateRelease => &mut completion.state_release_failure, FailureSlot::ReplyRelease => &mut completion.reply_release_failure,
-                FailureSlot::Notification => &mut completion.notification_failure, _ => unreachable!("fixed SDK failure slot"),
+                ScopeFailureSlot::Run => &mut completion.run_failure, ScopeFailureSlot::FrameRelease => &mut completion.frame_release_failure,
+                ScopeFailureSlot::StateRelease => &mut completion.state_release_failure, ScopeFailureSlot::ReplyRelease => &mut completion.reply_release_failure,
+                ScopeFailureSlot::Notification => &mut completion.notification_failure,
             };
             if *place == SvStatus::SUCCESS { *place = status; true } else { false }
         };
         if first { self.observation.publish(SvProjectorFailureObservation { slot: slot.code(), reserved: 0, cause: status }); }
-        if first && matches!(slot, FailureSlot::Run | FailureSlot::FrameRelease | FailureSlot::StateRelease | FailureSlot::ReplyRelease) {
+        if first && matches!(slot, ScopeFailureSlot::Run | ScopeFailureSlot::FrameRelease | ScopeFailureSlot::StateRelease | ScopeFailureSlot::ReplyRelease) {
             // Revoke acquisition using the same physical stop latch. Preserve
             // this release kind's first cause if the consequent wake also fails.
             if let Err(failure) = self.stop() { self.record(slot, failure); }
         }
-        if first && slot != FailureSlot::Notification {
+        if first && slot != ScopeFailureSlot::Notification {
             let observation = SvProjectorFailureObservation { slot: slot.code(), reserved: 0, cause: status };
             // SAFETY: checked table and live scope; wake only after stop_receive.
-            if let Err(failure) = call(unsafe { self.table.notify.unwrap()(self.table.context, 1, &observation) }, Op::Notify) { self.record(FailureSlot::Notification, failure); }
+            if let Err(failure) = call(unsafe { self.table.notify.unwrap()(self.table.context, 1, &observation) }, Op::Notify) { self.record(ScopeFailureSlot::Notification, failure); }
         }
     }
     pub fn release_frame(&self) {
@@ -89,8 +105,8 @@ impl ScopeData {
         // may release it and the local in/out cookie is disjoint writable data.
         let result = call(unsafe { self.table.release_frame.unwrap()(self.table.context, &mut returned) }, Op::ReleaseFrame);
         if returned == 0 { *self.frame.lock().unwrap_or_else(|e| e.into_inner()) = Held::default(); }
-        if let Err(failure) = result { self.record(FailureSlot::FrameRelease, failure); }
-        else if returned != 0 { self.record(FailureSlot::FrameRelease, A::InvalidHandle.into()); }
+        if let Err(failure) = result { self.record(ScopeFailureSlot::FrameRelease, failure); }
+        else if returned != 0 { self.record(ScopeFailureSlot::FrameRelease, A::InvalidHandle.into()); }
     }
     pub fn release_reply(&self, cookie: u64) {
         let index = {
@@ -102,8 +118,8 @@ impl ScopeData {
         // SAFETY: one move-only reply owns this cookie, still covered by scope.
         let result = call(unsafe { self.table.release_reply.unwrap()(self.table.context, &mut returned) }, Op::ReleaseReply);
         if returned == 0 { self.replies.lock().unwrap_or_else(|e| e.into_inner())[index] = ReplySlot::Free; }
-        if let Err(failure) = result { self.record(FailureSlot::ReplyRelease, failure); }
-        else if returned != 0 { self.record(FailureSlot::ReplyRelease, A::InvalidHandle.into()); }
+        if let Err(failure) = result { self.record(ScopeFailureSlot::ReplyRelease, failure); }
+        else if returned != 0 { self.record(ScopeFailureSlot::ReplyRelease, A::InvalidHandle.into()); }
     }
     pub fn stop(&self) -> Result<(), F> {
         // SAFETY: concurrent stop is promised by the validated host table.
@@ -171,7 +187,7 @@ impl<'io> ProjectorServices<'io> {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| service(ProjectorStop { host, _borrow: PhantomData })));
             match result {
                 Ok(Ok(())) => return,
-                Ok(Err(failure)) => host.record(FailureSlot::Run, failure),
+                Ok(Err(failure)) => host.record(ScopeFailureSlot::Run, failure),
                 Err(payload) => {
                     std::mem::forget(payload);
                     let mut completion = host.completion.lock().unwrap_or_else(|e| e.into_inner());
@@ -181,13 +197,13 @@ impl<'io> ProjectorServices<'io> {
                     let observation = SvProjectorFailureObservation { slot: FailureSlot::ServiceJoin.code(), reserved: 0, cause: completion.service_join_failure };
                     drop(completion);
                     if first { host.observation.publish(observation); }
-                    if let Err(failure) = host.stop() { host.record(FailureSlot::Run, failure); }
+                    if let Err(failure) = host.stop() { host.record(ScopeFailureSlot::Run, failure); }
                     if first {
-                        if let Err(cause) = call(unsafe { host.table.notify.unwrap()(host.table.context, 1, &observation) }, Op::Notify) { host.record(FailureSlot::Notification, cause); }
+                        if let Err(cause) = call(unsafe { host.table.notify.unwrap()(host.table.context, 1, &observation) }, Op::Notify) { host.record(ScopeFailureSlot::Notification, cause); }
                     }
                 }
             }
-            if let Err(failure) = host.stop() { host.record(FailureSlot::Run, failure); }
+            if let Err(failure) = host.stop() { host.record(ScopeFailureSlot::Run, failure); }
         })).map_err(|source| F::Io { stage: super::ProjectorIoStage::ServiceSpawn, kind: super::ProjectorIoKind::Other, os_code: source.raw_os_error() })
     }
 }
@@ -198,7 +214,7 @@ impl<'io> ProjectorServices<'io> {
 /// start a product node. Native ownership alone selects and admits recovery.
 ///
 /// # Safety
-/// The table/context and every callback must honor V1, remain valid through this
+/// The table/context and every callback must honor V2, remain valid through this
 /// call, and supply valid borrowed payloads until release. No other source worker
 /// may use this context. `startup` must be the actual admitted Startup view.
 pub unsafe fn with_host(
@@ -229,13 +245,13 @@ pub(super) fn run(&self, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(
     let host = self;
     std::thread::scope(|services| {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(ProjectorIo { host: &host, services }))) {
-            Ok(Ok(())) => {}, Ok(Err(failure)) => host.record(FailureSlot::Run, failure),
-            Err(payload) => { std::mem::forget(payload); host.record(FailureSlot::Run, F::PluginPanicked); }
+            Ok(Ok(())) => {}, Ok(Err(failure)) => host.record(ScopeFailureSlot::Run, failure),
+            Err(payload) => { std::mem::forget(payload); host.record(ScopeFailureSlot::Run, F::PluginPanicked); }
         }
         // Release a forgotten state loan before our internal stop can mask
         // abandonment. It cannot have a safe borrower after run returns.
         host.release_state();
-        if let Err(failure) = host.stop() { host.record(FailureSlot::Run, failure); }
+        if let Err(failure) = host.stop() { host.record(ScopeFailureSlot::Run, failure); }
         // Scope joins even routines holding control/reply facades. It cannot be
         // bypassed by forgetting a public facade, and no new service is admitted.
     });
@@ -247,14 +263,14 @@ pub(super) fn run(&self, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(
         if [result.run_failure, result.frame_release_failure, result.state_release_failure,
             result.reply_release_failure, result.service_join_failure, result.notification_failure,
             result.worker_join_failure].iter().all(|cause| *cause == SvStatus::SUCCESS) {
-            host.record(FailureSlot::Run, F::RebuildSource(super::RebuildSourceFailure::RebuildAbandoned));
+            host.record(ScopeFailureSlot::Run, F::RebuildSource(super::RebuildSourceFailure::RebuildAbandoned));
         }
     }
     // Publish the readiness hint before waking its observer. Actual join still
     // waits for this callback and reads the terminal result, including a failed
     // Finished notification; readiness alone never releases host dependencies.
     host.observation.finish();
-    if let Err(cause) = call(unsafe { host.table.notify.unwrap()(host.table.context, 2, &SvProjectorFailureObservation::NONE) }, Op::Notify) { host.record(FailureSlot::Notification, cause); }
+    if let Err(cause) = call(unsafe { host.table.notify.unwrap()(host.table.context, 2, &SvProjectorFailureObservation::NONE) }, Op::Notify) { host.record(ScopeFailureSlot::Notification, cause); }
     let joined = host.frame.lock().unwrap_or_else(|e| e.into_inner()).cookie == 0
         && host.state.lock().unwrap_or_else(|e| e.into_inner()).cookie == 0
         && host.replies.lock().unwrap_or_else(|e| e.into_inner()).iter().all(|item| matches!(item, ReplySlot::Free));
@@ -306,7 +322,7 @@ impl ProjectorSource<'_> {
         // disjoint and all returned bytes stay borrowed under the resulting loan.
         let result = call(unsafe { self.host.table.receive.unwrap()(self.host.table.context, nanos, &mut tag, &mut cookie) }, Op::Receive);
         if (result.is_err() || !matches!(tag, receive_tag::FRAME | receive_tag::STATE)) && cookie != 0 {
-            let (held, slot) = if tag == receive_tag::STATE { (&self.host.state, FailureSlot::StateRelease) } else { (&self.host.frame, FailureSlot::FrameRelease) };
+            let (held, slot) = if tag == receive_tag::STATE { (&self.host.state, ScopeFailureSlot::StateRelease) } else { (&self.host.frame, ScopeFailureSlot::FrameRelease) };
             *held.lock().unwrap_or_else(|e| e.into_inner()) = Held { cookie, release: ReleaseDisposition::UntrustedTransfer };
             self.host.record(slot, A::InvalidHandle.into());
             return Err(result.err().unwrap_or_else(|| A::InvalidHandle.into()));
@@ -328,7 +344,7 @@ impl ProjectorSource<'_> {
                 *self.host.state.lock().unwrap_or_else(|e| e.into_inner()) = Held { cookie, release: ReleaseDisposition::Available };
                 match super::state::StateLoan::acquire(self.host, cookie) {
                     Ok(loan) => Ok(Delivery::State(loan)),
-                    Err(cause) => { self.host.record(FailureSlot::Run, cause); self.host.release_state(); Err(cause) }
+                    Err(cause) => { self.host.record(ScopeFailureSlot::Run, cause); self.host.release_state(); Err(cause) }
                 }
             }
             receive_tag::TIMED_OUT if nanos != 0 => Ok(Delivery::TimedOut), actual => Err(A::Flag { actual }.into()),

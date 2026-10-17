@@ -18,7 +18,7 @@ fn latest_declaration_is_local_and_does_not_poison_the_scope() {
     let completion = unsafe { crate::plugin_v2::host::with_host(&table, &startup, |io| {
         let mut parts = io.split();
         let Delivery::Frame(loan) = parts.source.try_next()? else { panic!("mechanical latest frame") };
-        let cut = loan.checkpoint_cut();
+        let cut = loan.source_cut();
         assert!(cut.offset().is_none());
         assert!(matches!(cut.declare_durable(), Err(NotContinuousHistory)));
         assert_eq!(fixture.offers.load(Ordering::SeqCst), 0, "no host declaration call");
@@ -55,6 +55,32 @@ fn shared_wire_names_preserve_independent_numeric_meanings() {
     assert_eq!([offer_tag::QUEUED, offer_tag::OWNER_QUEUE_FULL, offer_tag::CLOSED, offer_tag::REPLY_CAPACITY_EXHAUSTED], [0,1,2,3]);
     assert_eq!([state_tag::RECORD, state_tag::END, state_tag::STOP, state_tag::PROGRESS], [0,1,2,3]);
     assert_eq!([reply_tag::PENDING, reply_tag::ACCEPTED, reply_tag::REJECTED, reply_tag::STATUS, reply_tag::DISCONNECTED], [0,1,2,3,4]);
+    assert_eq!([recovery_tag::HISTORY_FROM_GENESIS, recovery_tag::HISTORY_FROM_OFFSET, recovery_tag::LATEST_STATE], [0, 1, 2]);
+    assert_eq!([recovery_mode::CONTINUOUS_HISTORY, recovery_mode::LATEST_STATE_ONLY], [1, 2]);
+}
+
+#[test]
+fn local_mode_refusal_is_a_standard_error() {
+    let error: &dyn std::error::Error = &NotContinuousHistory;
+    assert!(error.source().is_none());
+    assert_eq!(error.to_string(), "latest-state source cuts do not define durable history offsets");
+}
+
+#[test]
+fn recovery_codec_preserves_literal_tags_and_inactive_fields() {
+    use crate::plugin_v2::ProjectorRecovery;
+    let offset = crate::ConsumeOffset { cluster_id: "01".repeat(32), projector_id: "history".into(), raft_term: 2, raft_index: 3 };
+    for (value, tag) in [(ProjectorRecovery::ContinuousHistory { offset: None }, 0),
+        (ProjectorRecovery::ContinuousHistory { offset: Some(offset.clone()) }, 1), (ProjectorRecovery::LatestStateOnly, 2)] {
+        let encoded = SvRecovery::encode(&value).unwrap();
+        assert_eq!(encoded.tag, tag);
+        assert_eq!(encoded.decode().unwrap(), value);
+        if tag != 1 {
+            assert_eq!(encoded.offset, SvConsumeOffset::default());
+            assert!(SvRecovery { offset: SvConsumeOffset::encode(&offset).unwrap(), ..encoded }.decode().is_err());
+        }
+    }
+    assert!(SvRecovery { tag: 3, ..Default::default() }.decode().is_err());
 }
 
 #[test]

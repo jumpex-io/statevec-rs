@@ -1,6 +1,6 @@
 //! Lending state views and exact handle disposition. The host owns traversal
 //! integrity; this layer checks its wire evidence and never manufactures a cut.
-use super::completion::FailureSlot;
+use super::io::ScopeFailureSlot;
 use super::{borrow::*, ffi::*, io::{ReleaseDisposition, Held, ScopeData}, ProjectorAbiFailure as A,
     ProjectorFailure as F, ProjectorOperation as Op, RebuildSourceFailure as R};
 use std::{marker::PhantomData, rc::Rc, sync::atomic::Ordering};
@@ -96,7 +96,7 @@ impl<'a> StateLoan<'a> {
         // are borrowed. Output storage is complete and disjoint from the host.
         let result = call(unsafe { self.host.table.state_next.unwrap()(self.host.table.context, self.cookie, &mut tag, &mut raw) }, Op::StateNext)
             .and_then(|()| self.decode_record(tag, raw, count));
-        if let Err(cause) = &result { host.record(FailureSlot::Run, *cause); }
+        if let Err(cause) = &result { host.record(ScopeFailureSlot::Run, *cause); }
         result
     }
     fn decode_record(&mut self, tag: u32, raw: SvStateRecord, count: u64) -> Result<StateRead<'_>, F> {
@@ -137,7 +137,7 @@ impl<'a> StateLoan<'a> {
             // Unknown transfer: never retry a possibly consumed handle or claim
             // retirement solely because a malformed callback wrote zero.
             self.host.state.lock().unwrap_or_else(|p| p.into_inner()).release = ReleaseDisposition::UntrustedTransfer;
-            self.host.record(FailureSlot::StateRelease, A::InvalidHandle.into());
+            self.host.record(ScopeFailureSlot::StateRelease, A::InvalidHandle.into());
             return Err(result.err().unwrap_or_else(|| A::InvalidHandle.into()));
         }
         if returned == 0 {
@@ -147,7 +147,7 @@ impl<'a> StateLoan<'a> {
         match result {
             Ok(()) => Ok(super::RebuildCut { raw }),
             Err(cause) => {
-                if cause != F::RebuildSource(R::Incomplete) { self.host.record(FailureSlot::Run, cause); }
+                if cause != F::RebuildSource(R::Incomplete) { self.host.record(ScopeFailureSlot::Run, cause); }
                 Err(cause)
             }
         }
@@ -171,10 +171,10 @@ impl ScopeData {
         match result {
             Err(F::RebuildSource(R::RebuildAbandoned)) if returned == 0 => {
                 self.abandoned.store(true, Ordering::Release);
-                if let Err(cause) = self.stop() { self.record(FailureSlot::StateRelease, cause); }
+                if let Err(cause) = self.stop() { self.record(ScopeFailureSlot::StateRelease, cause); }
             }
-            Err(cause) => self.record(FailureSlot::StateRelease, cause),
-            Ok(()) if returned != 0 => self.record(FailureSlot::StateRelease, A::InvalidHandle.into()),
+            Err(cause) => self.record(ScopeFailureSlot::StateRelease, cause),
+            Ok(()) if returned != 0 => self.record(ScopeFailureSlot::StateRelease, A::InvalidHandle.into()),
             Ok(()) => (),
         }
     }

@@ -16,6 +16,9 @@ impl FailureSlot {
         Self::ReplyRelease, Self::ServiceJoin, Self::Notification, Self::WorkerJoin];
     pub const fn code(self) -> u32 { self as u32 }
     pub const fn index(self) -> usize { self as usize - 1 }
+    fn decode(code: u32) -> Result<Self, A> {
+        Self::ALL.into_iter().find(|slot| slot.code() == code).ok_or(A::Flag { actual: code })
+    }
 }
 
 /// Validated observations only. `joined` is a report from the exporter, not a
@@ -40,14 +43,14 @@ pub fn decode_observation(raw: SvProjectorFailureObservation) -> Result<Option<W
     }
     let failure = decode_failure(raw.cause)?.ok_or(A::Flag { actual: raw.slot })?;
     let release = matches!(failure, C::Operation(F::Host(_) | F::HostPanicked | F::AbiContract(_)));
-    match (raw.slot, failure) {
-        (1, C::Operation(source)) => Ok(Some(W::Run(source))),
-        (2, C::Operation(source)) if release => Ok(Some(W::FrameRelease(source))),
-        (3, C::Operation(source)) if release => Ok(Some(W::StateRelease(source))),
-        (4, C::Operation(source)) if release => Ok(Some(W::ReplyRelease(source))),
-        (5, C::ServiceJoinPanicked) => Ok(Some(W::ServiceJoinPanicked)),
-        (6, C::Operation(source)) if release => Ok(Some(W::Notification(source))),
-        (7, C::WorkerJoinPanicked) => Ok(Some(W::WorkerJoinPanicked)),
+    match (FailureSlot::decode(raw.slot)?, failure) {
+        (FailureSlot::Run, C::Operation(source)) => Ok(Some(W::Run(source))),
+        (FailureSlot::FrameRelease, C::Operation(source)) if release => Ok(Some(W::FrameRelease(source))),
+        (FailureSlot::StateRelease, C::Operation(source)) if release => Ok(Some(W::StateRelease(source))),
+        (FailureSlot::ReplyRelease, C::Operation(source)) if release => Ok(Some(W::ReplyRelease(source))),
+        (FailureSlot::ServiceJoin, C::ServiceJoinPanicked) => Ok(Some(W::ServiceJoinPanicked)),
+        (FailureSlot::Notification, C::Operation(source)) if release => Ok(Some(W::Notification(source))),
+        (FailureSlot::WorkerJoin, C::WorkerJoinPanicked) => Ok(Some(W::WorkerJoinPanicked)),
         _ => Err(A::Flag { actual: raw.slot }),
     }
 }

@@ -17,7 +17,7 @@ pub struct Report {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn statevec_projector_delivery_probe_v1(
+pub unsafe extern "C" fn statevec_projector_delivery_probe_v2(
     table: *const SvProjectorHostV2, startup: *const SvProjectorStart, count: u64, report: *mut Report, completion: *mut SvProjectorCompletion,
 ) -> SvStatus {
     if table.is_null() || startup.is_null() || report.is_null() || completion.is_null() { return (&ProjectorAbiFailure::NullPointer).into(); }
@@ -92,7 +92,7 @@ fn consume(parts: ProjectorIoParts<'_>, count: u64, result: &mut Report) -> Resu
                             hash.update((after.len() as u64).to_le_bytes()); hash.update(after);
                         }
                     }
-                    latest = Some(loan.checkpoint_cut());
+                    latest = Some(loan.source_cut());
                 }
                 Delivery::Empty | Delivery::TimedOut => {},
                 Delivery::Stop | Delivery::Disconnected | Delivery::State(_) => return Err(ProjectorFailure::Application { code: 901 }),

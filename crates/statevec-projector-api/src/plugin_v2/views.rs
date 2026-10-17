@@ -16,7 +16,7 @@ pub(super) fn validate_frame(info: &SvFrameInfo) -> Result<(), A> {
 pub struct FrameView<'a> { host: &'a ScopeData, cookie: u64, info: SvFrameInfo, _loan: std::marker::PhantomData<&'a super::FrameLoan<'a>> }
 impl super::FrameLoan<'_> {
     pub fn view(&self) -> FrameView<'_> { FrameView { host: self.host, cookie: self.cookie, info: self.info, _loan: std::marker::PhantomData } }
-    pub fn checkpoint_cut(&self) -> super::SourceCut {
+    pub fn source_cut(&self) -> super::SourceCut {
         let mode = match self.host.initialization {
             crate::ProjectorInitialization::Frames => crate::ProjectorRecoveryMode::ContinuousHistory,
             crate::ProjectorInitialization::Rebuild { .. } => crate::ProjectorRecoveryMode::LatestStateOnly,

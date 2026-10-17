@@ -95,7 +95,7 @@ fn refuse_offset_replace() {
     assert_eq!(unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) }, 0);
     assert_eq!(unsafe { libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &program) }, 0);
 }
-fn durable_index(host: &SvProjectorHostV2) -> u64 {
+pub(super) fn durable_index(host: &SvProjectorHostV2) -> u64 {
     let mut tag = 0;
     let mut reply = 0;
     assert_eq!(unsafe { host.offer_status.unwrap()(host.context, &mut tag, &mut reply) }, SvStatus::SUCCESS);

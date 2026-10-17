@@ -111,7 +111,7 @@ impl PreparedProjector for Prepared {
                 Delivery::Frame(frame) => {
                     let view = frame.view();
                     let next = view.position().raft_index;
-                    if index.checked_add(1) != Some(next) || frame.checkpoint_cut().offset().is_some() { return Err(failure(1207)); }
+                    if index.checked_add(1) != Some(next) || frame.source_cut().offset().is_some() { return Err(failure(1207)); }
                     let mut changes = Vec::new();
                     for i in 0..view.transaction_count() {
                         let tx = view.transaction(i)?;
