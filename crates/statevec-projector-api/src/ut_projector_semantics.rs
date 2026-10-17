@@ -63,7 +63,7 @@ fn shared_wire_names_preserve_independent_numeric_meanings() {
 fn local_mode_refusal_is_a_standard_error() {
     let error: &dyn std::error::Error = &NotContinuousHistory;
     assert!(error.source().is_none());
-    assert_eq!(error.to_string(), "latest-state source cuts do not define durable history offsets");
+    assert_eq!(error.to_string(), "latest-state entry tokens do not define durable history offsets");
 }
 
 #[test]
