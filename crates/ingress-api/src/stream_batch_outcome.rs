@@ -1,7 +1,7 @@
 //! Borrowed response scanning keeps malformed later members from allocating
 //! earlier member/event vectors. This is a wire view, never an apply result owner.
 
-use super::{EntryBinding, FrameFailure, MemberResult, take};
+use super::{EntryBinding, FrameError, MemberResult, take};
 use statevec_frame::outcome::{CommitOutcome, InlineResponseEvent};
 use std::num::NonZeroU64;
 
@@ -21,7 +21,7 @@ impl MemberView<'_> {
         }
     }
 
-    pub(super) fn materialize(self) -> Result<MemberResult, FrameFailure> {
+    pub(super) fn materialize(self) -> Result<MemberResult, FrameError> {
         Ok(match self {
             Self::Unavailable(tx_seq) => MemberResult::Unavailable { tx_seq },
             Self::Outcome { mut value, mut events, count } => {
@@ -41,7 +41,7 @@ impl MemberView<'_> {
     }
 }
 
-pub(super) fn encoded_len(result: &MemberResult, entry: EntryBinding) -> Result<usize, FrameFailure> {
+pub(super) fn encoded_len(result: &MemberResult, entry: EntryBinding) -> Result<usize, FrameError> {
     let value = match result {
         MemberResult::Unavailable { .. } => return Ok(9),
         MemberResult::Outcome(value) => value,
@@ -51,21 +51,21 @@ pub(super) fn encoded_len(result: &MemberResult, entry: EntryBinding) -> Result<
         || value.raft_index != entry.index.get()
         || value.raft_term != entry.term.get()
     {
-        return Err(FrameFailure::InvalidOutcome);
+        return Err(FrameError::InvalidOutcome);
     }
     check_event_count(value.inline_events.len(), value.emitted_event_count, value.inline_events_truncated)?;
     let mut length = 1 + OUTCOME_BYTES;
     let mut previous = None;
     for event in &value.inline_events {
         if event.tx_seq != value.tx_seq {
-            return Err(FrameFailure::InvalidInlineEvent);
+            return Err(FrameError::InvalidInlineEvent);
         }
         check_event(&mut previous, event.event_seq, event.event_kind, value.emitted_event_count)?;
-        u32::try_from(event.payload.len()).map_err(|_| FrameFailure::LengthOverflow)?;
+        u32::try_from(event.payload.len()).map_err(|_| FrameError::LengthOverflow)?;
         length = length
             .checked_add(EVENT_HEADER_BYTES)
             .and_then(|n| n.checked_add(event.payload.len()))
-            .ok_or(FrameFailure::LengthOverflow)?;
+            .ok_or(FrameError::LengthOverflow)?;
     }
     Ok(length)
 }
@@ -82,8 +82,8 @@ pub(super) fn append(bytes: &mut Vec<u8>, result: &MemberResult) {
             bytes.extend_from_slice(&value.tx_seq.to_le_bytes());
             bytes.extend_from_slice(&value.tx_id);
             bytes.extend_from_slice(&value.tx_chain_hash);
-            bytes.extend_from_slice(&value.sys_status_code.to_le_bytes());
-            bytes.extend_from_slice(&value.biz_status_code.to_le_bytes());
+            bytes.extend_from_slice(&value.system_code.to_le_bytes());
+            bytes.extend_from_slice(&value.business_code.to_le_bytes());
             bytes.extend_from_slice(&value.emitted_event_count.to_le_bytes());
             bytes.extend_from_slice(&(value.inline_events.len() as u32).to_le_bytes());
             bytes.push(u8::from(value.inline_events_truncated));
@@ -97,10 +97,10 @@ pub(super) fn append(bytes: &mut Vec<u8>, result: &MemberResult) {
     }
 }
 
-pub(super) fn take_member<'a>(remaining: &mut &'a [u8], entry: EntryBinding) -> Result<MemberView<'a>, FrameFailure> {
+pub(super) fn take_member<'a>(remaining: &mut &'a [u8], entry: EntryBinding) -> Result<MemberView<'a>, FrameError> {
     match take::<1>(remaining)?[0] {
         0 => Ok(MemberView::Unavailable(
-            NonZeroU64::new(u64::from_le_bytes(take(remaining)?)).ok_or(FrameFailure::InvalidOutcome)?,
+            NonZeroU64::new(u64::from_le_bytes(take(remaining)?)).ok_or(FrameError::InvalidOutcome)?,
         )),
         1 => {
             let value = CommitOutcome {
@@ -110,24 +110,24 @@ pub(super) fn take_member<'a>(remaining: &mut &'a [u8], entry: EntryBinding) -> 
                 tx_chain_hash: take(remaining)?,
                 raft_index: entry.index.get(),
                 raft_term: entry.term.get(),
-                sys_status_code: u16::from_le_bytes(take(remaining)?),
-                biz_status_code: u16::from_le_bytes(take(remaining)?),
+                system_code: u16::from_le_bytes(take(remaining)?),
+                business_code: u16::from_le_bytes(take(remaining)?),
                 emitted_event_count: u32::from_le_bytes(take(remaining)?),
                 inline_events: Vec::new(),
                 inline_events_truncated: false,
             };
             if value.applied_by == 0 || value.tx_seq == 0 {
-                return Err(FrameFailure::InvalidOutcome);
+                return Err(FrameError::InvalidOutcome);
             }
             let count = u32::from_le_bytes(take(remaining)?) as usize;
             let truncated = match take::<1>(remaining)?[0] {
                 0 => false,
                 1 => true,
-                _ => return Err(FrameFailure::InvalidInlineEvent),
+                _ => return Err(FrameError::InvalidInlineEvent),
             };
             check_event_count(count, value.emitted_event_count, truncated)?;
             if count > remaining.len() / EVENT_HEADER_BYTES {
-                return Err(FrameFailure::InvalidLength);
+                return Err(FrameError::InvalidLength);
             }
             let events = *remaining;
             let mut previous = None;
@@ -142,30 +142,30 @@ pub(super) fn take_member<'a>(remaining: &mut &'a [u8], entry: EntryBinding) -> 
                 count,
             })
         }
-        observed => Err(FrameFailure::UnsupportedMemberResult { observed }),
+        observed => Err(FrameError::UnsupportedMemberResult { observed }),
     }
 }
 
-fn check_event_count(count: usize, emitted: u32, truncated: bool) -> Result<(), FrameFailure> {
+fn check_event_count(count: usize, emitted: u32, truncated: bool) -> Result<(), FrameError> {
     if count > emitted as usize || (truncated && count == emitted as usize) {
-        return Err(FrameFailure::InvalidInlineEvent);
+        return Err(FrameError::InvalidInlineEvent);
     }
     Ok(())
 }
 
-fn check_event(previous: &mut Option<u32>, sequence: u32, kind: u16, emitted: u32) -> Result<(), FrameFailure> {
+fn check_event(previous: &mut Option<u32>, sequence: u32, kind: u16, emitted: u32) -> Result<(), FrameError> {
     if kind == 0 || sequence >= emitted || previous.is_some_and(|before| before >= sequence) {
-        return Err(FrameFailure::InvalidInlineEvent);
+        return Err(FrameError::InvalidInlineEvent);
     }
     *previous = Some(sequence);
     Ok(())
 }
 
-fn take_event<'a>(remaining: &mut &'a [u8]) -> Result<(u32, u16, &'a [u8]), FrameFailure> {
+fn take_event<'a>(remaining: &mut &'a [u8]) -> Result<(u32, u16, &'a [u8]), FrameError> {
     let sequence = u32::from_le_bytes(take(remaining)?);
     let kind = u16::from_le_bytes(take(remaining)?);
     let length = u32::from_le_bytes(take(remaining)?) as usize;
-    let (payload, rest) = remaining.split_at_checked(length).ok_or(FrameFailure::InvalidLength)?;
+    let (payload, rest) = remaining.split_at_checked(length).ok_or(FrameError::InvalidLength)?;
     *remaining = rest;
     Ok((sequence, kind, payload))
 }

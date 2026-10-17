@@ -27,7 +27,7 @@ fn header_alone_cannot_allocate_the_declared_frame(direction: StreamDirection) {
         "a header cannot reserve the advertised body: capacity={} declared={DECLARED_BYTES}", bytes.capacity());
 
     let mut stalled = io::repeat(0).take(0); // EOF before even one body byte.
-    assert!(matches!(reader.poll_bytes(&mut stalled), Err(ReadFailure::Io { source })
+    assert!(matches!(reader.poll_bytes(&mut stalled), Err(ReadError::Io { source })
         if source.kind() == io::ErrorKind::UnexpectedEof));
     assert!(matches!(reader.partial, PartialFrame::Closed), "terminal drops the partial buffer");
 }
@@ -124,6 +124,6 @@ fn temporary_read_failure_at_growth_boundary_keeps_exact_prefix(kind: io::ErrorK
 fn reservation_failure_is_typed_without_destroying_received_prefix() {
     let mut bytes = vec![1, 2, 3];
     let failure = grow_body(&mut bytes, usize::MAX).unwrap_err(); // Capacity overflow, no huge allocation.
-    assert!(matches!(failure, ReadFailure::Allocation { requested: usize::MAX, .. }));
+    assert!(matches!(failure, ReadError::Allocation { requested: usize::MAX, .. }));
     assert_eq!(bytes, [1, 2, 3]);
 }

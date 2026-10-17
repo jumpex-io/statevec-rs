@@ -33,7 +33,7 @@ fn inconsistent_correlation_cannot_publish_a_wire_effect(fault: CorrelationFault
     }
     let result = client.drive(ClientEvent::Drive);
     assert!(
-        matches!(result, ClientResult::DriveRejected { cause: ClientFailure::BatchReservationInvariant, .. }),
+        matches!(result, ClientResult::DriveRejected { cause: ClientError::BatchReservationInvariant, .. }),
         "inconsistent correlation must fail closed before any wire effect: {result:?}"
     );
     assert!(matches!(client.drive(ClientEvent::Stop), ClientResult::Close { .. }));

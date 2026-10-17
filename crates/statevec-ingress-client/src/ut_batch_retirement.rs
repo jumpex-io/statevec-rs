@@ -47,7 +47,7 @@ fn timeout_records_consumed_time_before_physical_close(exchange: Exchange) {
     let result = client.drive(ClientEvent::Closed { operation_id: connection });
     assert!(
         matches!(result, ClientResult::ClockFailed {
-        cause: ClientFailure::TimeRegressed { previous, observed }
+        cause: ClientError::TimeRegressed { previous, observed }
     } if previous.get() == deadline && observed.get() == deadline - 1),
         "timeout must record consumed time before returning Close: {result:?}"
     );
@@ -63,7 +63,7 @@ fn fail_close_and_reconnect(client: &mut BatchClient, clock: &Clock, connection:
     assert!(matches!(
         client.drive(ClientEvent::Read {
             operation_id: connection,
-            result: Err(stream_batch::ReadFailure::Io {
+            result: Err(stream_batch::ReadError::Io {
                 source: std::io::Error::from(std::io::ErrorKind::ConnectionReset),
             }),
         }),
@@ -109,7 +109,7 @@ fn zero_term_retry_reply_cannot_authorize_resubmission_after_reconnect() {
         matches!(
             result,
             ClientResult::ConnectionFault {
-                cause: ClientFailure::BatchFrame { source: stream_batch::FrameFailure::InvalidReplyObservation },
+                cause: ClientError::BatchFrame { source: stream_batch::FrameError::InvalidReplyObservation },
                 ..
             }
         ),
@@ -167,7 +167,7 @@ fn physical_retirement_preserves_the_consumed_suspension_diagnostic() {
         panic!("socket retirement must preserve the first suspension diagnostic")
     };
     assert!(Arc::ptr_eq(&cause, &retained), "notification and terminal share only the immutable diagnostic");
-    assert!(matches!(*retained, ClientFailure::BatchConflict));
+    assert!(matches!(*retained, ClientError::BatchConflict));
 }
 
 #[test_case(false; "fresh_original_never_dispatched")]

@@ -1,8 +1,8 @@
 //! Whole-range observations only. Decoding or correlating a reply does not mint
 //! a core commit capability, settle client custody or authorize another submit.
 
-use super::{FrameFailure, HEADER_BYTES, VERSION, append_context, check_bytes, decode_header, take, take_context};
-use statevec_frame::applied_binding::AppliedStreamBatchBindingV1;
+use super::{FrameError, HEADER_BYTES, VERSION, append_context, check_bytes, decode_header, take, take_context};
+use statevec_frame::applied_binding::AppliedStreamBatchBinding;
 use statevec_frame::outcome::EntryDigest;
 use statevec_frame::{CLIENT_STREAM_BATCH_COMMITMENT_BYTES, ClientStreamBatchCommitment};
 use std::num::NonZeroU64;
@@ -17,17 +17,17 @@ use statevec_frame::stream_batch_protocol::{
 
 pub use statevec_frame::stream_batch_protocol::{
     BatchSubmitRefusal, EntryBinding, IngressUnavailableReason, MemberResult, Reply, ReplyBinding, ReplyDisposition,
-    ReplyObservation, ReplyRequestFailure,
+    ReplyObservation, ReplyRequestError,
 };
 
 pub fn encode_reply(
     reply: &Reply,
     maximum_frame_bytes: usize,
     maximum_commands: usize,
-) -> Result<Vec<u8>, FrameFailure> {
+) -> Result<Vec<u8>, FrameError> {
     check_intent(reply.binding.intent, maximum_commands)?;
     if reply.observation.is_none() && !matches!(reply.disposition, ReplyDisposition::Refused(_)) {
-        return Err(FrameFailure::MissingReplyObservation);
+        return Err(FrameError::MissingReplyObservation);
     }
     check_unavailability(
         reply.observation,
@@ -66,7 +66,7 @@ pub fn encode_reply(
             check_entry_observation(reply.observation, *entry, true)?;
             let expected = reply.binding.intent.count() as usize;
             if results.len() != expected {
-                return Err(FrameFailure::ResultCount { observed: results.len(), expected });
+                return Err(FrameError::ResultCount { observed: results.len(), expected });
             }
             let mut length = ENTRY_BYTES;
             let mut previous = None;
@@ -74,14 +74,14 @@ pub fn encode_reply(
                 check_next(&mut previous, result.tx_seq())?;
                 length = length
                     .checked_add(outcome::encoded_len(result, *entry)?)
-                    .ok_or(FrameFailure::LengthOverflow)?;
+                    .ok_or(FrameError::LengthOverflow)?;
             }
             length
         }
     };
-    let length = BASE_BYTES.checked_add(body_extra).ok_or(FrameFailure::LengthOverflow)?;
+    let length = BASE_BYTES.checked_add(body_extra).ok_or(FrameError::LengthOverflow)?;
     check_bytes(length, maximum_frame_bytes)?;
-    let body_len = u32::try_from(length - HEADER_BYTES).map_err(|_| FrameFailure::LengthOverflow)?;
+    let body_len = u32::try_from(length - HEADER_BYTES).map_err(|_| FrameError::LengthOverflow)?;
     let mut bytes = Vec::with_capacity(length);
     bytes.extend_from_slice(b"SVI0");
     bytes.extend_from_slice(&VERSION.to_le_bytes());
@@ -135,28 +135,28 @@ pub fn encode_reply(
     Ok(bytes)
 }
 
-pub fn reply_frame_len(header: &[u8; HEADER_BYTES], maximum_frame_bytes: usize) -> Result<usize, FrameFailure> {
+pub fn reply_frame_len(header: &[u8; HEADER_BYTES], maximum_frame_bytes: usize) -> Result<usize, FrameError> {
     decode_header(header, maximum_frame_bytes, &[REPLY], BASE_BYTES).map(|(_, length)| length)
 }
 
-pub fn decode_reply(bytes: &[u8], maximum_frame_bytes: usize, maximum_commands: usize) -> Result<Reply, FrameFailure> {
+pub fn decode_reply(bytes: &[u8], maximum_frame_bytes: usize, maximum_commands: usize) -> Result<Reply, FrameError> {
     check_bytes(bytes.len(), maximum_frame_bytes)?;
     let mut remaining = bytes;
     let length = reply_frame_len(&take(&mut remaining)?, maximum_frame_bytes)?;
     if length != bytes.len() {
-        return Err(FrameFailure::InvalidLength);
+        return Err(FrameError::InvalidLength);
     }
     let context = take_context(&mut remaining)?;
     let intent = ClientStreamBatchCommitment::decode_v1(
         &take::<CLIENT_STREAM_BATCH_COMMITMENT_BYTES>(&mut remaining)?,
         maximum_commands,
     )
-    .map_err(|source| FrameFailure::Intent { source })?;
+    .map_err(|source| FrameError::Intent { source })?;
     let binding = ReplyBinding { context, intent };
     let observation = take_observation(&mut remaining)?;
     let tag = take::<1>(&mut remaining)?[0];
     if observation.is_none() && tag != 8 {
-        return Err(FrameFailure::MissingReplyObservation);
+        return Err(FrameError::MissingReplyObservation);
     }
     // Reject reason/disposition contradictions before any result allocation.
     check_unavailability(observation, matches!(tag, 4 | 8))?;
@@ -194,7 +194,7 @@ pub fn decode_reply(bytes: &[u8], maximum_frame_bytes: usize, maximum_commands: 
             // Every result needs at least a tag and tx_seq. Scan the complete
             // vector, including nested event lengths, before allocating anything.
             if count > remaining.len() / 9 {
-                return Err(FrameFailure::InvalidLength);
+                return Err(FrameError::InvalidLength);
             }
             let mut scan = remaining;
             let mut previous = None;
@@ -202,7 +202,7 @@ pub fn decode_reply(bytes: &[u8], maximum_frame_bytes: usize, maximum_commands: 
                 check_next(&mut previous, outcome::take_member(&mut scan, entry)?.tx_seq())?;
             }
             if !scan.is_empty() {
-                return Err(FrameFailure::InvalidLength);
+                return Err(FrameError::InvalidLength);
             }
             let mut results = Vec::with_capacity(count);
             for _ in 0..count {
@@ -217,7 +217,7 @@ pub fn decode_reply(bytes: &[u8], maximum_frame_bytes: usize, maximum_commands: 
         }
         11 => {
             let entry = take_entry(&mut remaining)?;
-            let applied = AppliedStreamBatchBindingV1::new(
+            let applied = AppliedStreamBatchBinding::new(
                 intent,
                 entry.index.get(),
                 entry.term.get(),
@@ -225,14 +225,14 @@ pub fn decode_reply(bytes: &[u8], maximum_frame_bytes: usize, maximum_commands: 
                 u64::from_le_bytes(take(&mut remaining)?),
                 statevec_frame::Digest32::new(take(&mut remaining)?),
             )
-            .map_err(|source| FrameFailure::AppliedBinding { source })?;
+            .map_err(|source| FrameError::AppliedBinding { source })?;
             check_exact(binding, observation, applied)?;
             ReplyDisposition::ExactAppliedResultUnavailable(applied)
         }
-        observed => return Err(FrameFailure::UnsupportedDisposition { observed }),
+        observed => return Err(FrameError::UnsupportedDisposition { observed }),
     };
     if !remaining.is_empty() {
-        return Err(FrameFailure::InvalidLength);
+        return Err(FrameError::InvalidLength);
     }
     Ok(Reply { binding, observation, disposition })
 }
@@ -240,10 +240,10 @@ pub fn decode_reply(bytes: &[u8], maximum_frame_bytes: usize, maximum_commands: 
 fn check_exact(
     binding: ReplyBinding,
     observation: Option<ReplyObservation>,
-    applied: AppliedStreamBatchBindingV1,
-) -> Result<(), FrameFailure> {
+    applied: AppliedStreamBatchBinding,
+) -> Result<(), FrameError> {
     if binding.intent != applied.intent() {
-        return Err(FrameFailure::AppliedIntentMismatch);
+        return Err(FrameError::AppliedIntentMismatch);
     }
     check_entry_observation(
         observation,
@@ -256,10 +256,10 @@ fn check_exact(
     )
 }
 
-fn check_retry_observation(observation: Option<ReplyObservation>) -> Result<(), FrameFailure> {
-    let observation = observation.ok_or(FrameFailure::MissingReplyObservation)?;
+fn check_retry_observation(observation: Option<ReplyObservation>) -> Result<(), FrameError> {
+    let observation = observation.ok_or(FrameError::MissingReplyObservation)?;
     if observation.current_term() == 0 || observation.applied_term() != observation.current_term() {
-        return Err(FrameFailure::InvalidReplyObservation);
+        return Err(FrameError::InvalidReplyObservation);
     }
     Ok(())
 }
@@ -267,9 +267,9 @@ fn check_retry_observation(observation: Option<ReplyObservation>) -> Result<(), 
 fn check_refusal_observation(
     reason: BatchSubmitRefusal,
     observation: Option<ReplyObservation>,
-) -> Result<(), FrameFailure> {
+) -> Result<(), FrameError> {
     if reason == BatchSubmitRefusal::IncompatibleContext && observation.is_some() {
-        return Err(FrameFailure::InvalidReplyObservation);
+        return Err(FrameError::InvalidReplyObservation);
     }
     check_unavailability(
         observation,
@@ -284,17 +284,17 @@ fn check_refusal_observation(
     Ok(())
 }
 
-fn check_unavailability(observation: Option<ReplyObservation>, allowed: bool) -> Result<(), FrameFailure> {
+fn check_unavailability(observation: Option<ReplyObservation>, allowed: bool) -> Result<(), FrameError> {
     if !allowed && observation.is_some_and(|o| o.unavailable_reason().is_some()) {
-        return Err(FrameFailure::InvalidReplyObservation);
+        return Err(FrameError::InvalidReplyObservation);
     }
     Ok(())
 }
 
-fn check_applied_observation(observation: Option<ReplyObservation>) -> Result<(), FrameFailure> {
-    let observation = observation.ok_or(FrameFailure::MissingReplyObservation)?;
+fn check_applied_observation(observation: Option<ReplyObservation>) -> Result<(), FrameError> {
+    let observation = observation.ok_or(FrameError::MissingReplyObservation)?;
     if observation.applied_index() == 0 {
-        return Err(FrameFailure::InvalidAppliedFrontier);
+        return Err(FrameError::InvalidAppliedFrontier);
     }
     Ok(())
 }
@@ -303,8 +303,8 @@ fn check_entry_observation(
     observation: Option<ReplyObservation>,
     entry: EntryBinding,
     applied: bool,
-) -> Result<(), FrameFailure> {
-    let observation = observation.ok_or(FrameFailure::MissingReplyObservation)?;
+) -> Result<(), FrameError> {
+    let observation = observation.ok_or(FrameError::MissingReplyObservation)?;
     let index = entry.index.get();
     let term = entry.term.get();
     let ordered = match index.cmp(&observation.applied_index()) {
@@ -313,7 +313,7 @@ fn check_entry_observation(
         std::cmp::Ordering::Greater => term >= observation.applied_term(),
     };
     if term > observation.current_term() || !ordered || (index <= observation.applied_index()) != applied {
-        return Err(FrameFailure::EntryObservationMismatch);
+        return Err(FrameError::EntryObservationMismatch);
     }
     Ok(())
 }
@@ -331,7 +331,7 @@ fn append_observation(bytes: &mut Vec<u8>, observation: Option<ReplyObservation>
     }
 }
 
-fn take_observation(remaining: &mut &[u8]) -> Result<Option<ReplyObservation>, FrameFailure> {
+fn take_observation(remaining: &mut &[u8]) -> Result<Option<ReplyObservation>, FrameError> {
     let tag = take::<1>(remaining)?[0];
     let term = u64::from_le_bytes(take(remaining)?);
     let index = u64::from_le_bytes(take(remaining)?);
@@ -343,13 +343,13 @@ fn take_observation(remaining: &mut &[u8]) -> Result<Option<ReplyObservation>, F
         1 => {
             ReplyObservation::new(term, index, applied_term, NonZeroU64::new(leader), take_unavailable_reason(reason)?)
                 .map(Some)
-                .map_err(|_| FrameFailure::InvalidReplyObservation)
+                .map_err(|_| FrameError::InvalidReplyObservation)
         }
-        _ => Err(FrameFailure::InvalidReplyObservation),
+        _ => Err(FrameError::InvalidReplyObservation),
     }
 }
 
-fn take_unavailable_reason(tag: u8) -> Result<Option<IngressUnavailableReason>, FrameFailure> {
+fn take_unavailable_reason(tag: u8) -> Result<Option<IngressUnavailableReason>, FrameError> {
     use IngressUnavailableReason::*;
     Ok(Some(match tag {
         0 => return Ok(None),
@@ -361,44 +361,44 @@ fn take_unavailable_reason(tag: u8) -> Result<Option<IngressUnavailableReason>, 
         6 => HistoryScanLimited,
         7 => Draining,
         8 => Failed,
-        observed => return Err(FrameFailure::UnsupportedUnavailableReason { observed }),
+        observed => return Err(FrameError::UnsupportedUnavailableReason { observed }),
     }))
 }
 
-fn check_intent(intent: ClientStreamBatchCommitment, maximum_commands: usize) -> Result<(), FrameFailure> {
+fn check_intent(intent: ClientStreamBatchCommitment, maximum_commands: usize) -> Result<(), FrameError> {
     let observed = intent.count() as usize;
     if observed > maximum_commands {
-        return Err(FrameFailure::Intent {
-            source: statevec_frame::ClientStreamBatchFailure::InvalidCount { observed, limit: maximum_commands },
+        return Err(FrameError::Intent {
+            source: statevec_frame::ClientStreamBatchError::InvalidCount { observed, limit: maximum_commands },
         });
     }
     Ok(())
 }
 
-fn check_frontier(binding: ReplyBinding, next_sequence: u64) -> Result<(), FrameFailure> {
+fn check_frontier(binding: ReplyBinding, next_sequence: u64) -> Result<(), FrameError> {
     if next_sequence < binding.intent.next_sequence() {
-        return Err(FrameFailure::InvalidAppliedFrontier);
+        return Err(FrameError::InvalidAppliedFrontier);
     }
     Ok(())
 }
 
-fn check_next(previous: &mut Option<u64>, sequence: u64) -> Result<(), FrameFailure> {
+fn check_next(previous: &mut Option<u64>, sequence: u64) -> Result<(), FrameError> {
     if sequence == 0 || sequence == u64::MAX {
-        return Err(FrameFailure::InvalidOutcome);
+        return Err(FrameError::InvalidOutcome);
     }
     if previous.is_some_and(|value| value.checked_add(1) != Some(sequence)) {
-        return Err(FrameFailure::NoncontiguousResults);
+        return Err(FrameError::NoncontiguousResults);
     }
     *previous = Some(sequence);
     Ok(())
 }
 
-fn check_gap(binding: ReplyBinding, expected_seq: u64) -> Result<(), FrameFailure> {
+fn check_gap(binding: ReplyBinding, expected_seq: u64) -> Result<(), FrameError> {
     if expected_seq == 0
         || expected_seq == binding.intent.first_sequence()
         || expected_seq >= binding.intent.next_sequence()
     {
-        return Err(FrameFailure::InvalidGapFrontier);
+        return Err(FrameError::InvalidGapFrontier);
     }
     Ok(())
 }
@@ -409,10 +409,10 @@ fn append_entry(bytes: &mut Vec<u8>, entry: EntryBinding) {
     bytes.extend_from_slice(&entry.digest.bytes());
 }
 
-fn take_entry(remaining: &mut &[u8]) -> Result<EntryBinding, FrameFailure> {
+fn take_entry(remaining: &mut &[u8]) -> Result<EntryBinding, FrameError> {
     Ok(EntryBinding {
-        index: NonZeroU64::new(u64::from_le_bytes(take(remaining)?)).ok_or(FrameFailure::InvalidEntryBinding)?,
-        term: NonZeroU64::new(u64::from_le_bytes(take(remaining)?)).ok_or(FrameFailure::InvalidEntryBinding)?,
+        index: NonZeroU64::new(u64::from_le_bytes(take(remaining)?)).ok_or(FrameError::InvalidEntryBinding)?,
+        term: NonZeroU64::new(u64::from_le_bytes(take(remaining)?)).ok_or(FrameError::InvalidEntryBinding)?,
         digest: EntryDigest::from_untrusted_wire(take(remaining)?),
     })
 }
@@ -430,7 +430,7 @@ fn refusal_tag(reason: BatchSubmitRefusal) -> u8 {
     }
 }
 
-fn take_refusal(tag: u8) -> Result<BatchSubmitRefusal, FrameFailure> {
+fn take_refusal(tag: u8) -> Result<BatchSubmitRefusal, FrameError> {
     Ok(match tag {
         1 => BatchSubmitRefusal::NotReady,
         2 => BatchSubmitRefusal::Busy,
@@ -440,6 +440,6 @@ fn take_refusal(tag: u8) -> Result<BatchSubmitRefusal, FrameFailure> {
         6 => BatchSubmitRefusal::ShuttingDown,
         7 => BatchSubmitRefusal::IncompatibleContext,
         8 => BatchSubmitRefusal::InternalFailure,
-        observed => return Err(FrameFailure::UnsupportedRefusal { observed }),
+        observed => return Err(FrameError::UnsupportedRefusal { observed }),
     })
 }

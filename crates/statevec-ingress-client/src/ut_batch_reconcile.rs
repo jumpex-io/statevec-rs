@@ -163,15 +163,15 @@ fn current_query_joins_kind_and_full_context(corrupt_profile: bool) {
     let Some(BatchEvent::Progress(BatchProgress::Problem { cause, .. })) = client.poll_event() else {
         panic!("current query corruption must surface without settling intent")
     };
-    let ClientFailure::BatchReply { source } = cause.as_ref() else {
+    let ClientError::BatchReply { source } = cause.as_ref() else {
         panic!("expected typed reply failure: {cause:?}")
     };
     assert_eq!(
         *source,
         if corrupt_profile {
-            ReplyRequestFailure::ContextMismatch
+            ReplyRequestError::ContextMismatch
         } else {
-            ReplyRequestFailure::UnexpectedReconcileDisposition
+            ReplyRequestError::UnexpectedReconcileDisposition
         }
     );
     receive(&mut client, connection, completed(&submit));
@@ -198,7 +198,7 @@ fn suspension_during_query_preserves_its_exact_completion_and_physical_deadline(
         ),
     );
     assert!(
-        matches!(client.poll_event(), Some(BatchEvent::Progress(BatchProgress::Problem { cause, .. })) if matches!(*cause, ClientFailure::ConflictingCommittedEntry { .. }))
+        matches!(client.poll_event(), Some(BatchEvent::Progress(BatchProgress::Problem { cause, .. })) if matches!(*cause, ClientError::ConflictingCommittedEntry { .. }))
     );
     clock.set(INITIAL_TIME + RETRY * 3);
     waiting_until(&mut client, INITIAL_TIME + RETRY + OPERATION);
@@ -324,7 +324,7 @@ fn consumed_problem_survives_later_diagnostics_commit_and_stop() {
         panic!("stopping suspended work must return the original uncertain intent")
     };
     assert!(
-        matches!(problem.as_deref(), Some(ClientFailure::BatchConflict)),
+        matches!(problem.as_deref(), Some(ClientError::BatchConflict)),
         "consuming a problem must not erase or replace the first diagnostic at Stop: {problem:?}"
     );
     assert_eq!(committed, Some(entry()));

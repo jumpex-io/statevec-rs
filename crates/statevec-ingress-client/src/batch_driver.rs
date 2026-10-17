@@ -37,7 +37,7 @@ pub trait BatchConnectIo {
 pub enum BatchDriverStep {
     Runnable,
     Waiting,
-    Diagnostic { cause: ClientFailure },
+    Diagnostic { cause: ClientError },
 }
 
 impl BatchDriverStep {
@@ -71,7 +71,7 @@ impl<P: BatchConnectIo> BatchDriverWorker<P> {
     /// failed calls, and must not be reclassified by presentation code. Err is
     /// a rejected drive/assembly: retain both owner and driver. An unconsumed
     /// Read/Connected stays here until a later step or explicit Stop.
-    pub fn step(&mut self, client: &mut IngressClientOwner) -> Result<BatchDriverStep, ClientFailure> {
+    pub fn step(&mut self, client: &mut IngressClientOwner) -> Result<BatchDriverStep, ClientError> {
         if let Some(event) = self.observation.take() {
             return self.deliver(client, event);
         }
@@ -109,7 +109,7 @@ impl<P: BatchConnectIo> BatchDriverWorker<P> {
 
     /// Forward the explicit session-stop input; always dispose physical custody
     /// before returning Closed on the next step, even with a failed clock.
-    pub fn stop(&mut self, client: &mut IngressClientOwner) -> Result<(), ClientFailure> {
+    pub fn stop(&mut self, client: &mut IngressClientOwner) -> Result<(), ClientError> {
         let effect = client.drive(ClientEvent::Stop);
         self.execute(client, effect).map(|_| ())
     }
@@ -131,7 +131,7 @@ impl<P: BatchConnectIo> BatchDriverWorker<P> {
         &mut self,
         client: &mut IngressClientOwner,
         max_wait: Duration,
-    ) -> Result<BatchDriverStep, ClientFailure> {
+    ) -> Result<BatchDriverStep, ClientError> {
         let (progress, timeout) = self.prepare_wait(client)?;
         if progress.is_runnable() {
             return Ok(progress);
@@ -145,7 +145,7 @@ impl<P: BatchConnectIo> BatchDriverWorker<P> {
                 // wait; it cannot expire, retry or retire owner work.
                 let elapsed = self.io.monotonic_now().saturating_duration_since(started);
                 self.io.pause_after_wait_error(budget.saturating_sub(elapsed));
-                BatchDriverStep::Diagnostic { cause: ClientFailure::BatchWait { source } }
+                BatchDriverStep::Diagnostic { cause: ClientError::BatchWait { source } }
             }
         })
     }
@@ -158,7 +158,7 @@ impl<P: BatchConnectIo> BatchDriverWorker<P> {
     pub fn prepare_wait(
         &mut self,
         client: &mut IngressClientOwner,
-    ) -> Result<(BatchDriverStep, Option<Duration>), ClientFailure> {
+    ) -> Result<(BatchDriverStep, Option<Duration>), ClientError> {
         if self.observation.is_some() {
             return Ok((BatchDriverStep::Runnable, Some(Duration::ZERO)));
         }
@@ -193,7 +193,7 @@ impl<P: BatchConnectIo> BatchDriverWorker<P> {
         &mut self,
         client: &mut IngressClientOwner,
         event: ClientEvent,
-    ) -> Result<BatchDriverStep, ClientFailure> {
+    ) -> Result<BatchDriverStep, ClientError> {
         let connected = match &event {
             ClientEvent::Connected { operation_id, result: Ok(()) } => Some(*operation_id),
             _ => None,
@@ -228,11 +228,11 @@ impl<P: BatchConnectIo> BatchDriverWorker<P> {
         &mut self,
         _client: &mut IngressClientOwner,
         effect: ClientResult,
-    ) -> Result<BatchDriverStep, ClientFailure> {
+    ) -> Result<BatchDriverStep, ClientError> {
         match effect {
             ClientResult::Connect { operation_id, address, .. } => {
                 if !self.is_quiescent() {
-                    return Err(ClientFailure::BatchConnectionInvariant);
+                    return Err(ClientError::BatchConnectionInvariant);
                 }
                 match self.io.connect(address) {
                     Ok(stream) => {
@@ -257,9 +257,9 @@ impl<P: BatchConnectIo> BatchDriverWorker<P> {
             effect @ ClientResult::Write { .. } => {
                 self.connected
                     .as_mut()
-                    .ok_or(ClientFailure::BatchConnectionInvariant)?
+                    .ok_or(ClientError::BatchConnectionInvariant)?
                     .try_write(effect)
-                    .map_err(|_| ClientFailure::BatchConnectionInvariant)?;
+                    .map_err(|_| ClientError::BatchConnectionInvariant)?;
                 Ok(BatchDriverStep::Runnable)
             }
             ClientResult::Waiting { .. } => Ok(BatchDriverStep::Waiting),
@@ -267,7 +267,7 @@ impl<P: BatchConnectIo> BatchDriverWorker<P> {
                 Ok(BatchDriverStep::Diagnostic { cause })
             }
             ClientResult::ConnectionFailed { source, .. } => {
-                Ok(BatchDriverStep::Diagnostic { cause: ClientFailure::BatchConnect { source } })
+                Ok(BatchDriverStep::Diagnostic { cause: ClientError::BatchConnect { source } })
             }
             ClientResult::DriveRejected { cause, .. } => Err(cause),
         }

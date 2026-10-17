@@ -3,13 +3,13 @@
 pub use port::{
     BatchConnectIo, BatchDriverStep, BatchDriverWorker, BatchIoWorker, BatchTcpWorker, batch_monotonic_now,
 };
-use statevec_frame::applied_binding::AppliedStreamBatchBindingV1;
+use statevec_frame::applied_binding::AppliedStreamBatchBinding;
 use statevec_frame::stream_batch_protocol::{
-    BatchSubmitRefusal, EntryBinding, IngressUnavailableReason, MemberResult, ReplyDisposition, ReplyRequestFailure,
+    BatchSubmitRefusal, EntryBinding, IngressUnavailableReason, MemberResult, ReplyDisposition, ReplyRequestError,
     RequestContext,
 };
-use statevec_frame::{ClientStreamBatch, ClientStreamBatchFailure, Digest32, InputRef};
-pub use statevec_frame::{ClockReadFailure, MonotonicMillis};
+use statevec_frame::{ClientStreamBatch, ClientStreamBatchError, Digest32, InputRef};
+pub use statevec_frame::{ClockReadError, MonotonicMillis};
 use std::net::SocketAddr;
 use std::num::{NonZeroU64, NonZeroU128};
 use std::sync::Arc;
@@ -32,7 +32,7 @@ enum ClientState {
         // evidence about history or permission to retransmit.
         unavailable_replies: u32,
         // A physical clock source, not another lifecycle or retry owner.
-        clock: Box<dyn FnMut() -> Result<MonotonicMillis, ClockReadFailure> + Send>,
+        clock: Box<dyn FnMut() -> Result<MonotonicMillis, ClockReadError> + Send>,
         last_now: MonotonicMillis,
         next_connection_id: u64,
         connection: BatchConnection,
@@ -102,7 +102,7 @@ pub enum ClientEvent {
     /// Framing/short reads remain mechanical; the owner decodes and classifies.
     Read {
         operation_id: u64,
-        result: Result<Vec<u8>, ingress_api::stream_batch::ReadFailure>,
+        result: Result<Vec<u8>, ingress_api::stream_batch::ReadError>,
     },
     /// Return of the exact full-frame Write effect. Partial writes stay with
     /// the driver until completion or connection disposal; they are not events.
@@ -134,13 +134,13 @@ pub enum ClientStatus {
 }
 
 #[derive(Debug)]
-pub enum ClientFailure {
+pub enum ClientError {
     InvalidIdentity,
     InvalidLimit,
     InvalidEndpoints,
     InvalidStream,
     InvalidTime {
-        source: ClockReadFailure,
+        source: ClockReadError,
     },
     TimeRegressed {
         previous: MonotonicMillis,
@@ -151,7 +151,7 @@ pub enum ClientFailure {
     Stopped,
     RequestLifetimeExpired,
     TooLarge {
-        source: ClientStreamBatchFailure,
+        source: ClientStreamBatchError,
     },
     BatchSequence {
         expected: u64,
@@ -166,13 +166,13 @@ pub enum ClientFailure {
     BatchReservationInvariant,
     BatchConnectionInvariant,
     BatchFrame {
-        source: ingress_api::stream_batch::FrameFailure,
+        source: ingress_api::stream_batch::FrameError,
     },
     BatchReply {
-        source: ReplyRequestFailure,
+        source: ReplyRequestError,
     },
     BatchRead {
-        source: ingress_api::stream_batch::ReadFailure,
+        source: ingress_api::stream_batch::ReadError,
     },
     BatchWrite {
         source: std::io::Error,
@@ -230,7 +230,7 @@ pub enum ClientResult {
     /// the real connection and partial buffers have NOT yet been retired.
     ConnectionFault {
         operation_id: u64,
-        cause: ClientFailure,
+        cause: ClientError,
     },
     Waiting {
         wake_at: Option<MonotonicMillis>,
@@ -246,13 +246,13 @@ pub enum ClientResult {
     /// Invalid time stopped the session. The observation was consumed, never
     /// replayed; physical Close/Closed must still drain before teardown.
     ClockFailed {
-        cause: ClientFailure,
+        cause: ClientError,
     },
     /// The event was not consumed. Time observation/expiry may still advance;
     /// rejection never claims the entire owner was rolled back.
     DriveRejected {
         event: ClientEvent,
-        cause: ClientFailure,
+        cause: ClientError,
     },
 }
 

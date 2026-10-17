@@ -20,7 +20,7 @@ pub use statevec_frame::stream_batch_protocol::ReplyBinding as BatchHandle;
 #[derive(Debug)]
 #[must_use = "local refusal returns the complete original batch"]
 pub struct BatchRefusedResult {
-    pub reason: ClientFailure,
+    pub reason: ClientError,
     pub batch: ClientStreamBatch,
     /// Supplied import evidence is returned intact on local refusal.
     pub committed: Option<EntryBinding>,
@@ -73,7 +73,7 @@ pub enum BatchProgressResult {
     Problem {
         handle: BatchHandle,
         /// Shared diagnostic only; consuming it cannot change retry authority.
-        cause: Arc<ClientFailure>,
+        cause: Arc<ClientError>,
     },
 }
 pub use BatchProgressResult as BatchProgress;
@@ -103,26 +103,26 @@ pub enum BatchTerminalResult {
         entry: EntryBinding,
         results: Vec<MemberResult>,
         /// The first input/history problem survives exact settlement.
-        problem: Option<Arc<ClientFailure>>,
+        problem: Option<Arc<ClientError>>,
     },
     ExactAppliedResultUnavailable {
         handle: BatchHandle,
-        binding: AppliedStreamBatchBindingV1,
+        binding: AppliedStreamBatchBinding,
         /// The first input/history problem survives exact settlement.
-        problem: Option<Arc<ClientFailure>>,
+        problem: Option<Arc<ClientError>>,
     },
     NotAdmitted {
         handle: BatchHandle,
         batch: ClientStreamBatch,
-        cause: ClientFailure,
+        cause: ClientError,
     },
     OutcomeUnknown {
         handle: BatchHandle,
         batch: ClientStreamBatch,
         committed: Option<EntryBinding>,
-        cause: ClientFailure,
+        cause: ClientError,
         /// The first input/history problem survives even after notification.
-        problem: Option<Arc<ClientFailure>>,
+        problem: Option<Arc<ClientError>>,
     },
 }
 pub use BatchTerminalResult as BatchTerminal;
@@ -161,12 +161,12 @@ enum BatchAttempt {
     // Submit completion. The physical exchange keeps its original deadline.
     SuspendedUnreported {
         query: Option<(u64, NonZeroU64, MonotonicMillis)>,
-        problem: Arc<ClientFailure>,
+        problem: Arc<ClientError>,
     },
     Suspended {
         query: Option<(u64, NonZeroU64, MonotonicMillis)>,
         // Immutable diagnosis survives notification consumption and retirement.
-        problem: Arc<ClientFailure>,
+        problem: Arc<ClientError>,
     },
 }
 impl BatchAttempt {
@@ -293,19 +293,19 @@ impl BatchConnection {
 }
 
 impl IngressClientOwner {
-    pub(crate) fn check_driver_assembly(&self) -> Result<(), ClientFailure> {
+    pub(crate) fn check_driver_assembly(&self) -> Result<(), ClientError> {
         match &self.state {
             ClientState::Batch {
                 connection: BatchConnection::Disconnected { .. } | BatchConnection::Stopped, ..
             } => Ok(()),
-            ClientState::Batch { .. } => Err(ClientFailure::BatchConnectionInvariant),
+            ClientState::Batch { .. } => Err(ClientError::BatchConnectionInvariant),
         }
     }
 
     /// Read-only projection from the last owner turn. Mechanical drivers must
     /// deliver Drive immediately before using it to wait; this does not sample
     /// a clock or create another independently schedulable owner transition.
-    pub(crate) fn batch_wait_timeout(&self) -> Result<Option<std::time::Duration>, ClientFailure> {
+    pub(crate) fn batch_wait_timeout(&self) -> Result<Option<std::time::Duration>, ClientError> {
         let ClientState::Batch { last_now, .. } = &self.state;
         Ok(self
             .batch_deadline()
@@ -319,7 +319,7 @@ impl IngressClientOwner {
         &self,
         operation_id: u64,
         stream: S,
-    ) -> Result<BatchIoWorker<S>, (S, ClientFailure)> {
+    ) -> Result<BatchIoWorker<S>, (S, ClientError)> {
         let ClientState::Batch {
             connection: BatchConnection::Connected { operation_id: current, .. },
             maximum_frame_bytes,
@@ -327,10 +327,10 @@ impl IngressClientOwner {
             ..
         } = &self.state
         else {
-            return Err((stream, ClientFailure::NotConnected));
+            return Err((stream, ClientError::NotConnected));
         };
         if *current != operation_id {
-            return Err((stream, ClientFailure::NotConnected));
+            return Err((stream, ClientError::NotConnected));
         }
         let reader = match ingress_api::stream_batch::FrameReader::new(
             ingress_api::stream_batch::StreamDirection::Replies,
@@ -338,7 +338,7 @@ impl IngressClientOwner {
             *maximum_commands as usize,
         ) {
             Ok(reader) => reader,
-            Err(source) => return Err((stream, ClientFailure::BatchRead { source })),
+            Err(source) => return Err((stream, ClientError::BatchRead { source })),
         };
         Ok(BatchIoWorker::new(stream, operation_id, reader))
     }
@@ -367,8 +367,8 @@ impl IngressClientOwner {
         operation_millis: u64,
         lifetime_millis: u64,
         unavailable_reply_limit: u32,
-        mut clock: impl FnMut() -> Result<MonotonicMillis, ClockReadFailure> + Send + 'static,
-    ) -> Result<Self, ClientFailure> {
+        mut clock: impl FnMut() -> Result<MonotonicMillis, ClockReadError> + Send + 'static,
+    ) -> Result<Self, ClientError> {
         adapter::validate_batch_construction(
             identity,
             &stream,
@@ -381,9 +381,9 @@ impl IngressClientOwner {
             lifetime_millis,
             unavailable_reply_limit,
         )?;
-        let now = clock().map_err(|source| ClientFailure::InvalidTime { source })?;
+        let now = clock().map_err(|source| ClientError::InvalidTime { source })?;
         now.checked_add(lifetime_millis)
-            .map_err(|source| ClientFailure::InvalidTime { source })?;
+            .map_err(|source| ClientError::InvalidTime { source })?;
         let client = Self {
             state: ClientState::Batch {
                 context: RequestContext {
@@ -447,7 +447,7 @@ impl IngressClientOwner {
         batch: ClientStreamBatch,
         committed: Option<EntryBinding>,
         submit_transmissions: u8,
-        now: Result<MonotonicMillis, ClockReadFailure>,
+        now: Result<MonotonicMillis, ClockReadError>,
     ) -> Result<BatchHandle, BatchRefused> {
         if let Err(reason) = validate_batch_state(&self.state, None, None) {
             return Err(BatchRefused { reason, batch, committed });
@@ -458,8 +458,8 @@ impl IngressClientOwner {
         };
         let ClientState::Batch { lifetime_millis, .. } = &mut self.state;
         if let Err(source) = now.checked_add(*lifetime_millis) {
-            self.stop_batches(ClientFailure::InvalidTime { source });
-            return Err(BatchRefused { reason: ClientFailure::InvalidTime { source }, batch, committed });
+            self.stop_batches(ClientError::InvalidTime { source });
+            return Err(BatchRefused { reason: ClientError::InvalidTime { source }, batch, committed });
         }
         self.expire_batches(now);
         let ClientState::Batch {
@@ -474,29 +474,29 @@ impl IngressClientOwner {
         } = &self.state;
         let accepted = (|| {
             if connection.stopped() {
-                return Err(ClientFailure::Stopped);
+                return Err(ClientError::Stopped);
             }
             if !matches!(connection, BatchConnection::Connected { .. } | BatchConnection::Switching { .. }) {
-                return Err(ClientFailure::NotConnected);
+                return Err(ClientError::NotConnected);
             }
             let first = batch.first_input();
             if (stream.client_id, stream.stream_id) != (first.client_id, first.stream_id) {
-                return Err(ClientFailure::InvalidInput);
+                return Err(ClientError::InvalidInput);
             }
             if slot.is_some() {
-                return Err(ClientFailure::Full);
+                return Err(ClientError::Full);
             }
             if stream.client_seq == u64::MAX {
-                return Err(ClientFailure::SequenceExhausted);
+                return Err(ClientError::SequenceExhausted);
             }
             if stream.client_seq != first.client_seq {
-                return Err(ClientFailure::BatchSequence { expected: stream.client_seq, observed: first.client_seq });
+                return Err(ClientError::BatchSequence { expected: stream.client_seq, observed: first.client_seq });
             }
             adapter::batch_frame_bytes(&batch, *maximum_commands, *maximum_frame_bytes)?;
             let next_id = adapter::next_batch_request_id(context.request_id)?;
             let deadline = now
                 .checked_add(*lifetime_millis)
-                .map_err(|source| ClientFailure::InvalidTime { source })?;
+                .map_err(|source| ClientError::InvalidTime { source })?;
             Ok((next_id, deadline))
         })();
         let (next_id, deadline) = match accepted {
@@ -531,7 +531,7 @@ impl IngressClientOwner {
         &mut self,
         candidate: BatchSlot,
         next_id: NonZeroU64,
-    ) -> Result<BatchHandle, (ClientFailure, BatchSlot)> {
+    ) -> Result<BatchHandle, (ClientError, BatchSlot)> {
         // Validate borrowed candidate facts before installing exclusive custody.
         // No owner clone, second pending map, or repeated payload hashing.
         if let Err(reason) = validate_batch_state(&self.state, Some((&candidate, next_id)), None) {
@@ -598,9 +598,9 @@ impl IngressClientOwner {
         self.drive_batch(event, now)
     }
 
-    fn drive_batch(&mut self, event: ClientEvent, sample: Result<MonotonicMillis, ClockReadFailure>) -> ClientResult {
+    fn drive_batch(&mut self, event: ClientEvent, sample: Result<MonotonicMillis, ClockReadError>) -> ClientResult {
         if matches!(event, ClientEvent::Stop) {
-            self.stop_batches(ClientFailure::Stopped);
+            self.stop_batches(ClientError::Stopped);
             return self.batch_effect();
         }
         let event = match event {
@@ -638,7 +638,7 @@ impl IngressClientOwner {
                 return self.consume_failed_connect(operation_id, source, sample);
             }
             event @ (ClientEvent::Drive | ClientEvent::Connected { result: Ok(()), .. }) => event,
-            _ => return ClientResult::DriveRejected { event, cause: ClientFailure::InvalidEvent },
+            _ => return ClientResult::DriveRejected { event, cause: ClientError::InvalidEvent },
         };
         if matches!(self.state, ClientState::Batch { connection: BatchConnection::CloseRequired { .. }, .. }) {
             let _ = self.checked_batch_time(sample);
@@ -667,7 +667,7 @@ impl IngressClientOwner {
                         let peer = *peer;
                         return match self.begin_batch_connect(peer, now) {
                             Ok(effect) => effect,
-                            Err(cause @ ClientFailure::InvalidTime { .. }) => ClientResult::ClockFailed { cause },
+                            Err(cause @ ClientError::InvalidTime { .. }) => ClientResult::ClockFailed { cause },
                             Err(cause) => ClientResult::DriveRejected { event: ClientEvent::Drive, cause },
                         };
                     }
@@ -690,13 +690,13 @@ impl IngressClientOwner {
         self.batch_effect()
     }
 
-    fn begin_batch_connect(&mut self, peer: usize, now: MonotonicMillis) -> Result<ClientResult, ClientFailure> {
+    fn begin_batch_connect(&mut self, peer: usize, now: MonotonicMillis) -> Result<ClientResult, ClientError> {
         let ClientState::Batch { next_connection_id, operation_millis, .. } = &self.state;
         let deadline = match now.checked_add(*operation_millis) {
             Ok(deadline) => deadline,
             Err(source) => {
-                self.stop_batches(ClientFailure::InvalidTime { source });
-                return Err(ClientFailure::InvalidTime { source });
+                self.stop_batches(ClientError::InvalidTime { source });
+                return Err(ClientError::InvalidTime { source });
             }
         };
         let next = adapter::next_batch_connection_id(*next_connection_id)?;
@@ -716,7 +716,7 @@ impl IngressClientOwner {
     fn consume_batch_close(
         &mut self,
         operation_id: u64,
-        sample: Result<MonotonicMillis, ClockReadFailure>,
+        sample: Result<MonotonicMillis, ClockReadError>,
     ) -> ClientResult {
         let now = self.checked_batch_time(sample);
         if let Ok(now) = now {
@@ -761,7 +761,7 @@ impl IngressClientOwner {
         &mut self,
         operation_id: u64,
         source: std::io::Error,
-        sample: Result<MonotonicMillis, ClockReadFailure>,
+        sample: Result<MonotonicMillis, ClockReadError>,
     ) -> ClientResult {
         let now = self.checked_batch_time(sample);
         if let Ok(now) = now {
@@ -797,7 +797,7 @@ impl IngressClientOwner {
             let retry_at = match self.next_reconnect_at(now) {
                 Ok(due) => due,
                 Err(time_failure) => {
-                    self.stop_batches(ClientFailure::InvalidTime { source: time_failure });
+                    self.stop_batches(ClientError::InvalidTime { source: time_failure });
                     return ClientResult::ConnectionFailed { operation_id, source, next_wake: None };
                 }
             };
@@ -809,8 +809,8 @@ impl IngressClientOwner {
 
     fn checked_batch_time(
         &mut self,
-        sample: Result<MonotonicMillis, ClockReadFailure>,
-    ) -> Result<MonotonicMillis, ClientFailure> {
+        sample: Result<MonotonicMillis, ClockReadError>,
+    ) -> Result<MonotonicMillis, ClientError> {
         let ClientState::Batch { last_now, .. } = &mut self.state;
         match sample {
             Ok(now) if now >= *last_now => {
@@ -819,12 +819,12 @@ impl IngressClientOwner {
             }
             Ok(observed) => {
                 let previous = *last_now;
-                self.stop_batches(ClientFailure::TimeRegressed { previous, observed });
-                Err(ClientFailure::TimeRegressed { previous, observed })
+                self.stop_batches(ClientError::TimeRegressed { previous, observed });
+                Err(ClientError::TimeRegressed { previous, observed })
             }
             Err(source) => {
-                self.stop_batches(ClientFailure::InvalidTime { source });
-                Err(ClientFailure::InvalidTime { source })
+                self.stop_batches(ClientError::InvalidTime { source });
+                Err(ClientError::InvalidTime { source })
             }
         }
     }
@@ -835,11 +835,11 @@ impl IngressClientOwner {
             .iter()
             .any(|slot| matches!(slot, BatchSlot::Pending { deadline, .. } if now >= *deadline))
         {
-            self.stop_batches(ClientFailure::RequestLifetimeExpired);
+            self.stop_batches(ClientError::RequestLifetimeExpired);
         }
     }
 
-    fn stop_batches(&mut self, cause: ClientFailure) {
+    fn stop_batches(&mut self, cause: ClientError) {
         let ClientState::Batch { connection, slot, .. } = &mut self.state;
         if matches!(slot, Some(BatchSlot::Pending { .. })) {
             let Some(BatchSlot::Pending { handle, batch, committed, attempt, .. }) = slot.take() else {
@@ -932,7 +932,7 @@ fn validate_batch_state(
     state: &ClientState,
     admission: Option<(&BatchSlot, NonZeroU64)>,
     connecting: Option<(&BatchConnection, u64)>,
-) -> Result<(), ClientFailure> {
+) -> Result<(), ClientError> {
     let ClientState::Batch {
         context,
         stream,
@@ -969,18 +969,18 @@ fn validate_batch_state(
             || context.request_id.get().checked_add(1) != Some(next.get())
             || candidate.handle().context.request_id != context.request_id
         {
-            return Err(ClientFailure::BatchReservationInvariant);
+            return Err(ClientError::BatchReservationInvariant);
         }
     }
     if *next_connection_id == 0 || *unavailable_replies > *unavailable_reply_limit {
-        return Err(ClientFailure::BatchConnectionInvariant);
+        return Err(ClientError::BatchConnectionInvariant);
     }
     if let Some((candidate, next)) = connecting {
         if !matches!(connection, BatchConnection::Disconnected { .. })
             || next_connection_id.checked_add(1) != Some(next)
             || !matches!(candidate, BatchConnection::Connecting { operation_id, .. } if operation_id == next_connection_id)
         {
-            return Err(ClientFailure::BatchConnectionInvariant);
+            return Err(ClientError::BatchConnectionInvariant);
         }
     }
     let (connection, next_connection_id) = connecting.unwrap_or((connection, *next_connection_id));
@@ -993,13 +993,13 @@ fn validate_batch_state(
         | BatchConnection::Disconnected { peer, .. }
             if *peer >= endpoints.len() =>
         {
-            return Err(ClientFailure::BatchConnectionInvariant);
+            return Err(ClientError::BatchConnectionInvariant);
         }
         BatchConnection::CloseRequired { retry: Some((_, peer)), .. }
         | BatchConnection::Closing { retry: Some((_, peer)), .. }
             if *peer >= endpoints.len() =>
         {
-            return Err(ClientFailure::BatchConnectionInvariant);
+            return Err(ClientError::BatchConnectionInvariant);
         }
         _ => {}
     }
@@ -1007,7 +1007,7 @@ fn validate_batch_state(
     | BatchConnection::Switching { write: Some((id, _)), .. } = connection
     {
         if *id >= request_id {
-            return Err(ClientFailure::BatchConnectionInvariant);
+            return Err(ClientError::BatchConnectionInvariant);
         }
     }
     match connection {
@@ -1018,7 +1018,7 @@ fn validate_batch_state(
         | BatchConnection::Closing { operation_id, .. }
             if *operation_id == 0 || *operation_id >= next_connection_id =>
         {
-            return Err(ClientFailure::BatchConnectionInvariant);
+            return Err(ClientError::BatchConnectionInvariant);
         }
         _ => {}
     }
@@ -1032,10 +1032,10 @@ fn validate_batch_state(
             || handle.context.session_incarnation != context.session_incarnation
             || handle.context.request_id >= request_id
         {
-            return Err(ClientFailure::BatchReservationInvariant);
+            return Err(ClientError::BatchReservationInvariant);
         }
         if matches!(slot, BatchSlot::Pending { .. }) && connection.stopped() {
-            return Err(ClientFailure::BatchReservationInvariant);
+            return Err(ClientError::BatchReservationInvariant);
         }
         match slot {
             BatchSlot::Pending { attempt, committed, notice, submit_route, submit_transmissions, delivery, .. } => {
@@ -1048,7 +1048,7 @@ fn validate_batch_state(
                             || !matches!(delivery, SubmitDelivery::Unsent)))
                     || (attempt.query().is_some() && committed.is_none())
                 {
-                    return Err(ClientFailure::BatchReservationInvariant);
+                    return Err(ClientError::BatchReservationInvariant);
                 }
                 if let SubmitDelivery::Sole { operation_id, request_id: exposed }
                     | SubmitDelivery::Pending { operation_id, request_id: exposed } = delivery
@@ -1058,12 +1058,12 @@ fn validate_batch_state(
                         || *exposed < handle.context.request_id
                         || *exposed >= request_id
                     {
-                        return Err(ClientFailure::BatchReservationInvariant);
+                        return Err(ClientError::BatchReservationInvariant);
                     }
                 }
                 if matches!(attempt, BatchAttempt::Awaiting { operation_id, .. } if submit_route.map(|(id, _, _)| id) != Some(*operation_id))
                 {
-                    return Err(ClientFailure::BatchConnectionInvariant);
+                    return Err(ClientError::BatchConnectionInvariant);
                 }
                 for id in submit_route
                     .iter()
@@ -1073,7 +1073,7 @@ fn validate_batch_state(
                     if !matches!(connection, BatchConnection::Connected { operation_id, .. }
                         | BatchConnection::Switching { operation_id, .. } if id == *operation_id)
                     {
-                        return Err(ClientFailure::BatchConnectionInvariant);
+                        return Err(ClientError::BatchConnectionInvariant);
                     }
                 }
                 if let Some((_, first, last)) = submit_route {
@@ -1082,7 +1082,7 @@ fn validate_batch_state(
                         || *first < handle.context.request_id
                         || (*submit_transmissions == 1 && (*first != handle.context.request_id || first != last))
                     {
-                        return Err(ClientFailure::BatchReservationInvariant);
+                        return Err(ClientError::BatchReservationInvariant);
                     }
                 }
                 if let Some((_, id, _)) = attempt.query() {
@@ -1090,7 +1090,7 @@ fn validate_batch_state(
                         || id <= handle.context.request_id
                         || submit_route.is_some_and(|(_, _, last)| id <= last)
                     {
-                        return Err(ClientFailure::BatchReservationInvariant);
+                        return Err(ClientError::BatchReservationInvariant);
                     }
                 }
                 if notice.as_ref().is_some_and(|event| {
@@ -1101,13 +1101,13 @@ fn validate_batch_state(
                             BatchProgress::Problem { .. } => true,
                         }
                 }) {
-                    return Err(ClientFailure::BatchReservationInvariant);
+                    return Err(ClientError::BatchReservationInvariant);
                 }
             }
             // Only BatchTerminal can occupy this variant. Progress cannot
             // become a settled slot even before the invariant is checked.
             BatchSlot::Terminal { event: BatchTerminal::OutcomeUnknown { .. }, .. } if !connection.stopped() => {
-                return Err(ClientFailure::BatchReservationInvariant);
+                return Err(ClientError::BatchReservationInvariant);
             }
             BatchSlot::Terminal { .. } => {}
         }

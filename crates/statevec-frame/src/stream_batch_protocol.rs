@@ -1,6 +1,6 @@
 //! Whole-batch protocol values shared by the Raft owner and stateless wire codecs.
 //! No value here grants commitment, admission or custody authority.
-use crate::applied_binding::AppliedStreamBatchBindingV1;
+use crate::applied_binding::AppliedStreamBatchBinding;
 use crate::outcome::{CommitOutcome, EntryDigest};
 use crate::{ClientStreamBatch, ClientStreamBatchCommitment, Digest32};
 use std::num::{NonZeroU64, NonZeroU128};
@@ -131,19 +131,19 @@ pub enum IngressUnavailableReason {
 /// from framing failure: the client owner classifies stale versus current
 /// operations without letting a decoder retire custody or choose a retry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReplyRequestFailure {
+pub enum ReplyRequestError {
     ContextMismatch,
     IntentMismatch,
     UnexpectedSubmitDisposition,
     UnexpectedReconcileDisposition,
 }
 
-impl std::fmt::Display for ReplyRequestFailure {
+impl std::fmt::Display for ReplyRequestError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "whole-batch reply/request join: {self:?}")
     }
 }
-impl std::error::Error for ReplyRequestFailure {}
+impl std::error::Error for ReplyRequestError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReplyBinding {
@@ -158,12 +158,12 @@ impl ReplyBinding {
 
     /// Identity only. Consumers use Reply::check_request for the request-kind
     /// relation, then the client owner checks currentness and its lifecycle.
-    pub fn check_request(self, request: &Request) -> Result<(), ReplyRequestFailure> {
+    pub fn check_request(self, request: &Request) -> Result<(), ReplyRequestError> {
         if self.context != *request.context() {
-            return Err(ReplyRequestFailure::ContextMismatch);
+            return Err(ReplyRequestError::ContextMismatch);
         }
         if self.intent != request.batch().commitment_v1() {
-            return Err(ReplyRequestFailure::IntentMismatch);
+            return Err(ReplyRequestError::IntentMismatch);
         }
         Ok(())
     }
@@ -226,7 +226,7 @@ pub enum ReplyDisposition {
     },
     /// The latest durable binding proves exact intent application, but the
     /// optional result payload is absent/expired. Its intent equals this echo.
-    ExactAppliedResultUnavailable(AppliedStreamBatchBindingV1),
+    ExactAppliedResultUnavailable(AppliedStreamBatchBinding),
     RetryableNext,
     Conflict,
     /// Admission gap hint, never permission to trim or resequence the intent.
@@ -257,7 +257,7 @@ impl Reply {
     /// merely the current batch. Submit and Reconcile have distinct request IDs.
     /// Success is only a static relation, not commitment, currentness or terminal
     /// delivery authority. Duplicate/late observations remain client-owner work.
-    pub fn check_request(&self, request: &Request) -> Result<(), ReplyRequestFailure> {
+    pub fn check_request(&self, request: &Request) -> Result<(), ReplyRequestError> {
         self.binding.check_request(request)?;
         self.check_kind(matches!(request, Request::Submit { .. }))
     }
@@ -268,7 +268,7 @@ impl Reply {
         &self,
         context: RequestContext,
         intent: ClientStreamBatchCommitment,
-    ) -> Result<(), ReplyRequestFailure> {
+    ) -> Result<(), ReplyRequestError> {
         self.check_retained(context, intent, true)
     }
 
@@ -277,7 +277,7 @@ impl Reply {
         &self,
         context: RequestContext,
         intent: ClientStreamBatchCommitment,
-    ) -> Result<(), ReplyRequestFailure> {
+    ) -> Result<(), ReplyRequestError> {
         self.check_retained(context, intent, false)
     }
 
@@ -286,17 +286,17 @@ impl Reply {
         context: RequestContext,
         intent: ClientStreamBatchCommitment,
         submit: bool,
-    ) -> Result<(), ReplyRequestFailure> {
+    ) -> Result<(), ReplyRequestError> {
         if self.binding.context != context {
-            return Err(ReplyRequestFailure::ContextMismatch);
+            return Err(ReplyRequestError::ContextMismatch);
         }
         if self.binding.intent != intent {
-            return Err(ReplyRequestFailure::IntentMismatch);
+            return Err(ReplyRequestError::IntentMismatch);
         }
         self.check_kind(submit)
     }
 
-    fn check_kind(&self, submit: bool) -> Result<(), ReplyRequestFailure> {
+    fn check_kind(&self, submit: bool) -> Result<(), ReplyRequestError> {
         let legal = match &self.disposition {
             ReplyDisposition::IngressAdmitted(_) | ReplyDisposition::StreamGapRejected { .. } => submit,
             ReplyDisposition::Unknown | ReplyDisposition::RetryableNext => !submit,
@@ -312,9 +312,9 @@ impl Reply {
             Ok(())
         } else {
             Err(if submit {
-                ReplyRequestFailure::UnexpectedSubmitDisposition
+                ReplyRequestError::UnexpectedSubmitDisposition
             } else {
-                ReplyRequestFailure::UnexpectedReconcileDisposition
+                ReplyRequestError::UnexpectedReconcileDisposition
             })
         }
     }

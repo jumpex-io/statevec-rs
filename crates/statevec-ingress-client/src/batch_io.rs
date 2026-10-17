@@ -1,6 +1,6 @@
 // Included in the single client port module. Only partial I/O and readiness
 // live here; all connection/retry/deadline/terminal decisions stay in the owner.
-use ingress_api::stream_batch::{FrameReader, ReadFailure, ReadProgress};
+use ingress_api::stream_batch::{FrameReader, ReadError, ReadProgress};
 use std::num::NonZeroU64;
 use std::task::Poll;
 
@@ -101,7 +101,7 @@ impl<S: Read + Write> BatchIoWorker<S> {
                 return self.runnable();
             }
             Ok(ReadProgress::Frame(bytes)) => Ok(bytes),
-            Ok(ReadProgress::Eof) => Err(ReadFailure::Io { source: io::ErrorKind::UnexpectedEof.into() }),
+            Ok(ReadProgress::Eof) => Err(ReadError::Io { source: io::ErrorKind::UnexpectedEof.into() }),
             Err(source) => Err(source),
         };
         if result.is_err() {

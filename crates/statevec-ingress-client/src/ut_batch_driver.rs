@@ -41,7 +41,7 @@ impl Read for Bytes {
             *remaining -= 1;
         }
         if let Some(clock) = device.fail_clock_on_read.take() {
-            *clock.0.lock().unwrap() = Err(ClockReadFailure::OutOfRange);
+            *clock.0.lock().unwrap() = Err(ClockReadError::OutOfRange);
         }
         if device.incoming.is_empty() {
             return if device.eof { Ok(0) } else { Err(io::ErrorKind::WouldBlock.into()) };
@@ -82,7 +82,7 @@ impl Drop for Bytes {
         let mut device = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         device.drops += 1;
         if let Some(clock) = device.fail_clock_on_drop.take() {
-            *clock.0.lock().unwrap() = Err(ClockReadFailure::OutOfRange);
+            *clock.0.lock().unwrap() = Err(ClockReadError::OutOfRange);
         }
     }
 }
@@ -251,7 +251,7 @@ fn manual_driver_decodes_short_request_and_retains_duplicate_coalesced_terminal(
     }
     ready(&mut driver, &mut client); // All fragmented/coalesced frames on ONE edge.
     drain(&mut driver, &mut client);
-    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientFailure::Full));
+    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientError::Full));
     for handle in handles {
         assert!(
             matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::Applied { handle: actual, .. })) if actual == handle)
@@ -294,7 +294,7 @@ fn failed_connect_drops_socket_before_owner_return_and_preserves_backoff() {
     network.lock().unwrap().connect_error = Some(io::ErrorKind::ConnectionRefused);
     assert!(driver.step(&mut client).unwrap().is_runnable());
     assert!(
-        matches!(driver.step(&mut client), Ok(BatchDriverStep::Diagnostic { cause: ClientFailure::BatchConnect { source } }) if source.kind() == io::ErrorKind::ConnectionRefused)
+        matches!(driver.step(&mut client), Ok(BatchDriverStep::Diagnostic { cause: ClientError::BatchConnect { source } }) if source.kind() == io::ErrorKind::ConnectionRefused)
     );
     assert_eq!(device.lock().unwrap().drops, 1);
     assert!(
@@ -318,11 +318,11 @@ fn read_clock_failure_stops_without_replaying_the_frame() {
     device.lock().unwrap().fail_clock_on_read = Some(clock.clone());
     assert!(matches!(
         driver.step(&mut client),
-        Ok(BatchDriverStep::Diagnostic { cause: ClientFailure::InvalidTime { .. } })
+        Ok(BatchDriverStep::Diagnostic { cause: ClientError::InvalidTime { .. } })
     ));
     let reads = device.lock().unwrap().reads;
     assert!(
-        matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown { handle: actual, cause: ClientFailure::InvalidTime { .. }, .. })) if actual == handle),
+        matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown { handle: actual, cause: ClientError::InvalidTime { .. }, .. })) if actual == handle),
         "untrusted reply time stops with original custody"
     );
     clock.set(INITIAL_TIME + 1);
@@ -355,7 +355,7 @@ fn partial_reply_is_discarded_on_reconnect_but_a_latched_terminal_survives() {
         match driver.step(&mut client) {
             Ok(BatchDriverStep::Runnable) => (),
             Ok(BatchDriverStep::Diagnostic {
-                cause: ClientFailure::BatchRead { source: stream_batch::ReadFailure::Io { source } },
+                cause: ClientError::BatchRead { source: stream_batch::ReadError::Io { source } },
             }) if source.kind() == io::ErrorKind::UnexpectedEof => {
                 break;
             }
@@ -495,12 +495,12 @@ fn wait_reenters_drive_before_projecting_timeout_and_stops_on_untrusted_time(reg
     let handle = client.try_submit(batch(1)).unwrap();
     drain(&mut driver, &mut client);
     *clock.0.lock().unwrap() =
-        if regressed { Ok(MonotonicMillis::new(INITIAL_TIME - 1)) } else { Err(ClockReadFailure::OutOfRange) };
+        if regressed { Ok(MonotonicMillis::new(INITIAL_TIME - 1)) } else { Err(ClockReadError::OutOfRange) };
     assert!(
         matches!(
             driver.wait(&mut client, Duration::from_millis(999)),
             Ok(BatchDriverStep::Diagnostic {
-                cause: ClientFailure::InvalidTime { .. } | ClientFailure::TimeRegressed { .. }
+                cause: ClientError::InvalidTime { .. } | ClientError::TimeRegressed { .. }
             })
         ),
         "wait must deliver current bound time through Drive before blocking"
@@ -513,7 +513,7 @@ fn wait_reenters_drive_before_projecting_timeout_and_stops_on_untrusted_time(reg
     assert!(matches!(
         driver.step(&mut client),
         Ok(BatchDriverStep::Diagnostic {
-            cause: ClientFailure::InvalidTime { .. } | ClientFailure::TimeRegressed { .. }
+            cause: ClientError::InvalidTime { .. } | ClientError::TimeRegressed { .. }
         })
     ));
     assert!(driver.is_quiescent(), "clock failure cannot retain the physical connection");

@@ -426,7 +426,7 @@ fn immediate_idle_eof_cannot_reset_reconnect_backoff() {
         assert!(matches!(client.drive(ClientEvent::Connected { operation_id, result: Ok(()) }), ClientResult::Waiting { .. }));
         assert!(matches!(client.drive(ClientEvent::Read {
             operation_id,
-            result: Err(ingress_api::stream_batch::ReadFailure::Io {
+            result: Err(ingress_api::stream_batch::ReadError::Io {
                 source: std::io::ErrorKind::UnexpectedEof.into(),
             }),
         }), ClientResult::ConnectionFault { .. }));
@@ -466,7 +466,7 @@ fn stable_idle_connection_retires_old_failure_backoff(connected_for: u64, delay:
     clock.set(connected_at + connected_for);
     assert!(matches!(client.drive(ClientEvent::Read {
         operation_id,
-        result: Err(ingress_api::stream_batch::ReadFailure::Io { source: std::io::ErrorKind::UnexpectedEof.into() }),
+        result: Err(ingress_api::stream_batch::ReadError::Io { source: std::io::ErrorKind::UnexpectedEof.into() }),
     }), ClientResult::ConnectionFault { .. }));
     assert!(matches!(client.drive(ClientEvent::Drive), ClientResult::Close { .. }));
     assert!(matches!(client.drive(ClientEvent::Closed { operation_id }), ClientResult::Waiting { .. }));
@@ -503,7 +503,7 @@ fn idle_backoff_does_not_penalize_accepted_work(recovery: BackoffRecovery) {
     }
     assert!(matches!(client.drive(ClientEvent::Read {
         operation_id,
-        result: Err(ingress_api::stream_batch::ReadFailure::Io { source: std::io::ErrorKind::UnexpectedEof.into() }),
+        result: Err(ingress_api::stream_batch::ReadError::Io { source: std::io::ErrorKind::UnexpectedEof.into() }),
     }), ClientResult::ConnectionFault { .. }));
     assert!(matches!(client.drive(ClientEvent::Drive), ClientResult::Close { .. }));
     assert!(matches!(client.drive(ClientEvent::Closed { operation_id }), ClientResult::Waiting { .. }));
@@ -537,7 +537,7 @@ fn switching_keeps_retirement_and_session_termination_obligations(exit: SwitchEx
             let event = match exit {
                 SwitchExit::ReadFailure => ClientEvent::Read {
                     operation_id: connection,
-                    result: Err(stream_batch::ReadFailure::Io { source: std::io::ErrorKind::ConnectionReset.into() }),
+                    result: Err(stream_batch::ReadError::Io { source: std::io::ErrorKind::ConnectionReset.into() }),
                 },
                 _ => ClientEvent::Written {
                     operation_id: connection,
@@ -596,8 +596,8 @@ fn switching_keeps_retirement_and_session_termination_obligations(exit: SwitchEx
                 assert_eq!(batch.first_input().stream_id, expected_stream);
                 assert!(matches!(
                     (exit, cause),
-                    (SwitchExit::Stop, ClientFailure::Stopped)
-                        | (SwitchExit::Lifetime, ClientFailure::RequestLifetimeExpired)
+                    (SwitchExit::Stop, ClientError::Stopped)
+                        | (SwitchExit::Lifetime, ClientError::RequestLifetimeExpired)
                 ));
             }
             assert!(client.poll_event().is_none());

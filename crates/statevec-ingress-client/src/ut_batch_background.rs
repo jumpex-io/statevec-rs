@@ -132,7 +132,7 @@ impl Running {
             std::thread::yield_now();
         }
     }
-    fn shutdown(mut self) -> (BatchClient, Option<ClientFailure>) {
+    fn shutdown(mut self) -> (BatchClient, Option<ClientError>) {
         self.client().request_stop();
         self.gate.release_all();
         self.background
@@ -205,7 +205,7 @@ fn async_recovery_keeps_physical_faults_out_of_the_terminal_channel(fault: Recov
     let waits = if matches!(fault, RecoverableFault::ReconnectRefused) {
         // Consume the earlier EOF diagnostic so this row isolates the next
         // connect refusal, with the original batch still in owner custody.
-        assert!(matches!(running.client().take_driver_error(), Some(ClientFailure::BatchRead { .. })));
+        assert!(matches!(running.client().take_driver_error(), Some(ClientError::BatchRead { .. })));
         clock.set(INITIAL_TIME + RETRY);
         running.gate.expire_timer();
         running.gate.wait_entered(4);
@@ -222,8 +222,8 @@ fn async_recovery_keeps_physical_faults_out_of_the_terminal_channel(fault: Recov
         "recoverable physical faults must remain diagnostics while the owner recovers: {event:?}"
     );
     match (fault, running.client().take_driver_error()) {
-        (RecoverableFault::Eof, Some(ClientFailure::BatchRead { .. })) => (),
-        (RecoverableFault::ReconnectRefused, Some(ClientFailure::BatchConnect { source })) => {
+        (RecoverableFault::Eof, Some(ClientError::BatchRead { .. })) => (),
+        (RecoverableFault::ReconnectRefused, Some(ClientError::BatchConnect { source })) => {
             assert_eq!(source.kind(), io::ErrorKind::ConnectionRefused);
         }
         other => panic!("the physical typed diagnostic remains independently consumable: {other:?}"),
@@ -326,7 +326,7 @@ fn background_never_holds_the_owner_lock_while_waiting_or_consumes_terminals() {
     let running = start(client(&clock), &[device.clone()]);
     // Thread is blocked in physical wait, not in a turn or an owner lock.
     let handles: Vec<_> = (1..=1).map(|id| running.client().try_submit(batch(id)).unwrap()).collect();
-    assert!(matches!(running.client().try_submit(batch(1)).unwrap_err().reason, ClientFailure::Full));
+    assert!(matches!(running.client().try_submit(batch(1)).unwrap_err().reason, ClientError::Full));
     running.gate.release_one();
     running.gate.wait_entered(2);
     let sent = requests(&device);
@@ -405,9 +405,9 @@ fn shutdown_joins_partial_io_and_returns_original_unknown_custody_even_with_bad_
     running.gate.release_one();
     running.gate.wait_entered(2);
     assert!(device.lock().unwrap().outgoing.is_empty());
-    *clock.0.lock().unwrap() = Err(ClockReadFailure::OutOfRange);
+    *clock.0.lock().unwrap() = Err(ClockReadError::OutOfRange);
     let (mut client, error) = running.shutdown();
-    assert!(matches!(error, Some(ClientFailure::InvalidTime { .. })));
+    assert!(matches!(error, Some(ClientError::InvalidTime { .. })));
     assert_eq!(device.lock().unwrap().drops, 1);
     assert!(
         matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown { handle: actual, batch: original, .. })) if actual == handle && wire(&original) == wire(&batch(1)))
@@ -438,7 +438,7 @@ fn panic_after_empty_diagnostic_is_delivered_before_async_eof() {
         .as_mut()
         .poll(&mut Context::from_waker(Waker::noop()));
     assert!(
-        matches!(observed, Poll::Ready(Err(ClientFailure::DriverPanicked))),
+        matches!(observed, Poll::Ready(Err(ClientError::DriverPanicked))),
         "a published driver panic must precede async EOF: {observed:?}"
     );
     assert!(matches!(
@@ -467,7 +467,7 @@ fn driver_panic_overrides_an_earlier_diagnostic_without_poisoning_the_owner() {
     running.gate.0.0.lock().unwrap().panic_on_release = true;
 
     let (mut owner, error) = running.shutdown();
-    assert!(matches!(error, Some(ClientFailure::DriverPanicked)), "driver panic must dominate earlier diagnostics");
+    assert!(matches!(error, Some(ClientError::DriverPanicked)), "driver panic must dominate earlier diagnostics");
     assert!(matches!(owner.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown {
         handle: actual, batch: original, ..
     })) if actual == handle && wire(&original) == wire(&batch(1))));
@@ -494,12 +494,12 @@ fn panicking_clock_quarantines_owner_instead_of_draining_untrusted_state() {
     }
 
     assert!(
-        matches!(running.client().poll_event(), Err(ClientFailure::DriverPanicked)),
+        matches!(running.client().poll_event(), Err(ClientError::DriverPanicked)),
         "poisoned owner must not resume terminal consumption"
     );
-    assert!(matches!(running.client().status(), Err(ClientFailure::DriverPanicked)));
+    assert!(matches!(running.client().status(), Err(ClientError::DriverPanicked)));
     let refused = running.client().try_submit(batch(2)).unwrap_err();
-    assert!(matches!(refused.reason, ClientFailure::DriverPanicked));
+    assert!(matches!(refused.reason, ClientError::DriverPanicked));
     assert_eq!(wire(&refused.batch), wire(&batch(2)));
     let quarantined = running
         .background
@@ -507,10 +507,10 @@ fn panicking_clock_quarantines_owner_instead_of_draining_untrusted_state() {
         .unwrap()
         .shutdown()
         .expect_err("shutdown must not return a reusable poisoned owner");
-    assert!(matches!(quarantined.take_driver_error(), Some(ClientFailure::DriverPanicked)));
-    assert!(matches!(quarantined.poll_event(), Err(ClientFailure::DriverPanicked)));
+    assert!(matches!(quarantined.take_driver_error(), Some(ClientError::DriverPanicked)));
+    assert!(matches!(quarantined.poll_event(), Err(ClientError::DriverPanicked)));
     let refused = quarantined.try_import(batch(2), None).unwrap_err();
-    assert!(matches!(refused.reason, ClientFailure::DriverPanicked));
+    assert!(matches!(refused.reason, ClientError::DriverPanicked));
     assert_eq!(wire(&refused.batch), wire(&batch(2)));
 }
 
@@ -662,11 +662,11 @@ fn background_wait_uses_owner_deadline_without_application_or_socket_wakeup(expi
         }
         WaitExpiry::Lifetime => {
             assert!(matches!(event, Poll::Ready(Ok(Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown {
-                handle, cause: ClientFailure::RequestLifetimeExpired, ..
+                handle, cause: ClientError::RequestLifetimeExpired, ..
             })))) if handle == handles[0]));
             for handle in &handles[1..] {
                 assert!(matches!(running.client().poll_event().unwrap(), Some(BatchEvent::Terminal(
-                    BatchTerminal::OutcomeUnknown { handle: actual, cause: ClientFailure::RequestLifetimeExpired, .. }
+                    BatchTerminal::OutcomeUnknown { handle: actual, cause: ClientError::RequestLifetimeExpired, .. }
                 )) if actual == *handle));
             }
             assert!(matches!(
@@ -689,7 +689,7 @@ fn active_connection_cannot_be_replaced_by_background_assembly() {
         Err(failure) => failure,
         Ok(_) => panic!("assembly cannot discard a live socket's physical debt"),
     };
-    assert!(matches!(cause, ClientFailure::BatchConnectionInvariant));
+    assert!(matches!(cause, ClientError::BatchConnectionInvariant));
     let _effect = original.drive(ClientEvent::Stop);
     assert!(
         matches!(original.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown { handle: actual, .. })) if actual == handle)
@@ -737,7 +737,7 @@ fn panicking_waiter_cannot_kill_the_driver_or_consume_the_result(prior_diagnosti
         .as_mut()
         .poll(&mut Context::from_waker(Waker::noop()));
     assert!(
-        matches!(diagnostic, Poll::Ready(Err(ClientFailure::WaiterPanicked))),
+        matches!(diagnostic, Poll::Ready(Err(ClientError::WaiterPanicked))),
         "waiter failure cannot be hidden behind an earlier physical diagnostic"
     );
     let (_, error) = running.shutdown();
@@ -761,7 +761,7 @@ fn os_background_wakes_on_publication_and_async_consumes_a_real_frame() {
     let handle = loop {
         match background.try_submit(original) {
             Ok(handle) => break handle,
-            Err(refused) if matches!(refused.reason, ClientFailure::NotConnected) => original = refused.batch,
+            Err(refused) if matches!(refused.reason, ClientError::NotConnected) => original = refused.batch,
             Err(refused) => panic!("unexpected local refusal: {refused:?}"),
         }
         assert!(Instant::now() < deadline, "OS driver must observe the accepted socket");
@@ -864,7 +864,7 @@ fn default_background_retires_peer_fault_then_completes_same_batch(fault: OsPeer
     let handle = loop {
         match background.try_submit(original) {
             Ok(handle) => break handle,
-            Err(refused) if matches!(refused.reason, ClientFailure::NotConnected) => original = refused.batch,
+            Err(refused) if matches!(refused.reason, ClientError::NotConnected) => original = refused.batch,
             Err(refused) => panic!("local admission: {refused:?}"),
         }
         assert!(Instant::now() < deadline, "driver must bind the accepted connection");
@@ -889,7 +889,7 @@ fn default_background_retires_peer_fault_then_completes_same_batch(fault: OsPeer
         0,
         "owner must consume the fault and retire the exact socket"
     );
-    assert!(matches!(background.take_driver_error(), Some(ClientFailure::BatchRead { .. })));
+    assert!(matches!(background.take_driver_error(), Some(ClientError::BatchRead { .. })));
     assert!(background.poll_event().unwrap().is_none(), "connection failure cannot settle the original intent");
 
     clock.set(INITIAL_TIME + RETRY);
@@ -922,7 +922,7 @@ fn clock_fail_stop_finishes_background_and_delivers_terminal_before_async_eof() 
     let device = bytes();
     let mut running = start(client(&clock), &[device.clone()]);
     let handle = running.client().try_submit(batch(1)).unwrap();
-    *clock.0.lock().unwrap() = Err(ClockReadFailure::OutOfRange);
+    *clock.0.lock().unwrap() = Err(ClockReadError::OutOfRange);
     let gate = running.gate.clone();
     running.client_mut().after_empty = Some(Box::new(move |finished| {
         gate.release_all();
@@ -937,7 +937,7 @@ fn clock_fail_stop_finishes_background_and_delivers_terminal_before_async_eof() 
         .poll(&mut Context::from_waker(Waker::noop()));
     assert!(
         matches!(observed, Poll::Ready(Ok(Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown {
-        handle: actual, batch: original, cause: ClientFailure::InvalidTime { .. }, ..
+        handle: actual, batch: original, cause: ClientError::InvalidTime { .. }, ..
     })))) if actual == handle && wire(&original) == wire(&batch(1))),
         "clock fail-stop must deliver original custody before EOF"
     );
@@ -949,7 +949,7 @@ fn clock_fail_stop_finishes_background_and_delivers_terminal_before_async_eof() 
     ));
     let (mut owner, cause) = running.shutdown();
     assert!(
-        matches!(cause, Some(ClientFailure::InvalidTime { .. })),
+        matches!(cause, Some(ClientError::InvalidTime { .. })),
         "clock diagnostic stays separate from its terminal"
     );
     assert!(owner.poll_event().is_none());
@@ -975,7 +975,7 @@ fn wait_sample_clock_failure_drains_close_before_blocking_again() {
         move || {
             if let Some(left) = &mut *sample.lock().unwrap() {
                 if *left == 0 {
-                    return Err(ClockReadFailure::OutOfRange);
+                    return Err(ClockReadError::OutOfRange);
                 }
                 *left -= 1;
             }
@@ -1000,9 +1000,9 @@ fn wait_sample_clock_failure_drains_close_before_blocking_again() {
     assert_eq!(waits, 2, "clock fail-stop must finish without another wait or explicit Stop");
     assert!(running.client().driver_finished());
     let (mut owner, error) = running.shutdown();
-    assert!(matches!(error, Some(ClientFailure::InvalidTime { source: ClockReadFailure::OutOfRange })));
+    assert!(matches!(error, Some(ClientError::InvalidTime { source: ClockReadError::OutOfRange })));
     assert!(matches!(owner.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown {
-        handle: actual, batch: original, cause: ClientFailure::InvalidTime { .. }, ..
+        handle: actual, batch: original, cause: ClientError::InvalidTime { .. }, ..
     })) if actual == handle && wire(&original) == wire(&batch(1))));
     assert!(owner.poll_event().is_none());
 }

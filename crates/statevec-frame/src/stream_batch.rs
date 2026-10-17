@@ -15,7 +15,7 @@ pub const CLIENT_STREAM_BATCH_HEADER_BYTES: usize = 36;
 pub const CLIENT_STREAM_BATCH_COMMITMENT_BYTES: usize = 56;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ClientStreamBatchFailure {
+pub enum ClientStreamBatchError {
     EmptyByteLimit,
     EncodedBytesExceeded { observed: usize, limit: usize },
     InvalidCount { observed: usize, limit: usize },
@@ -31,13 +31,13 @@ pub enum ClientStreamBatchFailure {
     UnsupportedCodecVersion { member: usize, observed: u16 },
 }
 
-impl std::fmt::Display for ClientStreamBatchFailure {
+impl std::fmt::Display for ClientStreamBatchError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "client stream batch: {self:?}")
     }
 }
 
-impl std::error::Error for ClientStreamBatchFailure {}
+impl std::error::Error for ClientStreamBatchError {}
 
 /// One nonempty contiguous stream range with original ordered command bytes.
 ///
@@ -71,9 +71,9 @@ impl ClientStreamBatchCommitment {
         commands: &[EngineCommandPayload],
         maximum_encoded_bytes: usize,
         maximum_commands: usize,
-    ) -> Result<Self, ClientStreamBatchFailure> {
+    ) -> Result<Self, ClientStreamBatchError> {
         check_count(commands.len(), maximum_commands)?;
-        let first = first.ok_or(ClientStreamBatchFailure::MissingIdentity)?;
+        let first = first.ok_or(ClientStreamBatchError::MissingIdentity)?;
         encoded_len(first, commands.iter(), maximum_encoded_bytes, maximum_commands)?;
         Ok(commitment_v1(first, commands.iter()))
     }
@@ -109,9 +109,9 @@ impl ClientStreamBatchCommitment {
 
     /// Check structure and limits only. A peer can declare any digest; callers
     /// must compare with the locally retained original intent before using it.
-    pub fn decode_v1(bytes: &[u8], maximum_commands: usize) -> Result<Self, ClientStreamBatchFailure> {
+    pub fn decode_v1(bytes: &[u8], maximum_commands: usize) -> Result<Self, ClientStreamBatchError> {
         if bytes.len() != CLIENT_STREAM_BATCH_COMMITMENT_BYTES {
-            return Err(ClientStreamBatchFailure::InvalidLength);
+            return Err(ClientStreamBatchError::InvalidLength);
         }
         let mut remaining = bytes;
         let first = InputRef {
@@ -143,7 +143,7 @@ impl ClientStreamBatch {
         commands: Vec<EngineCommandPayload>,
         maximum_encoded_bytes: usize,
         maximum_commands: usize,
-    ) -> Result<Self, (ClientStreamBatchFailure, InputRef, Vec<EngineCommandPayload>)> {
+    ) -> Result<Self, (ClientStreamBatchError, InputRef, Vec<EngineCommandPayload>)> {
         if let Err(cause) = encoded_len(&first, commands.iter(), maximum_encoded_bytes, maximum_commands) {
             return Err((cause, first, commands));
         }
@@ -203,7 +203,7 @@ impl ClientStreamBatch {
         &self,
         maximum_encoded_bytes: usize,
         maximum_commands: usize,
-    ) -> Result<Vec<u8>, ClientStreamBatchFailure> {
+    ) -> Result<Vec<u8>, ClientStreamBatchError> {
         let mut bytes = Vec::new();
         self.append_v1(&mut bytes, maximum_encoded_bytes, maximum_commands)?;
         Ok(bytes)
@@ -214,7 +214,7 @@ impl ClientStreamBatch {
         &self,
         maximum_encoded_bytes: usize,
         maximum_commands: usize,
-    ) -> Result<usize, ClientStreamBatchFailure> {
+    ) -> Result<usize, ClientStreamBatchError> {
         encoded_len(&self.first, self.commands.iter(), maximum_encoded_bytes, maximum_commands)
     }
 
@@ -225,12 +225,12 @@ impl ClientStreamBatch {
         bytes: &mut Vec<u8>,
         maximum_encoded_bytes: usize,
         maximum_commands: usize,
-    ) -> Result<(), ClientStreamBatchFailure> {
+    ) -> Result<(), ClientStreamBatchError> {
         let length = self.encoded_len_v1(maximum_encoded_bytes, maximum_commands)?;
         bytes
             .len()
             .checked_add(length)
-            .ok_or(ClientStreamBatchFailure::LengthOverflow)?;
+            .ok_or(ClientStreamBatchError::LengthOverflow)?;
         bytes.reserve(length);
         self.emit_v1(|part| bytes.extend_from_slice(part));
         Ok(())
@@ -249,19 +249,19 @@ impl ClientStreamBatch {
         bytes: &[u8],
         maximum_encoded_bytes: usize,
         maximum_commands: usize,
-    ) -> Result<Self, ClientStreamBatchFailure> {
+    ) -> Result<Self, ClientStreamBatchError> {
         check_bytes(bytes.len(), maximum_encoded_bytes)?;
         let mut remaining = bytes;
         if &take::<8>(&mut remaining)? != MAGIC {
-            return Err(ClientStreamBatchFailure::InvalidMagic);
+            return Err(ClientStreamBatchError::InvalidMagic);
         }
         let version = u16::from_le_bytes(take(&mut remaining)?);
         if version != VERSION {
-            return Err(ClientStreamBatchFailure::UnsupportedVersion { observed: version });
+            return Err(ClientStreamBatchError::UnsupportedVersion { observed: version });
         }
         let codec = u16::from_le_bytes(take(&mut remaining)?);
         if codec != CODEC_TAG {
-            return Err(ClientStreamBatchFailure::UnsupportedCodecTag { observed: codec });
+            return Err(ClientStreamBatchError::UnsupportedCodecTag { observed: codec });
         }
         let first = InputRef {
             client_id: u64::from_le_bytes(take(&mut remaining)?),
@@ -270,19 +270,19 @@ impl ClientStreamBatch {
             request_id: None,
         };
         let count = usize::try_from(u32::from_le_bytes(take(&mut remaining)?))
-            .map_err(|_| ClientStreamBatchFailure::LengthOverflow)?;
+            .map_err(|_| ClientStreamBatchError::LengthOverflow)?;
         check_range(&first, count, maximum_commands)?;
         // Each member needs its length word, even for a zero-byte payload. Never
         // reserve from an untrusted count that cannot fit in the actual input.
         if count > remaining.len() / 4 {
-            return Err(ClientStreamBatchFailure::InvalidLength);
+            return Err(ClientStreamBatchError::InvalidLength);
         }
         let mut scan = remaining;
         for _ in 0..count {
             take_payload(&mut scan)?;
         }
         if !scan.is_empty() {
-            return Err(ClientStreamBatchFailure::InvalidLength);
+            return Err(ClientStreamBatchError::InvalidLength);
         }
         let mut commands = Vec::with_capacity(count);
         for _ in 0..count {
@@ -295,25 +295,25 @@ impl ClientStreamBatch {
     }
 }
 
-fn check_count(count: usize, maximum_commands: usize) -> Result<(), ClientStreamBatchFailure> {
+fn check_count(count: usize, maximum_commands: usize) -> Result<(), ClientStreamBatchError> {
     if count == 0 || count > maximum_commands || u32::try_from(count).is_err() {
-        return Err(ClientStreamBatchFailure::InvalidCount { observed: count, limit: maximum_commands });
+        return Err(ClientStreamBatchError::InvalidCount { observed: count, limit: maximum_commands });
     }
     Ok(())
 }
 
-fn check_range(first: &InputRef, count: usize, maximum_commands: usize) -> Result<(), ClientStreamBatchFailure> {
+fn check_range(first: &InputRef, count: usize, maximum_commands: usize) -> Result<(), ClientStreamBatchError> {
     check_count(count, maximum_commands)?;
     if first.client_id == 0 || first.stream_id == 0 || first.client_seq == 0 {
-        return Err(ClientStreamBatchFailure::MissingIdentity);
+        return Err(ClientStreamBatchError::MissingIdentity);
     }
     if first.request_id.is_some() {
-        return Err(ClientStreamBatchFailure::TransportIdentityNotDurable);
+        return Err(ClientStreamBatchError::TransportIdentityNotDurable);
     }
     first
         .client_seq
         .checked_add(count as u64)
-        .ok_or(ClientStreamBatchFailure::SequenceOverflow)?;
+        .ok_or(ClientStreamBatchError::SequenceOverflow)?;
     Ok(())
 }
 
@@ -322,25 +322,25 @@ fn encoded_len<'a>(
     commands: impl ExactSizeIterator<Item = &'a EngineCommandPayload>,
     maximum_encoded_bytes: usize,
     maximum_commands: usize,
-) -> Result<usize, ClientStreamBatchFailure> {
+) -> Result<usize, ClientStreamBatchError> {
     check_range(first, commands.len(), maximum_commands)?;
     let mut length = CLIENT_STREAM_BATCH_HEADER_BYTES;
     check_bytes(length, maximum_encoded_bytes)?;
     for (member, command) in commands.enumerate() {
         if command.payload_codec.codec_id != RUNTIME_BINARY_V0_CODEC_ID {
-            return Err(ClientStreamBatchFailure::UnsupportedCodecIdentity { member });
+            return Err(ClientStreamBatchError::UnsupportedCodecIdentity { member });
         }
         if command.payload_codec.codec_version != RUNTIME_BINARY_V0_CODEC_VERSION {
-            return Err(ClientStreamBatchFailure::UnsupportedCodecVersion {
+            return Err(ClientStreamBatchError::UnsupportedCodecVersion {
                 member,
                 observed: command.payload_codec.codec_version,
             });
         }
-        u32::try_from(command.payload_bytes.len()).map_err(|_| ClientStreamBatchFailure::LengthOverflow)?;
+        u32::try_from(command.payload_bytes.len()).map_err(|_| ClientStreamBatchError::LengthOverflow)?;
         length = length
             .checked_add(4)
             .and_then(|n| n.checked_add(command.payload_bytes.len()))
-            .ok_or(ClientStreamBatchFailure::LengthOverflow)?;
+            .ok_or(ClientStreamBatchError::LengthOverflow)?;
         check_bytes(length, maximum_encoded_bytes)?;
     }
     Ok(length)
@@ -382,29 +382,29 @@ fn emit_v1<'a>(
     }
 }
 
-fn check_bytes(observed: usize, limit: usize) -> Result<(), ClientStreamBatchFailure> {
+fn check_bytes(observed: usize, limit: usize) -> Result<(), ClientStreamBatchError> {
     if limit == 0 {
-        return Err(ClientStreamBatchFailure::EmptyByteLimit);
+        return Err(ClientStreamBatchError::EmptyByteLimit);
     }
     if observed > limit {
-        return Err(ClientStreamBatchFailure::EncodedBytesExceeded { observed, limit });
+        return Err(ClientStreamBatchError::EncodedBytesExceeded { observed, limit });
     }
     Ok(())
 }
 
-fn take<const N: usize>(remaining: &mut &[u8]) -> Result<[u8; N], ClientStreamBatchFailure> {
-    let (value, rest) = remaining.split_at_checked(N).ok_or(ClientStreamBatchFailure::InvalidLength)?;
-    let value = value.try_into().map_err(|_| ClientStreamBatchFailure::InvalidLength)?;
+fn take<const N: usize>(remaining: &mut &[u8]) -> Result<[u8; N], ClientStreamBatchError> {
+    let (value, rest) = remaining.split_at_checked(N).ok_or(ClientStreamBatchError::InvalidLength)?;
+    let value = value.try_into().map_err(|_| ClientStreamBatchError::InvalidLength)?;
     *remaining = rest;
     Ok(value)
 }
 
-fn take_payload<'a>(remaining: &mut &'a [u8]) -> Result<&'a [u8], ClientStreamBatchFailure> {
+fn take_payload<'a>(remaining: &mut &'a [u8]) -> Result<&'a [u8], ClientStreamBatchError> {
     let length =
-        usize::try_from(u32::from_le_bytes(take(remaining)?)).map_err(|_| ClientStreamBatchFailure::LengthOverflow)?;
+        usize::try_from(u32::from_le_bytes(take(remaining)?)).map_err(|_| ClientStreamBatchError::LengthOverflow)?;
     let (payload, rest) = remaining
         .split_at_checked(length)
-        .ok_or(ClientStreamBatchFailure::InvalidLength)?;
+        .ok_or(ClientStreamBatchError::InvalidLength)?;
     *remaining = rest;
     Ok(payload)
 }

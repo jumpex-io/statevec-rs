@@ -63,9 +63,9 @@ impl Presentation {
                         Ok(BatchDriverStep::Runnable) => (),
                         Ok(BatchDriverStep::Waiting) => return,
                         Ok(BatchDriverStep::Diagnostic {
-                            cause: ClientFailure::BatchRead { source: stream_batch::ReadFailure::Io { source } },
+                            cause: ClientError::BatchRead { source: stream_batch::ReadError::Io { source } },
                         }) if source.kind() == io::ErrorKind::UnexpectedEof => (),
-                        Ok(BatchDriverStep::Diagnostic { cause: ClientFailure::InvalidTime { .. } }) => return,
+                        Ok(BatchDriverStep::Diagnostic { cause: ClientError::InvalidTime { .. } }) => return,
                         other => panic!("unexpected driver report: {other:?}"),
                     }
                 }
@@ -78,12 +78,12 @@ impl Presentation {
                 running.wait_or_finished(target);
                 match running.client().take_driver_error() {
                     None => (),
-                    Some(ClientFailure::BatchRead { source: stream_batch::ReadFailure::Io { source } })
+                    Some(ClientError::BatchRead { source: stream_batch::ReadError::Io { source } })
                         if source.kind() == io::ErrorKind::UnexpectedEof =>
                     {
                         ()
                     }
-                    Some(ClientFailure::InvalidTime { .. }) => (),
+                    Some(ClientError::InvalidTime { .. }) => (),
                     cause => panic!("unexpected background failure: {cause:?}"),
                 }
             }
@@ -332,7 +332,7 @@ impl ByteWorld {
             ),
             Action::CheckClockFailure => assert_eq!(
                 self.clock.sample(),
-                Err(ClockReadFailure::OutOfRange),
+                Err(ClockReadError::OutOfRange),
                 "actual physical close must exercise the clock fault"
             ),
             Action::CheckSettled { exact, unknown } => {

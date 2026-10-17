@@ -19,11 +19,11 @@ pub mod outcome;
 mod stream_batch;
 pub mod stream_batch_protocol;
 
-pub use clock::{ClockReadFailure, MonotonicMillis};
+pub use clock::{ClockReadError, MonotonicMillis};
 pub use digest::Digest32;
 pub use stream_batch::{
     CLIENT_STREAM_BATCH_COMMITMENT_BYTES, CLIENT_STREAM_BATCH_HEADER_BYTES, ClientStreamBatch,
-    ClientStreamBatchCommitment, ClientStreamBatchFailure,
+    ClientStreamBatchCommitment, ClientStreamBatchError,
 };
 
 #[cfg(test)]
@@ -36,7 +36,7 @@ pub type Digest256 = Hash;
 /// Transaction identifier.
 pub type TxId = Digest256;
 /// Canonical transaction sequence.
-pub type TxSeq = u64;
+pub use statevec_model::TxSeq;
 /// Commit-prefix chain hash.
 pub type TxChainHash = Hash;
 

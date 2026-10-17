@@ -50,9 +50,9 @@ pub struct CommitOutcome {
     /// Raft term observed for the applied raft entry range.
     pub raft_term: u64,
     /// Runtime/system status code.
-    pub sys_status_code: u16,
+    pub system_code: u16,
     /// Domain/plugin status code.
-    pub biz_status_code: u16,
+    pub business_code: u16,
     /// Canonical total event count emitted by this transaction.
     pub emitted_event_count: u32,
     /// Capped inline response event projection.

@@ -97,8 +97,8 @@ fn completed(request: &Request) -> Reply {
                 tx_chain_hash: [52; 32],
                 raft_index: entry().index.get(),
                 raft_term: entry().term.get(),
-                sys_status_code: 0,
-                biz_status_code: if offset == 0 { 0 } else { 9 },
+                system_code: 0,
+                business_code: if offset == 0 { 0 } else { 9 },
                 emitted_event_count: 0,
                 inline_events: Vec::new(),
                 inline_events_truncated: false,
@@ -112,7 +112,7 @@ fn exact(request: &Request) -> Reply {
     reply(
         request,
         ReplyDisposition::ExactAppliedResultUnavailable(
-            AppliedStreamBatchBindingV1::new(
+            AppliedStreamBatchBinding::new(
                 request.batch().commitment_v1(),
                 entry().index.get(),
                 entry().term.get(),
@@ -197,7 +197,7 @@ fn checked_frame_budget_receives_each_terminal_shape(shape: CapacityReply) {
             Some(BatchEvent::Terminal(BatchTerminal::NotAdmitted {
                 handle: returned,
                 batch: original,
-                cause: ClientFailure::ServerRefused { reason: BatchSubmitRefusal::InvalidInput },
+                cause: ClientError::ServerRefused { reason: BatchSubmitRefusal::InvalidInput },
             })),
         ) => {
             assert_eq!(returned, handle);
@@ -247,7 +247,7 @@ fn first_submit_and_ordered_terminal_keep_capacity_and_advance_only_on_consumpti
     receive(&mut client, connection, completed(&request));
     receive(&mut client, connection, completed(&request));
     receive(&mut client, connection, reply(&request, ReplyDisposition::IngressAdmitted(entry())));
-    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientFailure::Full));
+    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientError::Full));
     assert!(matches!(client.status(), ClientStatus::Batch { occupied: 1, .. }));
 
     let Some(BatchEvent::Terminal(BatchTerminal::Applied { handle: returned, entry: applied, results, .. })) =
@@ -257,7 +257,7 @@ fn first_submit_and_ordered_terminal_keep_capacity_and_advance_only_on_consumpti
     };
     assert_eq!((returned, applied), (handle, entry()));
     assert_eq!(results.iter().map(MemberResult::tx_seq).collect::<Vec<_>>(), [100, 101]);
-    assert!(matches!(&results[1], MemberResult::Outcome(outcome) if outcome.biz_status_code == 9));
+    assert!(matches!(&results[1], MemberResult::Outcome(outcome) if outcome.business_code == 9));
     assert!(client.poll_event().is_none(), "duplicate terminal cannot be delivered twice");
     assert!(matches!(client.status(), ClientStatus::Batch { occupied: 0, .. }));
     let mut next = idle_start();
@@ -284,7 +284,7 @@ fn api_distinguishes_progress_from_terminal_without_releasing_or_resampling() {
     assert_ne!(caller_copy, handle);
 
     receive(&mut client, connection, reply(&request, ReplyDisposition::IngressAdmitted(entry())));
-    *clock.0.lock().unwrap() = Err(ClockReadFailure::OutOfRange);
+    *clock.0.lock().unwrap() = Err(ClockReadError::OutOfRange);
     let event = client.poll_event().expect("admission progress");
     assert_eq!(event.handle(), handle);
     let BatchEvent::Progress(progress) = event else { panic!("admission is not terminal") };
@@ -299,7 +299,7 @@ fn api_distinguishes_progress_from_terminal_without_releasing_or_resampling() {
 
     receive(&mut client, connection, completed(&request));
     assert!(matches!(client.status(), ClientStatus::Batch { occupied: 1, .. }));
-    *clock.0.lock().unwrap() = Err(ClockReadFailure::OutOfRange);
+    *clock.0.lock().unwrap() = Err(ClockReadError::OutOfRange);
     let event = client.poll_event().expect("latched exact terminal");
     assert_eq!(event.handle(), handle);
     let BatchEvent::Terminal(terminal) = event else { panic!("exact application settles the slot") };
@@ -331,7 +331,7 @@ fn sole_slot_never_overlaps_a_write_or_releases_an_unconsumed_terminal() {
     for (connection, request) in requests.iter().rev() {
         receive(&mut client, *connection, completed(request));
     }
-    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientFailure::Full));
+    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientError::Full));
     for _ in 0..1 {
         assert!(matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::Applied { .. }))));
     }
@@ -414,14 +414,14 @@ fn weak_coverage_suspends_without_settling_and_its_problem_survives_total_expiry
     let Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown {
         batch: original,
         committed: None,
-        cause: ClientFailure::RequestLifetimeExpired,
+        cause: ClientError::RequestLifetimeExpired,
         problem: Some(problem),
         ..
     })) = client.poll_event()
     else {
         panic!("weak coverage is neither applied nor non-admission")
     };
-    assert!(matches!(*problem, ClientFailure::InsufficientAppliedEvidence { next_sequence: 80 }));
+    assert!(matches!(*problem, ClientError::InsufficientAppliedEvidence { next_sequence: 80 }));
     assert_eq!(wire(&original), wire(request.batch()));
 }
 
@@ -441,12 +441,12 @@ fn consuming_a_weak_coverage_problem_does_not_release_the_original_or_allow_new_
     assert!(
         matches!(
             client.poll_event(),
-            Some(BatchEvent::Progress(BatchProgress::Problem { cause, .. })) if matches!(*cause, ClientFailure::InsufficientAppliedEvidence { next_sequence: 80 })
+            Some(BatchEvent::Progress(BatchProgress::Problem { cause, .. })) if matches!(*cause, ClientError::InsufficientAppliedEvidence { next_sequence: 80 })
         ),
         "range-only evidence must report a problem, never a terminal"
     );
     assert!(matches!(client.status(), ClientStatus::Batch { occupied: 1, .. }));
-    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientFailure::Full));
+    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientError::Full));
     receive(&mut client, connection, completed(&request));
     assert!(matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::Applied { .. }))));
 }
@@ -492,7 +492,7 @@ fn contradictory_committed_entry_retains_original_knowledge_and_can_accept_its_e
         other => panic!("exact evidence must settle the suspended original: {other:?}"),
     };
     let problem = problem.expect("exact settlement must retain the first problem even before notification");
-    assert!(matches!(*problem, ClientFailure::ConflictingCommittedEntry { known, observed }
+    assert!(matches!(*problem, ClientError::ConflictingCommittedEntry { known, observed }
         if known == entry() && observed == different));
     if let Some(notified) = notified {
         assert!(Arc::ptr_eq(&problem, &notified), "terminal keeps the originally notified typed cause");
@@ -517,10 +517,10 @@ fn sole_send_permanent_refusal_returns_original_without_advancing_stream(reason:
         refused.observation = None;
     }
     receive(&mut client, connection, refused);
-    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientFailure::Full));
+    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientError::Full));
     let Some(BatchEvent::Terminal(BatchTerminal::NotAdmitted {
         batch: original,
-        cause: ClientFailure::ServerRefused { reason: returned },
+        cause: ClientError::ServerRefused { reason: returned },
         ..
     })) = client.poll_event()
     else {
@@ -563,14 +563,14 @@ fn gap_only_proves_non_admission_without_an_earlier_qualified_admission(history:
     if history == AdmissionHistory::Admitted {
         assert!(matches!(
             event,
-            Some(BatchEvent::Progress(BatchProgress::Problem { cause, .. })) if matches!(*cause, ClientFailure::StreamGap { expected_sequence: 40 })
+            Some(BatchEvent::Progress(BatchProgress::Problem { cause, .. })) if matches!(*cause, ClientError::StreamGap { expected_sequence: 40 })
         ));
-        assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientFailure::Full));
+        assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientError::Full));
     } else {
         assert!(matches!(
             event,
             Some(BatchEvent::Terminal(BatchTerminal::NotAdmitted {
-                cause: ClientFailure::StreamGap { expected_sequence: 40 },
+                cause: ClientError::StreamGap { expected_sequence: 40 },
                 ..
             }))
         ));
@@ -592,7 +592,7 @@ fn internal_failure_suspends_but_cannot_prevent_late_exact_completion(observatio
     receive(&mut client, connection, failure);
     assert!(matches!(
         client.poll_event(),
-        Some(BatchEvent::Progress(BatchProgress::Problem { cause, .. })) if matches!(*cause, ClientFailure::ServerRefused { reason: BatchSubmitRefusal::InternalFailure })
+        Some(BatchEvent::Progress(BatchProgress::Problem { cause, .. })) if matches!(*cause, ClientError::ServerRefused { reason: BatchSubmitRefusal::InternalFailure })
     ));
     clock.set(INITIAL_TIME + RETRY);
     assert!(
@@ -625,7 +625,7 @@ fn old_session_is_ignored_but_wrong_intent_on_current_submit_is_a_typed_problem(
     receive(&mut client, connection, foreign_intent);
     assert!(matches!(
         client.poll_event(),
-        Some(BatchEvent::Progress(BatchProgress::Problem { cause, .. })) if matches!(*cause, ClientFailure::BatchReply { source: ReplyRequestFailure::IntentMismatch })
+        Some(BatchEvent::Progress(BatchProgress::Problem { cause, .. })) if matches!(*cause, ClientError::BatchReply { source: ReplyRequestError::IntentMismatch })
     ));
     receive(&mut client, connection, completed(&request));
     assert!(matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::Applied { .. }))));
@@ -661,7 +661,7 @@ fn current_operation_context_mismatch_reports_problem_without_releasing_intent(c
         matches!(client.poll_event(), Some(BatchEvent::Progress(BatchProgress::Problem {
             handle: returned,
             cause,
-        })) if returned == handle && matches!(*cause, ClientFailure::BatchReply { source: ReplyRequestFailure::ContextMismatch })),
+        })) if returned == handle && matches!(*cause, ClientError::BatchReply { source: ReplyRequestError::ContextMismatch })),
         "current operation context corruption must report a typed problem"
     );
     assert!(matches!(client.status(), ClientStatus::Batch { occupied: 1, .. }));
@@ -692,7 +692,7 @@ fn query_only_reply_cannot_authorize_resubmit_or_settle_a_submit() {
     receive(&mut client, connection, reply(&request, ReplyDisposition::RetryableNext));
     assert!(matches!(
         client.poll_event(),
-        Some(BatchEvent::Progress(BatchProgress::Problem { cause, .. })) if matches!(*cause, ClientFailure::BatchReply { source: ReplyRequestFailure::UnexpectedSubmitDisposition })
+        Some(BatchEvent::Progress(BatchProgress::Problem { cause, .. })) if matches!(*cause, ClientError::BatchReply { source: ReplyRequestError::UnexpectedSubmitDisposition })
     ));
     assert!(matches!(client.drive(ClientEvent::Drive), ClientResult::Waiting { .. }));
     assert!(matches!(client.status(), ClientStatus::Batch { occupied: 1, .. }));
@@ -782,7 +782,7 @@ fn write_return_is_consumed_even_when_the_bound_clock_fails() {
     client.try_submit(batch(1)).unwrap();
     let (connection, request) = take_write(&mut client);
     receive(&mut client, connection, completed(&request));
-    *clock.0.lock().unwrap() = Err(ClockReadFailure::OutOfRange);
+    *clock.0.lock().unwrap() = Err(ClockReadError::OutOfRange);
     assert!(matches!(
         client.drive(ClientEvent::Written {
             operation_id: connection,
@@ -820,7 +820,7 @@ fn malformed_current_frame_retires_the_connection_without_settling_any_intent() 
     assert!(matches!(
         client.drive(ClientEvent::Read { operation_id: connection, result: Ok(vec![0; 16]) }),
         ClientResult::ConnectionFault {
-            cause: ClientFailure::BatchFrame { source: stream_batch::FrameFailure::InvalidMagic },
+            cause: ClientError::BatchFrame { source: stream_batch::FrameError::InvalidMagic },
             ..
         }
     ));
@@ -845,11 +845,11 @@ fn io_failure_with_unreadable_clock_stops_and_keeps_close_debt(failure: FailedIo
     connect(&mut client);
     client.try_submit(batch(1)).unwrap();
     let (connection, request) = take_write(&mut client);
-    *clock.0.lock().unwrap() = Err(ClockReadFailure::OutOfRange);
+    *clock.0.lock().unwrap() = Err(ClockReadError::OutOfRange);
     let source = std::io::Error::from(std::io::ErrorKind::ConnectionReset);
     let event = match failure {
         FailedIo::Read => {
-            ClientEvent::Read { operation_id: connection, result: Err(stream_batch::ReadFailure::Io { source }) }
+            ClientEvent::Read { operation_id: connection, result: Err(stream_batch::ReadError::Io { source }) }
         }
         FailedIo::Write => ClientEvent::Written {
             operation_id: connection,
@@ -862,8 +862,8 @@ fn io_failure_with_unreadable_clock_stops_and_keeps_close_debt(failure: FailedIo
     };
     assert_eq!(operation_id, connection);
     match (failure, cause) {
-        (FailedIo::Read, ClientFailure::BatchRead { source: stream_batch::ReadFailure::Io { source } })
-        | (FailedIo::Write, ClientFailure::BatchWrite { source }) => {
+        (FailedIo::Read, ClientError::BatchRead { source: stream_batch::ReadError::Io { source } })
+        | (FailedIo::Write, ClientError::BatchWrite { source }) => {
             assert_eq!(source.kind(), std::io::ErrorKind::ConnectionReset)
         }
         other => panic!("wrong I/O cause: {other:?}"),
@@ -876,7 +876,7 @@ fn io_failure_with_unreadable_clock_stops_and_keeps_close_debt(failure: FailedIo
     assert!(matches!(client.drive(ClientEvent::Drive), ClientResult::Waiting { wake_at: None }));
     assert!(matches!(
         client.poll_event(),
-        Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown { cause: ClientFailure::InvalidTime { .. }, .. }))
+        Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown { cause: ClientError::InvalidTime { .. }, .. }))
     ));
     assert!(matches!(client.status(), ClientStatus::Batch { stopped: true, occupied: 0, .. }));
 }
@@ -958,10 +958,10 @@ fn drive_clock_failure_terminates_without_discarding_known_facts(terminal: bool,
         receive(&mut client, connection, completed(&request));
     }
     *clock.0.lock().unwrap() =
-        if regressed { Ok(MonotonicMillis::new(INITIAL_TIME - 1)) } else { Err(ClockReadFailure::OutOfRange) };
+        if regressed { Ok(MonotonicMillis::new(INITIAL_TIME - 1)) } else { Err(ClockReadError::OutOfRange) };
     assert!(matches!(
         client.drive(ClientEvent::Drive),
-        ClientResult::ClockFailed { cause: ClientFailure::InvalidTime { .. } | ClientFailure::TimeRegressed { .. } }
+        ClientResult::ClockFailed { cause: ClientError::InvalidTime { .. } | ClientError::TimeRegressed { .. } }
     ));
     assert!(
         matches!(client.status(), ClientStatus::Batch { stopped: true, occupied: 1, .. }),
@@ -972,7 +972,7 @@ fn drive_clock_failure_terminates_without_discarding_known_facts(terminal: bool,
         BatchEvent::Terminal(BatchTerminal::OutcomeUnknown { batch: original, committed, cause, .. }) if !terminal => {
             assert_eq!(wire(&original), wire(&batch(1)));
             assert_eq!(committed, Some(entry()));
-            assert!(matches!(cause, ClientFailure::InvalidTime { .. } | ClientFailure::TimeRegressed { .. }));
+            assert!(matches!(cause, ClientError::InvalidTime { .. } | ClientError::TimeRegressed { .. }));
         }
         other => panic!("latched facts must survive: {other:?}"),
     }
@@ -1014,17 +1014,17 @@ fn runtime_deadline_overflow_stops_original_without_an_extra_exchange(retry: boo
     );
     assert!(matches!(
         client.poll_event(),
-        Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown { cause: ClientFailure::InvalidTime { .. }, .. }))
+        Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown { cause: ClientError::InvalidTime { .. }, .. }))
     ));
 }
 
 #[derive(Clone, Copy)]
 enum RetryOverflowCut {
-    ReadFailure,
+    ReadError,
     FailedConnect,
 }
 
-#[test_case(RetryOverflowCut::ReadFailure; "read_failure_requires_close")]
+#[test_case(RetryOverflowCut::ReadError; "read_failure_requires_close")]
 #[test_case(RetryOverflowCut::FailedConnect; "failed_connect_already_disposed")]
 fn retry_deadline_overflow_returns_original_and_commitment_before_lifetime(cut: RetryOverflowCut) {
     let clock = Clock::new();
@@ -1035,7 +1035,7 @@ fn retry_deadline_overflow_returns_original_and_commitment_before_lifetime(cut: 
     if matches!(cut, RetryOverflowCut::FailedConnect) {
         client.drive(ClientEvent::Read {
             operation_id: connection,
-            result: Err(stream_batch::ReadFailure::Io { source: std::io::ErrorKind::ConnectionReset.into() }),
+            result: Err(stream_batch::ReadError::Io { source: std::io::ErrorKind::ConnectionReset.into() }),
         });
         assert!(matches!(client.drive(ClientEvent::Drive), ClientResult::Close { .. }));
         client.drive(ClientEvent::Closed { operation_id: connection });
@@ -1053,7 +1053,7 @@ fn retry_deadline_overflow_returns_original_and_commitment_before_lifetime(cut: 
         assert!(matches!(
             client.drive(ClientEvent::Read {
                 operation_id: connection,
-                result: Err(stream_batch::ReadFailure::Io { source: std::io::ErrorKind::ConnectionReset.into() }),
+                result: Err(stream_batch::ReadError::Io { source: std::io::ErrorKind::ConnectionReset.into() }),
             }),
             ClientResult::ConnectionFault { .. }
         ));
@@ -1062,11 +1062,11 @@ fn retry_deadline_overflow_returns_original_and_commitment_before_lifetime(cut: 
     assert!(
         matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown {
         handle: actual, batch: original, committed: Some(known),
-        cause: ClientFailure::InvalidTime { source: ClockReadFailure::OutOfRange }, ..
+        cause: ClientError::InvalidTime { source: ClockReadError::OutOfRange }, ..
     })) if actual == handle && wire(&original) == wire(&batch(1)) && known == entry()),
         "retry overflow must terminate original custody with its known commitment"
     );
-    if matches!(cut, RetryOverflowCut::ReadFailure) {
+    if matches!(cut, RetryOverflowCut::ReadError) {
         assert!(
             matches!(client.drive(ClientEvent::Drive), ClientResult::Close { operation_id } if operation_id == connection)
         );

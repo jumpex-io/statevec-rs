@@ -2,25 +2,25 @@
 //! structure only; the Raft owner's complete apply join is the sole publisher.
 
 use crate::outcome::EntryDigest;
-use crate::{ClientStreamBatchCommitment, ClientStreamBatchFailure, Digest32};
+use crate::{ClientStreamBatchCommitment, ClientStreamBatchError, Digest32};
 
 pub const APPLIED_STREAM_BATCH_BINDING_BYTES: usize = 144;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AppliedStreamBatchBindingFailure {
+pub enum AppliedStreamBatchBindingError {
     InvalidLength,
-    Intent { source: ClientStreamBatchFailure },
+    Intent { source: ClientStreamBatchError },
     InvalidEntryBoundary,
     InvalidEngineFrontier,
 }
 
-impl std::fmt::Display for AppliedStreamBatchBindingFailure {
+impl std::fmt::Display for AppliedStreamBatchBindingError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "applied stream batch binding: {self:?}")
     }
 }
 
-impl std::error::Error for AppliedStreamBatchBindingFailure {
+impl std::error::Error for AppliedStreamBatchBindingError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Intent { source } => Some(source),
@@ -33,7 +33,7 @@ impl std::error::Error for AppliedStreamBatchBindingFailure {
 /// Lineage, profile, enclosing applied boundary and actual engine frontier are
 /// checked by the consumer; these bytes alone prove none of those joins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AppliedStreamBatchBindingV1 {
+pub struct AppliedStreamBatchBinding {
     intent: ClientStreamBatchCommitment,
     raft_index: u64,
     raft_term: u64,
@@ -42,7 +42,7 @@ pub struct AppliedStreamBatchBindingV1 {
     engine_end_chain: Digest32,
 }
 
-impl AppliedStreamBatchBindingV1 {
+impl AppliedStreamBatchBinding {
     pub fn new(
         intent: ClientStreamBatchCommitment,
         raft_index: u64,
@@ -50,14 +50,14 @@ impl AppliedStreamBatchBindingV1 {
         entry_digest: EntryDigest,
         engine_end_tx_seq: u64,
         engine_end_chain: Digest32,
-    ) -> Result<Self, AppliedStreamBatchBindingFailure> {
+    ) -> Result<Self, AppliedStreamBatchBindingError> {
         if raft_index == 0 || raft_term == 0 {
-            return Err(AppliedStreamBatchBindingFailure::InvalidEntryBoundary);
+            return Err(AppliedStreamBatchBindingError::InvalidEntryBoundary);
         }
         // Every member has a nonzero, nonterminal tx_seq; count contiguous
         // members ending here must have room for their entire starting range.
         if engine_end_tx_seq < u64::from(intent.count()) || engine_end_tx_seq == u64::MAX {
-            return Err(AppliedStreamBatchBindingFailure::InvalidEngineFrontier);
+            return Err(AppliedStreamBatchBindingError::InvalidEngineFrontier);
         }
         Ok(Self { intent, raft_index, raft_term, entry_digest, engine_end_tx_seq, engine_end_chain })
     }
@@ -95,11 +95,11 @@ impl AppliedStreamBatchBindingV1 {
     }
 
     /// Allocation-free structural check, including the original count bound.
-    pub fn decode_v1(bytes: &[u8], maximum_commands: usize) -> Result<Self, AppliedStreamBatchBindingFailure> {
+    pub fn decode_v1(bytes: &[u8], maximum_commands: usize) -> Result<Self, AppliedStreamBatchBindingError> {
         let bytes: &[u8; APPLIED_STREAM_BATCH_BINDING_BYTES] =
-            bytes.try_into().map_err(|_| AppliedStreamBatchBindingFailure::InvalidLength)?;
+            bytes.try_into().map_err(|_| AppliedStreamBatchBindingError::InvalidLength)?;
         let intent = ClientStreamBatchCommitment::decode_v1(&bytes[..56], maximum_commands)
-            .map_err(|source| AppliedStreamBatchBindingFailure::Intent { source })?;
+            .map_err(|source| AppliedStreamBatchBindingError::Intent { source })?;
         Self::new(
             intent,
             u64::from_le_bytes(bytes[56..64].try_into().expect("fixed index")),

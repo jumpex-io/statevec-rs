@@ -6,7 +6,7 @@ use std::io::{self, Read};
 mod tests;
 
 use super::{
-    FrameFailure, HEADER_BYTES, Reply, Request, decode_reply, decode_request, reply_frame_len, request_frame_len,
+    FrameError, HEADER_BYTES, Reply, Request, decode_reply, decode_request, reply_frame_len, request_frame_len,
 };
 
 const INITIAL_BODY_BYTES: usize = 64 * 1024;
@@ -39,8 +39,8 @@ pub enum ReadProgress<T = StreamFrame> {
 }
 
 #[derive(Debug)]
-pub enum ReadFailure {
-    Frame { source: FrameFailure },
+pub enum ReadError {
+    Frame { source: FrameError },
     Io { source: io::Error },
     Allocation { requested: usize, source: std::collections::TryReserveError },
     InvalidReadCount { observed: usize, offered: usize },
@@ -48,13 +48,13 @@ pub enum ReadFailure {
     Closed,
 }
 
-impl std::fmt::Display for ReadFailure {
+impl std::fmt::Display for ReadError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "whole-batch stream read: {self:?}")
     }
 }
 
-impl std::error::Error for ReadFailure {
+impl std::error::Error for ReadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Frame { source } => Some(source),
@@ -95,12 +95,12 @@ impl FrameReader {
         direction: StreamDirection,
         maximum_frame_bytes: usize,
         maximum_commands: usize,
-    ) -> Result<Self, ReadFailure> {
+    ) -> Result<Self, ReadError> {
         if maximum_frame_bytes == 0 {
-            return Err(ReadFailure::Frame { source: FrameFailure::EmptyByteLimit });
+            return Err(ReadError::Frame { source: FrameError::EmptyByteLimit });
         }
         if maximum_commands == 0 {
-            return Err(ReadFailure::EmptyCommandLimit);
+            return Err(ReadError::EmptyCommandLimit);
         }
         Ok(Self { direction, maximum_frame_bytes, maximum_commands, partial: Self::header() })
     }
@@ -109,7 +109,7 @@ impl FrameReader {
         PartialFrame::Header { bytes: [0; HEADER_BYTES], filled: 0 }
     }
 
-    pub fn poll_read(&mut self, reader: &mut impl Read) -> Result<ReadProgress, ReadFailure> {
+    pub fn poll_read(&mut self, reader: &mut impl Read) -> Result<ReadProgress, ReadError> {
         let result = match self.poll_bytes(reader) {
             Ok(ReadProgress::Frame(bytes)) => match self.direction {
                 StreamDirection::Requests => {
@@ -120,7 +120,7 @@ impl FrameReader {
                 }
             }
             .map(ReadProgress::Frame)
-            .map_err(|source| ReadFailure::Frame { source }),
+            .map_err(|source| ReadError::Frame { source }),
             Ok(ReadProgress::Runnable) => Ok(ReadProgress::Runnable),
             Ok(ReadProgress::WouldBlock) => Ok(ReadProgress::WouldBlock),
             Ok(ReadProgress::Eof) => Ok(ReadProgress::Eof),
@@ -137,7 +137,7 @@ impl FrameReader {
     /// validated request or reply: the receiving semantic owner must run the
     /// production decoder before using them. This avoids decode/re-encode in a
     /// physical driver whose owner retains unconsumed read observations.
-    pub fn poll_bytes(&mut self, reader: &mut impl Read) -> Result<ReadProgress<Vec<u8>>, ReadFailure> {
+    pub fn poll_bytes(&mut self, reader: &mut impl Read) -> Result<ReadProgress<Vec<u8>>, ReadError> {
         let result = self.read_once(reader);
         if result.is_err() || matches!(result, Ok(ReadProgress::Eof)) {
             self.partial = PartialFrame::Closed;
@@ -145,7 +145,7 @@ impl FrameReader {
         result
     }
 
-    fn read_once(&mut self, reader: &mut impl Read) -> Result<ReadProgress<Vec<u8>>, ReadFailure> {
+    fn read_once(&mut self, reader: &mut impl Read) -> Result<ReadProgress<Vec<u8>>, ReadError> {
         let (bytes, filled) = match &mut self.partial {
             PartialFrame::Header { bytes, filled } => (bytes.as_mut_slice(), filled),
             PartialFrame::Body { bytes, filled, length } => {
@@ -154,21 +154,21 @@ impl FrameReader {
                 }
                 (bytes.as_mut_slice(), filled)
             }
-            PartialFrame::Closed => return Err(ReadFailure::Closed),
+            PartialFrame::Closed => return Err(ReadError::Closed),
         };
         let offered = bytes.len() - *filled;
         let read = match reader.read(&mut bytes[*filled..]) {
-            Ok(read) if read > offered => return Err(ReadFailure::InvalidReadCount { observed: read, offered }),
+            Ok(read) if read > offered => return Err(ReadError::InvalidReadCount { observed: read, offered }),
             Ok(read) => read,
             Err(source) if source.kind() == io::ErrorKind::Interrupted => return Ok(ReadProgress::Runnable),
             Err(source) if source.kind() == io::ErrorKind::WouldBlock => return Ok(ReadProgress::WouldBlock),
-            Err(source) => return Err(ReadFailure::Io { source }),
+            Err(source) => return Err(ReadError::Io { source }),
         };
         if read == 0 {
             return if matches!(self.partial, PartialFrame::Header { filled: 0, .. }) {
                 Ok(ReadProgress::Eof)
             } else {
-                Err(ReadFailure::Io { source: io::Error::from(io::ErrorKind::UnexpectedEof) })
+                Err(ReadError::Io { source: io::Error::from(io::ErrorKind::UnexpectedEof) })
             };
         }
         *filled += read;
@@ -181,7 +181,7 @@ impl FrameReader {
                     StreamDirection::Requests => request_frame_len(bytes, self.maximum_frame_bytes),
                     StreamDirection::Replies => reply_frame_len(bytes, self.maximum_frame_bytes),
                 }
-                .map_err(|source| ReadFailure::Frame { source })?;
+                .map_err(|source| ReadError::Frame { source })?;
                 let mut body = Vec::new();
                 grow_body(&mut body, length.min(INITIAL_BODY_BYTES))?;
                 body[..HEADER_BYTES].copy_from_slice(bytes);
@@ -195,14 +195,14 @@ impl FrameReader {
                 };
                 Ok(ReadProgress::Frame(bytes))
             }
-            PartialFrame::Closed => Err(ReadFailure::Closed),
+            PartialFrame::Closed => Err(ReadError::Closed),
         }
     }
 }
 
-fn grow_body(bytes: &mut Vec<u8>, length: usize) -> Result<(), ReadFailure> {
+fn grow_body(bytes: &mut Vec<u8>, length: usize) -> Result<(), ReadError> {
     bytes.try_reserve_exact(length - bytes.len())
-        .map_err(|source| ReadFailure::Allocation { requested: length, source })?;
+        .map_err(|source| ReadError::Allocation { requested: length, source })?;
     bytes.resize(length, 0);
     Ok(())
 }

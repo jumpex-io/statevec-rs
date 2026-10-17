@@ -18,7 +18,7 @@ Keep `Cargo.lock` under version control to pin the reviewed revision.
 ## Command payload codec
 
 Use `statevec_frame::command::encode_runtime_binary_v0_command_payload(&Command)`
-and `RuntimeBinaryV0CommandDecoder::{decode_checked, decode_checked_fields}`.
+and `CommandDecoder::{decode_checked, decode_checked_fields}`.
 `Command` is the public `statevec_model::command::Command` (also re-exported by
 `statevec` and `statevec-api`). Native engine compatibility imports re-export
 this exact implementation. No private engine crate is needed by a client or
@@ -32,7 +32,7 @@ meaning. Signed intent bytes and stored recovery-journal payloads do not change.
 Switch imports, not stored bytes; do not decode/re-encode uncertain original
 intents as a recovery migration.
 
-`CommandPayloadFailure` is exhaustive: `UnsupportedCodec`,
+`CommandPayloadError` is exhaustive: `UnsupportedCodec`,
 `UnsupportedCodecVersion`, `Truncated`, `WrongMagic`, `UnsupportedVersion`,
 `ReservedFlags`, `InvalidKind`, `LengthOverflow`, `TrailingBytes`,
 `SequenceWithoutFlag`, and `TimeWithoutFlag`. Match these typed variants, not

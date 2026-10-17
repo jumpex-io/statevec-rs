@@ -46,7 +46,7 @@ fn new_session_import_preserves_original_uncertainty_and_commitment(known: bool)
         "import must preserve uncertainty and known commitment before any transmission"
     );
     assert_eq!(handle.context.session_incarnation.get(), 10);
-    assert!(matches!(recovered.try_submit(batch(1)).unwrap_err().reason, ClientFailure::Full));
+    assert!(matches!(recovered.try_submit(batch(1)).unwrap_err().reason, ClientError::Full));
     let (connection, query) = take_frame(&mut recovered);
     assert_eq!(matches!(query, Request::Reconcile { .. }), known);
     assert_eq!(wire(query.batch()), original);
@@ -66,7 +66,7 @@ fn import_refusal_returns_full_input_and_evidence_without_reservation() {
     let mut client = client(&clock);
     let original = wire(&batch(1));
     let refused = client.try_import(batch(1), Some(entry())).unwrap_err();
-    assert!(matches!(refused.reason, ClientFailure::NotConnected));
+    assert!(matches!(refused.reason, ClientError::NotConnected));
     assert_eq!(refused.committed, Some(entry()));
     assert_eq!(wire(&refused.batch), original);
     connect(&mut client);
@@ -75,7 +75,7 @@ fn import_refusal_returns_full_input_and_evidence_without_reservation() {
     }
     let original = wire(&batch(1));
     let refused = client.try_import(batch(1), Some(entry())).unwrap_err();
-    assert!(matches!(refused.reason, ClientFailure::Full));
+    assert!(matches!(refused.reason, ClientError::Full));
     assert_eq!(refused.committed, Some(entry()));
     assert_eq!(wire(&refused.batch), original);
     assert!(matches!(client.status(), ClientStatus::Batch { occupied: 1, .. }));

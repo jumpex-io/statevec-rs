@@ -282,7 +282,7 @@ fn coalesced_duplicate_terminals_do_not_release_capacity_until_consumed() {
     for _ in 0..4 {
         assert!(matches!(client.drive(next_event(&mut port)), ClientResult::Waiting { .. }));
     }
-    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientFailure::Full));
+    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientError::Full));
     for handle in handles {
         assert!(
             matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::Applied { handle: actual, .. }))
@@ -332,9 +332,9 @@ fn typed_framing_failures_require_real_close_without_settling_intent(fault: Read
         panic!("typed read fault");
     };
     match (fault, cause) {
-        (ReadFault::BadHeader, ClientFailure::BatchRead { source: stream_batch::ReadFailure::Frame { .. } }) => (),
-        (ReadFault::BadBody, ClientFailure::BatchFrame { .. }) => (),
-        (ReadFault::PartialEof, ClientFailure::BatchRead { source: stream_batch::ReadFailure::Io { source } }) => {
+        (ReadFault::BadHeader, ClientError::BatchRead { source: stream_batch::ReadError::Frame { .. } }) => (),
+        (ReadFault::BadBody, ClientError::BatchFrame { .. }) => (),
+        (ReadFault::PartialEof, ClientError::BatchRead { source: stream_batch::ReadError::Io { source } }) => {
             assert_eq!(source.kind(), io::ErrorKind::UnexpectedEof);
         }
         other => panic!("wrong failure boundary: {other:?}"),
@@ -365,10 +365,10 @@ fn completed_raw_frame_with_invalid_time_stops_without_settling_or_replay() {
     enqueue(&device, completed(&request));
     port.ready(true, false);
     let event = next_event(&mut port);
-    *clock.0.lock().unwrap() = Err(ClockReadFailure::OutOfRange);
+    *clock.0.lock().unwrap() = Err(ClockReadError::OutOfRange);
     assert!(matches!(client.drive(event), ClientResult::ClockFailed { .. }));
     assert!(
-        matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown { handle: actual, cause: ClientFailure::InvalidTime { .. }, .. })) if actual == handle)
+        matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown { handle: actual, cause: ClientError::InvalidTime { .. }, .. })) if actual == handle)
     );
     assert!(
         matches!(client.drive(ClientEvent::Drive), ClientResult::Close { operation_id } if operation_id == connection)
@@ -424,7 +424,7 @@ fn partial_write_failure_returns_exact_physical_debt_but_does_not_prove_non_admi
     assert!(matches!(&event, ClientEvent::Written { operation_id, request_id, result: Err(source) }
         if *operation_id == connection && *request_id == request.context().request_id && source.kind() == kind));
     assert!(
-        matches!(client.drive(event), ClientResult::ConnectionFault { cause: ClientFailure::BatchWrite { source }, .. }
+        matches!(client.drive(event), ClientResult::ConnectionFault { cause: ClientError::BatchWrite { source }, .. }
         if source.kind() == kind)
     );
     assert!(client.poll_event().is_none());
@@ -444,7 +444,7 @@ fn binding_wrong_connection_returns_the_original_device_without_retirement_or_io
         Err(returned) => returned,
         Ok(_) => panic!("wrong physical connection cannot bind"),
     };
-    assert!(matches!(cause, ClientFailure::NotConnected));
+    assert!(matches!(cause, ClientError::NotConnected));
     assert_eq!((device.borrow().reads, device.borrow().writes, device.borrow().drops), (0, 0, 0));
     let port = client.bind_batch_stream(connection, returned).unwrap();
     assert!(matches!(client.drive(ClientEvent::Stop), ClientResult::Close { .. }));

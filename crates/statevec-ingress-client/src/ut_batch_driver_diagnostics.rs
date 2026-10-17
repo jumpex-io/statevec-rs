@@ -50,14 +50,14 @@ fn malformed_reply_does_not_fail_the_manual_drive_or_stop_recovery(fault: BadRep
     match fault {
         BadReply::Header => assert!(matches!(
             diagnostic,
-            Some(ClientFailure::BatchRead {
-                source: stream_batch::ReadFailure::Frame { source: stream_batch::FrameFailure::InvalidMagic }
+            Some(ClientError::BatchRead {
+                source: stream_batch::ReadError::Frame { source: stream_batch::FrameError::InvalidMagic }
             })
         )),
         BadReply::Body => assert!(matches!(
             diagnostic,
-            Some(ClientFailure::BatchFrame {
-                source: stream_batch::FrameFailure::UnsupportedRefusal { observed: u8::MAX }
+            Some(ClientError::BatchFrame {
+                source: stream_batch::FrameError::UnsupportedRefusal { observed: u8::MAX }
             })
         )),
     }
@@ -90,7 +90,7 @@ fn readiness_wait_diagnostic_preserves_the_same_connection_and_pending_intent() 
     let sent = requests(&device).pop().unwrap();
     network.lock().unwrap().wait_error = Some(io::ErrorKind::Interrupted);
     assert!(matches!(driver.wait(&mut client, Duration::ZERO),
-        Ok(BatchDriverStep::Diagnostic { cause: ClientFailure::BatchWait { source } })
+        Ok(BatchDriverStep::Diagnostic { cause: ClientError::BatchWait { source } })
             if source.kind() == io::ErrorKind::Interrupted));
     assert!(client.poll_event().is_none());
     assert_eq!(device.lock().unwrap().drops, 0, "wait diagnosis cannot retire a connection behind the owner");
@@ -142,7 +142,7 @@ fn persistent_wait_errors_pause_only_within_the_remaining_budget(cut: WaitBudget
         network.lock().unwrap().wait_error = Some(io::ErrorKind::AlreadyExists);
         network.lock().unwrap().wait_error_delay = Duration::from_millis(elapsed_floor);
         assert!(matches!(driver.wait(&mut client, Duration::from_millis(host_ceiling)),
-            Ok(BatchDriverStep::Diagnostic { cause: ClientFailure::BatchWait { source } })
+            Ok(BatchDriverStep::Diagnostic { cause: ClientError::BatchWait { source } })
                 if source.kind() == io::ErrorKind::AlreadyExists));
         let network = network.lock().unwrap();
         assert_eq!(network.waits.last().unwrap().2, Some(Duration::from_millis(wait_budget)));
@@ -163,7 +163,7 @@ fn persistent_wait_errors_pause_only_within_the_remaining_budget(cut: WaitBudget
     assert_eq!(device.lock().unwrap().drops, 1);
     assert_eq!(network.lock().unwrap().addresses.len(), 1);
     assert!(matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown {
-        handle: actual, batch: original, cause: ClientFailure::Stopped, ..
+        handle: actual, batch: original, cause: ClientError::Stopped, ..
     })) if actual == handle && wire(&original) == wire(sent.batch())));
     assert!(client.poll_event().is_none());
 }

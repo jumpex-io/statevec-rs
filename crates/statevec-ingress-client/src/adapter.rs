@@ -1,5 +1,5 @@
 // Stateless checked construction and bounded frame sizing; no retry policy.
-use super::ClientFailure;
+use super::ClientError;
 use statevec_frame::InputRef;
 
 pub(super) fn validate_batch_construction(
@@ -13,15 +13,15 @@ pub(super) fn validate_batch_construction(
     operation_millis: u64,
     lifetime_millis: u64,
     unavailable_reply_limit: u32,
-) -> Result<(), ClientFailure> {
+) -> Result<(), ClientError> {
     if [identity.0, identity.1, identity.2]
         .iter()
         .any(|digest| digest.bytes() == [0; 32])
     {
-        return Err(ClientFailure::InvalidIdentity);
+        return Err(ClientError::InvalidIdentity);
     }
     if stream.client_id == 0 || stream.stream_id == 0 || stream.client_seq == 0 || stream.request_id.is_some() {
-        return Err(ClientFailure::InvalidStream);
+        return Err(ClientError::InvalidStream);
     }
     if endpoints.is_empty()
         || endpoints.len() > super::BATCH_CLIENT_MAX_ENDPOINTS
@@ -32,7 +32,7 @@ pub(super) fn validate_batch_construction(
                 || endpoints[..i].iter().any(|(prior, _)| prior == peer)
         })
     {
-        return Err(ClientFailure::InvalidEndpoints);
+        return Err(ClientError::InvalidEndpoints);
     }
     let smallest_request = ingress_api::stream_batch::HEADER_BYTES
         + ingress_api::stream_batch::CONTEXT_BYTES
@@ -44,7 +44,7 @@ pub(super) fn validate_batch_construction(
     // complete outcome budget; it also covers an Unavailable member's u64.
     let completed_reply =
         statevec_frame::stream_batch_protocol::completed_reply_byte_bound(maximum_commands, maximum_outcome_bytes)
-            .ok_or(ClientFailure::InvalidLimit)?;
+            .ok_or(ClientError::InvalidLimit)?;
     let exact_reply = statevec_frame::stream_batch_protocol::REPLY_BASE_BYTES
         + statevec_frame::applied_binding::APPLIED_STREAM_BATCH_BINDING_BYTES
         - statevec_frame::CLIENT_STREAM_BATCH_COMMITMENT_BYTES;
@@ -60,7 +60,7 @@ pub(super) fn validate_batch_construction(
         || retry_millis >= lifetime_millis
         || !(1..=super::BATCH_CLIENT_MAX_UNAVAILABLE_REPLIES).contains(&unavailable_reply_limit)
     {
-        return Err(ClientFailure::InvalidLimit);
+        return Err(ClientError::InvalidLimit);
     }
     Ok(())
 }
@@ -69,25 +69,25 @@ pub(super) fn batch_frame_bytes(
     batch: &statevec_frame::ClientStreamBatch,
     maximum_commands: u32,
     maximum_frame_bytes: u32,
-) -> Result<usize, ClientFailure> {
+) -> Result<usize, ClientError> {
     let envelope = ingress_api::stream_batch::HEADER_BYTES + ingress_api::stream_batch::CONTEXT_BYTES;
     let maximum_intent = (maximum_frame_bytes as usize)
         .checked_sub(envelope)
-        .ok_or(ClientFailure::InvalidLimit)?;
+        .ok_or(ClientError::InvalidLimit)?;
     batch
         .encoded_len_v1(maximum_intent, maximum_commands as usize)
         .map(|length| length + envelope)
-        .map_err(|source| ClientFailure::TooLarge { source })
+        .map_err(|source| ClientError::TooLarge { source })
 }
 
-pub(super) fn next_batch_request_id(current: std::num::NonZeroU64) -> Result<std::num::NonZeroU64, ClientFailure> {
+pub(super) fn next_batch_request_id(current: std::num::NonZeroU64) -> Result<std::num::NonZeroU64, ClientError> {
     current
         .get()
         .checked_add(1)
         .and_then(std::num::NonZeroU64::new)
-        .ok_or(ClientFailure::RequestIdExhausted)
+        .ok_or(ClientError::RequestIdExhausted)
 }
 
-pub(super) fn next_batch_connection_id(current: u64) -> Result<u64, ClientFailure> {
-    current.checked_add(1).ok_or(ClientFailure::ConnectionIdExhausted)
+pub(super) fn next_batch_connection_id(current: u64) -> Result<u64, ClientError> {
+    current.checked_add(1).ok_or(ClientError::ConnectionIdExhausted)
 }

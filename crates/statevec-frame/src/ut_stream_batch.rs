@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use test_case::test_case;
 
 use crate::{
-    ClientStreamBatch, ClientStreamBatchCommitment, ClientStreamBatchFailure as Failure, EngineCommandPayload,
+    ClientStreamBatch, ClientStreamBatchCommitment, ClientStreamBatchError as Failure, EngineCommandPayload,
     InputRef, PayloadCodec,
 };
 

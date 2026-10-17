@@ -125,7 +125,7 @@ fn absence_cannot_erase_known_commitment(term: u64) {
         ));
     } else {
         assert!(matches!(client.poll_event(), Some(BatchEvent::Progress(BatchProgress::Problem { cause, .. }))
-            if matches!(*cause, ClientFailure::CommittedHistoryMissing { known } if known == entry())));
+            if matches!(*cause, ClientError::CommittedHistoryMissing { known } if known == entry())));
         assert!(matches!(client.drive(ClientEvent::Stop), ClientResult::Close { .. }));
         assert!(matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown {
             batch, committed: Some(known), ..
@@ -338,30 +338,30 @@ fn historical_strong_reply_still_requires_complete_semantic_validation(invalid: 
     let expected = match invalid {
         InvalidStrongReply::Context => {
             response.binding.context.execution_profile = Digest32::new([99; 32]);
-            ClientFailure::BatchReply { source: ReplyRequestFailure::ContextMismatch }
+            ClientError::BatchReply { source: ReplyRequestError::ContextMismatch }
         }
         InvalidStrongReply::Intent => {
             response.binding.intent = batch(2).commitment_v1();
-            ClientFailure::BatchReply { source: ReplyRequestFailure::IntentMismatch }
+            ClientError::BatchReply { source: ReplyRequestError::IntentMismatch }
         }
         InvalidStrongReply::ConflictingCommitment => {
             let known = EntryBinding { digest: EntryDigest::from_untrusted_wire([99; 32]), ..entry() };
             receive(&mut client, connection, reply(&current, ReplyDisposition::CommittedAwaitingApply(known)));
             let _ = client.poll_event();
-            ClientFailure::ConflictingCommittedEntry { known, observed: entry() }
+            ClientError::ConflictingCommittedEntry { known, observed: entry() }
         }
     };
     receive(&mut client, connection, response);
     let Some(BatchEvent::Progress(BatchProgress::Problem { cause, .. })) = client.poll_event() else {
         panic!("historical strong evidence must pass full semantic validation")
     };
-    // ClientFailure carries I/O causes and is not PartialEq. Match typed causes,
+    // ClientError carries I/O causes and is not PartialEq. Match typed causes,
     // never their rendered diagnostics.
     assert!(match (&*cause, expected) {
-        (ClientFailure::BatchReply { source }, ClientFailure::BatchReply { source: expected }) => *source == expected,
+        (ClientError::BatchReply { source }, ClientError::BatchReply { source: expected }) => *source == expected,
         (
-            ClientFailure::ConflictingCommittedEntry { known, observed },
-            ClientFailure::ConflictingCommittedEntry { known: k, observed: o },
+            ClientError::ConflictingCommittedEntry { known, observed },
+            ClientError::ConflictingCommittedEntry { known: k, observed: o },
         ) => *known == k && *observed == o,
         _ => false,
     });

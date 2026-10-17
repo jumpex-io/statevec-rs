@@ -1,5 +1,5 @@
 // Mechanical byte and socket I/O. No admission, result, endpoint selection or retry policy.
-use super::ClientFailure;
+use super::ClientError;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::OnceLock;
@@ -11,7 +11,7 @@ include!("batch_tcp.rs");
 
 /// Default OS source for bounded clients and their drivers. Virtual execution
 /// injects the source at construction; the owner samples it for every timed event.
-pub fn batch_monotonic_now() -> Result<super::MonotonicMillis, super::ClockReadFailure> {
+pub fn batch_monotonic_now() -> Result<super::MonotonicMillis, super::ClockReadError> {
     static ORIGIN: OnceLock<Instant> = OnceLock::new();
     super::MonotonicMillis::try_from(ORIGIN.get_or_init(Instant::now).elapsed())
 }

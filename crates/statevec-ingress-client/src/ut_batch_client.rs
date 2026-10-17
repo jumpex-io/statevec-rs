@@ -21,12 +21,12 @@ const INITIAL_TIME: u64 = 500;
 const UNAVAILABLE_LIMIT: u32 = 3;
 
 #[derive(Clone)]
-struct Clock(Arc<Mutex<Result<MonotonicMillis, ClockReadFailure>>>);
+struct Clock(Arc<Mutex<Result<MonotonicMillis, ClockReadError>>>);
 impl Clock {
     fn new() -> Self {
         Self(Arc::new(Mutex::new(Ok(MonotonicMillis::new(INITIAL_TIME)))))
     }
-    fn sample(&self) -> Result<MonotonicMillis, ClockReadFailure> {
+    fn sample(&self) -> Result<MonotonicMillis, ClockReadError> {
         match self.0.lock() {
             Ok(now) => *now,
             // The wrapper unwind tests poison this physical callback on
@@ -50,7 +50,7 @@ fn construct(
     starts: InputRef,
     endpoints: Vec<(u64, SocketAddr)>,
     budgets: (u64, u64, u64),
-) -> Result<BatchClient, ClientFailure> {
+) -> Result<BatchClient, ClientError> {
     let clock = clock.clone();
     BatchClient::bounded(
         (Digest32::new([11; 32]), Digest32::new([22; 32]), Digest32::new([33; 32])),
@@ -170,7 +170,7 @@ fn sole_slot_retains_intact_input_until_explicit_stop_and_terminal_consumption()
     let original = wire(&batch(1));
     let expected = client.try_submit(batch(1)).unwrap();
     let refused = client.try_submit(batch(1)).unwrap_err();
-    assert!(matches!(refused.reason, ClientFailure::Full));
+    assert!(matches!(refused.reason, ClientError::Full));
     assert_eq!(wire(&refused.batch), original);
     assert!(client.poll_event().is_none(), "local acceptance is not a result");
     assert!(matches!(client.drive(ClientEvent::Stop), ClientResult::Close { operation_id: id } if id == operation_id));
@@ -186,14 +186,14 @@ fn sole_slot_retains_intact_input_until_explicit_stop_and_terminal_consumption()
     assert_eq!(handle, expected);
     assert_eq!(wire(&returned), original);
     assert_eq!(committed, None);
-    assert!(matches!(cause, ClientFailure::Stopped));
+    assert!(matches!(cause, ClientError::Stopped));
     assert!(matches!(client.status(), ClientStatus::Batch { occupied: 0, .. }));
     assert!(client.poll_event().is_none());
     assert!(
         matches!(client.drive(ClientEvent::Stop), ClientResult::Waiting { .. }),
         "stop must not issue a second close"
     );
-    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientFailure::Stopped));
+    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientError::Stopped));
 }
 
 #[test]
@@ -204,13 +204,13 @@ fn fixed_stream_refusals_preserve_bytes_and_do_not_consume_request_ids() {
     for foreign in [batch(2), batch_at(InputRef { client_id: 8, ..idle_start() }, 1)] {
         let original = wire(&foreign);
         let refused = client.try_submit(foreign).unwrap_err();
-        assert!(matches!(refused.reason, ClientFailure::InvalidInput));
+        assert!(matches!(refused.reason, ClientError::InvalidInput));
         assert_eq!(wire(&refused.batch), original);
     }
     let first = client.try_submit(batch(1)).unwrap();
     assert_eq!(first.context.request_id.get(), 1);
     let refused = client.try_submit(batch(1)).unwrap_err();
-    assert!(matches!(refused.reason, ClientFailure::Full));
+    assert!(matches!(refused.reason, ClientError::Full));
     assert_eq!(refused.batch.commitment_v1(), first.intent);
     assert!(matches!(client.status(), ClientStatus::Batch { occupied: 1, .. }));
 }
@@ -242,7 +242,7 @@ fn idle_clock_sample_starts_lifetime_and_expiry_isolated_to_its_client() {
         panic!("expected retained original")
     };
     assert_eq!(handle, first);
-    assert!(matches!(cause, ClientFailure::RequestLifetimeExpired));
+    assert!(matches!(cause, ClientError::RequestLifetimeExpired));
     assert!(first_client.poll_event().is_none());
     assert!(
         matches!(independent.drive(ClientEvent::Drive), ClientResult::Write { .. }),
@@ -259,7 +259,7 @@ fn acceptance_time_expiry_keeps_unissued_close_runnable_until_physical_retiremen
     let handle = client.try_submit(batch(1)).unwrap();
     clock.set(INITIAL_TIME + LIFETIME);
     let refusal = client.try_submit(batch(2)).unwrap_err();
-    assert!(matches!(refusal.reason, ClientFailure::Stopped));
+    assert!(matches!(refusal.reason, ClientError::Stopped));
     assert_eq!(wire(&refusal.batch), wire(&batch(2)));
     assert!(
         matches!(client.status(), ClientStatus::Batch {
@@ -275,7 +275,7 @@ fn acceptance_time_expiry_keeps_unissued_close_runnable_until_physical_retiremen
     };
     assert_eq!(returned, handle);
     assert_eq!(wire(&original), wire(&batch(1)));
-    assert!(matches!(cause, ClientFailure::RequestLifetimeExpired));
+    assert!(matches!(cause, ClientError::RequestLifetimeExpired));
     assert!(
         matches!(client.status(), ClientStatus::Batch {
         occupied: 0, next_deadline: Some(due), ..
@@ -292,7 +292,7 @@ fn acceptance_time_expiry_keeps_unissued_close_runnable_until_physical_retiremen
 #[test]
 fn acceptance_time_failure_stops_existing_custody_and_returns_the_refused_input() {
     for sample in [
-        Err(ClockReadFailure::OutOfRange),
+        Err(ClockReadError::OutOfRange),
         Ok(MonotonicMillis::new(INITIAL_TIME - 1)),
         Ok(MonotonicMillis::new(u64::MAX)),
     ] {
@@ -311,7 +311,7 @@ fn acceptance_time_failure_stops_existing_custody_and_returns_the_refused_input(
             .unwrap();
         *clock.0.lock().unwrap() = sample;
         let refusal = client.try_submit(batch(2)).unwrap_err();
-        assert!(matches!(refusal.reason, ClientFailure::InvalidTime { .. } | ClientFailure::TimeRegressed { .. }));
+        assert!(matches!(refusal.reason, ClientError::InvalidTime { .. } | ClientError::TimeRegressed { .. }));
         assert_eq!(wire(&refusal.batch), wire(&batch(2)), "refused input stays intact");
         let Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown {
             handle: actual,
@@ -333,7 +333,7 @@ fn acceptance_time_failure_stops_existing_custody_and_returns_the_refused_input(
                 digest: statevec_frame::outcome::EntryDigest::from_untrusted_wire([9; 32])
             })
         );
-        assert!(matches!(cause, ClientFailure::InvalidTime { .. } | ClientFailure::TimeRegressed { .. }));
+        assert!(matches!(cause, ClientError::InvalidTime { .. } | ClientError::TimeRegressed { .. }));
         assert!(
             matches!(client.drive(ClientEvent::Drive), ClientResult::Close { operation_id: same } if same == operation_id)
         );
@@ -353,10 +353,10 @@ fn disconnected_and_unregistered_input_cannot_reserve_a_slot() {
     let mut client = client(&clock);
     let original = wire(&batch(1));
     let refusal = client.try_submit(batch(1)).unwrap_err();
-    assert!(matches!(refusal.reason, ClientFailure::NotConnected));
+    assert!(matches!(refusal.reason, ClientError::NotConnected));
     assert_eq!(wire(&refusal.batch), original);
     connect(&mut client);
-    assert!(matches!(client.try_submit(batch(99)).unwrap_err().reason, ClientFailure::InvalidInput));
+    assert!(matches!(client.try_submit(batch(99)).unwrap_err().reason, ClientError::InvalidInput));
     assert_eq!(client.try_submit(batch(1)).unwrap().context.request_id.get(), 1);
 }
 
@@ -373,7 +373,7 @@ fn connect_timeout_waits_for_physical_close_and_old_observations_cannot_install_
     ));
     clock.set(INITIAL_TIME + OPERATION + RETRY);
     assert!(matches!(client.drive(ClientEvent::Drive), ClientResult::Waiting { .. }));
-    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientFailure::NotConnected));
+    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientError::NotConnected));
     assert!(matches!(client.drive(ClientEvent::Closed { operation_id: old }), ClientResult::Waiting { .. }));
     let ClientResult::Connect { operation_id: current, peer_id: 2, .. } = client.drive(ClientEvent::Drive) else {
         panic!("next endpoint only after close")
@@ -383,7 +383,7 @@ fn connect_timeout_waits_for_physical_close_and_old_observations_cannot_install_
         client.drive(ClientEvent::Connected { operation_id: old, result: Ok(()) }),
         ClientResult::Waiting { .. }
     ));
-    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientFailure::NotConnected));
+    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientError::NotConnected));
     assert!(matches!(
         client.drive(ClientEvent::Connected { operation_id: current, result: Ok(()) }),
         ClientResult::Waiting { .. }
@@ -410,7 +410,7 @@ fn time_budget_boundaries_are_accepted(retry: u64, operation: u64, lifetime: u64
 fn invalid_time_configuration_is_refused(retry: u64, operation: u64, lifetime: u64) {
     assert!(matches!(
         construct(&Clock::new(), idle_start(), endpoints(), (retry, operation, lifetime),),
-        Err(ClientFailure::InvalidLimit)
+        Err(ClientError::InvalidLimit)
     ));
 }
 
@@ -419,17 +419,17 @@ fn constructor_checks_streams_endpoints_and_unrepresentable_initial_deadline() {
     let clock = Clock::new();
     assert!(matches!(
         construct(&clock, idle_start(), vec![], (RETRY, OPERATION, LIFETIME),),
-        Err(ClientFailure::InvalidEndpoints)
+        Err(ClientError::InvalidEndpoints)
     ));
     let duplicate_peers = vec![endpoints()[0], endpoints()[0]];
     assert!(matches!(
         construct(&clock, idle_start(), duplicate_peers, (RETRY, OPERATION, LIFETIME),),
-        Err(ClientFailure::InvalidEndpoints)
+        Err(ClientError::InvalidEndpoints)
     ));
     clock.set(u64::MAX);
     assert!(matches!(
         construct(&clock, idle_start(), endpoints(), (RETRY, OPERATION, LIFETIME),),
-        Err(ClientFailure::InvalidTime { source: ClockReadFailure::OutOfRange })
+        Err(ClientError::InvalidTime { source: ClockReadError::OutOfRange })
     ));
 }
 
@@ -441,7 +441,7 @@ fn exhausted_stream_is_not_wrapped_or_silently_resequenced() {
     let mut client = construct(&clock, starts, endpoints(), (RETRY, OPERATION, LIFETIME)).unwrap();
     connect(&mut client);
     let refusal = client.try_submit(batch(1)).unwrap_err();
-    assert!(matches!(refusal.reason, ClientFailure::SequenceExhausted));
+    assert!(matches!(refusal.reason, ClientError::SequenceExhausted));
     assert_eq!(wire(&refusal.batch), wire(&batch(1)));
     assert!(matches!(client.status(), ClientStatus::Batch { occupied: 0, .. }));
 }
@@ -455,8 +455,8 @@ fn local_correlation_exhaustion_is_not_stream_sequence_exhaustion(current: u64) 
     let request = adapter::next_batch_request_id(NonZeroU64::new(current).unwrap());
     let connection = adapter::next_batch_connection_id(current);
     if current == u64::MAX {
-        assert!(matches!(request, Err(ClientFailure::RequestIdExhausted)));
-        assert!(matches!(connection, Err(ClientFailure::ConnectionIdExhausted)));
+        assert!(matches!(request, Err(ClientError::RequestIdExhausted)));
+        assert!(matches!(connection, Err(ClientError::ConnectionIdExhausted)));
     } else {
         assert_eq!(request.unwrap().get(), current + 1);
         assert_eq!(connection.unwrap(), current + 1);
@@ -513,7 +513,7 @@ fn slot_candidate_guard_returns_original_without_publishing(case: InvalidReserva
     };
     let result = client.reserve_batch_slot(candidate, next);
     assert!(
-        matches!(&result, Err((ClientFailure::BatchReservationInvariant, _))),
+        matches!(&result, Err((ClientError::BatchReservationInvariant, _))),
         "invalid candidate must be refused before publishing slot custody"
     );
     let (_, BatchSlot::Pending { batch: returned, .. }) = result.unwrap_err() else { panic!("original candidate") };
@@ -540,7 +540,7 @@ fn connect_candidate_guard_cannot_replace_a_live_socket() {
     // first socket is owned, even if a future scheduling caller omits its guard.
     let result = client.begin_batch_connect(1, clock.sample().unwrap());
     assert!(
-        matches!(result, Err(ClientFailure::BatchConnectionInvariant)),
+        matches!(result, Err(ClientError::BatchConnectionInvariant)),
         "connection candidate cannot replace outstanding physical custody"
     );
     assert!(validate_batch_state(&client.state, None, None).is_ok());
@@ -549,7 +549,7 @@ fn connect_candidate_guard_cannot_replace_a_live_socket() {
     assert!(validate_batch_state(&client.state, None, None).is_ok());
     assert!(matches!(
         client.poll_event(),
-        Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown { cause: ClientFailure::Stopped, .. }))
+        Some(BatchEvent::Terminal(BatchTerminal::OutcomeUnknown { cause: ClientError::Stopped, .. }))
     ));
     assert!(client.poll_event().is_none());
 }
@@ -594,7 +594,7 @@ fn complete_frame_and_command_limits_are_checked_before_admission() {
     let refusal = client.try_submit(oversized).unwrap_err();
     assert!(matches!(
         refusal.reason,
-        ClientFailure::TooLarge { source: ClientStreamBatchFailure::InvalidCount { observed: 2, limit: 1 } }
+        ClientError::TooLarge { source: ClientStreamBatchError::InvalidCount { observed: 2, limit: 1 } }
     ));
     assert_eq!(wire(&refusal.batch), original);
     let (first, mut commands) = exact_request(1).into_parts();
@@ -605,7 +605,7 @@ fn complete_frame_and_command_limits_are_checked_before_admission() {
     let original = wire(&oversized);
     let refusal = client.try_submit(oversized).unwrap_err();
     assert!(
-        matches!(refusal.reason, ClientFailure::TooLarge { source: ClientStreamBatchFailure::EncodedBytesExceeded { observed, limit } } if observed == limit + 1)
+        matches!(refusal.reason, ClientError::TooLarge { source: ClientStreamBatchError::EncodedBytesExceeded { observed, limit } } if observed == limit + 1)
     );
     assert_eq!(wire(&refusal.batch), original);
     assert_eq!(
@@ -656,7 +656,7 @@ fn queued_close_is_consumed_after_a_later_refused_submission() {
     assert!(matches!(client.drive(ClientEvent::Stop), ClientResult::Close { .. }));
     let closed = ClientEvent::Closed { operation_id };
     clock.set(INITIAL_TIME + 5);
-    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientFailure::Stopped));
+    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientError::Stopped));
 
     let result = client.drive(closed);
     assert!(
@@ -666,9 +666,9 @@ fn queued_close_is_consumed_after_a_later_refused_submission() {
     assert!(matches!(client.state, ClientState::Batch { connection: BatchConnection::Stopped, .. }));
 }
 
-#[test_case::test_case(Err(ClockReadFailure::OutOfRange); "clock read fails")]
+#[test_case::test_case(Err(ClockReadError::OutOfRange); "clock read fails")]
 #[test_case::test_case(Ok(MonotonicMillis::new(INITIAL_TIME - 1)); "clock regresses")]
-fn physical_close_is_consumed_even_when_the_clock_cannot_be_read(sample: Result<MonotonicMillis, ClockReadFailure>) {
+fn physical_close_is_consumed_even_when_the_clock_cannot_be_read(sample: Result<MonotonicMillis, ClockReadError>) {
     let clock = Clock::new();
     let mut client = client(&clock);
     let operation_id = connect(&mut client);
@@ -684,9 +684,9 @@ fn physical_close_is_consumed_even_when_the_clock_cannot_be_read(sample: Result<
     assert!(matches!(
         (sample, result),
         (
-            Err(ClockReadFailure::OutOfRange),
-            ClientResult::ClockFailed { cause: ClientFailure::InvalidTime { source: ClockReadFailure::OutOfRange } }
-        ) | (Ok(_), ClientResult::ClockFailed { cause: ClientFailure::TimeRegressed { .. } })
+            Err(ClockReadError::OutOfRange),
+            ClientResult::ClockFailed { cause: ClientError::InvalidTime { source: ClockReadError::OutOfRange } }
+        ) | (Ok(_), ClientResult::ClockFailed { cause: ClientError::TimeRegressed { .. } })
     ));
     let BatchEvent::Terminal(BatchTerminal::OutcomeUnknown { handle: returned, cause, .. }) =
         client.poll_event().unwrap()
@@ -694,14 +694,14 @@ fn physical_close_is_consumed_even_when_the_clock_cannot_be_read(sample: Result<
         panic!("expected retained original")
     };
     assert_eq!(returned, handle);
-    assert!(matches!(cause, ClientFailure::Stopped));
+    assert!(matches!(cause, ClientError::Stopped));
     assert!(client.poll_event().is_none());
 }
 
-#[test_case::test_case(Err(ClockReadFailure::OutOfRange); "clock read fails")]
+#[test_case::test_case(Err(ClockReadError::OutOfRange); "clock read fails")]
 #[test_case::test_case(Ok(MonotonicMillis::new(INITIAL_TIME - 1)); "clock regresses")]
 #[test_case::test_case(Ok(MonotonicMillis::new(u64::MAX)); "retry deadline overflows")]
-fn failed_connect_with_invalid_time_consumes_retirement_and_stops(sample: Result<MonotonicMillis, ClockReadFailure>) {
+fn failed_connect_with_invalid_time_consumes_retirement_and_stops(sample: Result<MonotonicMillis, ClockReadError>) {
     let clock = Clock::new();
     let mut client = client(&clock);
     let ClientResult::Connect { operation_id, .. } = client.drive(ClientEvent::Drive) else { panic!("connect") };
@@ -758,8 +758,8 @@ fn clock_failure_cannot_park_an_already_required_close() {
     let operation_id = connect(&mut client);
     client.try_submit(batch(1)).unwrap();
     clock.set(INITIAL_TIME + LIFETIME);
-    assert!(matches!(client.try_submit(batch(2)).unwrap_err().reason, ClientFailure::Stopped));
-    *clock.0.lock().unwrap() = Err(ClockReadFailure::OutOfRange);
+    assert!(matches!(client.try_submit(batch(2)).unwrap_err().reason, ClientError::Stopped));
+    *clock.0.lock().unwrap() = Err(ClockReadError::OutOfRange);
     assert!(
         matches!(client.drive(ClientEvent::Drive), ClientResult::Close { operation_id: same } if same == operation_id)
     );
@@ -773,7 +773,7 @@ fn failed_connect_after_stop_returns_resources_without_requiring_a_second_close(
     let mut client = client(&clock);
     let ClientResult::Connect { operation_id, .. } = client.drive(ClientEvent::Drive) else { panic!("connect") };
     assert!(matches!(client.drive(ClientEvent::Stop), ClientResult::Close { .. }));
-    *clock.0.lock().unwrap() = Err(ClockReadFailure::OutOfRange);
+    *clock.0.lock().unwrap() = Err(ClockReadError::OutOfRange);
     assert!(matches!(
         client.drive(ClientEvent::Connected { operation_id, result: Err(std::io::ErrorKind::Interrupted.into()) }),
         ClientResult::ConnectionFailed { operation_id: same, source, next_wake: None }
@@ -790,7 +790,7 @@ fn connect_deadline_overflow_stops_without_issuing_a_socket() {
     clock.set(u64::MAX);
     assert!(matches!(
         client.drive(ClientEvent::Drive),
-        ClientResult::ClockFailed { cause: ClientFailure::InvalidTime { source: ClockReadFailure::OutOfRange } }
+        ClientResult::ClockFailed { cause: ClientError::InvalidTime { source: ClockReadError::OutOfRange } }
     ));
     assert!(matches!(
         client.status(),
@@ -813,7 +813,7 @@ fn stop_while_connecting_closes_once_and_never_accepts_late_success() {
     ));
     assert!(matches!(client.drive(ClientEvent::Closed { operation_id }), ClientResult::Waiting { wake_at: None }));
     assert!(matches!(client.drive(ClientEvent::Stop), ClientResult::Waiting { wake_at: None }));
-    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientFailure::Stopped));
+    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientError::Stopped));
 }
 
 #[test]
@@ -826,7 +826,7 @@ fn wrong_start_does_not_rewrite_intent_or_consume_a_sequence() {
     let wrong = ClientStreamBatch::try_new(first, commands, FRAME_LIMIT as usize, COMMAND_LIMIT as usize).unwrap();
     let original = wire(&wrong);
     let refusal = client.try_submit(wrong).unwrap_err();
-    assert!(matches!(refusal.reason, ClientFailure::BatchSequence { expected: 41, observed: 42 }));
+    assert!(matches!(refusal.reason, ClientError::BatchSequence { expected: 41, observed: 42 }));
     assert_eq!(wire(&refusal.batch), original);
     assert_eq!(client.try_submit(batch(1)).unwrap().context.request_id.get(), 1);
 }
@@ -881,7 +881,7 @@ fn invalid_known_idle_starts_are_refused(client_id: u64, stream_id: u32, client_
     let first = InputRef { client_id, stream_id, client_seq, request_id: request.map(str::to_owned) };
     assert!(matches!(
         construct(&Clock::new(), first, endpoints(), (RETRY, OPERATION, LIFETIME),),
-        Err(ClientFailure::InvalidStream)
+        Err(ClientError::InvalidStream)
     ));
 }
 
@@ -892,24 +892,24 @@ fn invalid_known_idle_starts_are_refused(client_id: u64, stream_id: u32, client_
 fn invalid_endpoint_identities_are_refused(peer: u64, address: &str) {
     assert!(matches!(
         construct(&Clock::new(), idle_start(), vec![(peer, address.parse().unwrap())], (RETRY, OPERATION, LIFETIME),),
-        Err(ClientFailure::InvalidEndpoints)
+        Err(ClientError::InvalidEndpoints)
     ));
 }
 
 #[test]
 fn metadata_above_caps_is_refused_before_clock_or_any_slot_exists() {
     let clock = Clock::new();
-    *clock.0.lock().unwrap() = Err(ClockReadFailure::OutOfRange);
+    *clock.0.lock().unwrap() = Err(ClockReadError::OutOfRange);
     let peers = (1..=BATCH_CLIENT_MAX_ENDPOINTS + 1)
         .map(|id| (id as u64, endpoints()[0].1))
         .collect();
     assert!(matches!(
         construct(&clock, idle_start(), peers, (RETRY, OPERATION, LIFETIME),),
-        Err(ClientFailure::InvalidEndpoints)
+        Err(ClientError::InvalidEndpoints)
     ));
     assert!(matches!(
         construct(&clock, idle_start(), endpoints(), (RETRY, OPERATION, LIFETIME),),
-        Err(ClientFailure::InvalidTime { source: ClockReadFailure::OutOfRange })
+        Err(ClientError::InvalidTime { source: ClockReadError::OutOfRange })
     ));
 }
 
@@ -923,7 +923,7 @@ fn reservation_never_advances_the_known_idle_start() {
     assert_eq!(last.intent.first_sequence(), u64::MAX - 1);
     let ClientState::Batch { stream, .. } = &client.state;
     assert_eq!(stream.client_seq, u64::MAX - 1, "only exact terminal consumption advances the cursor");
-    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientFailure::Full));
+    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientError::Full));
 }
 
 #[test]
@@ -945,9 +945,9 @@ fn explicit_stop_terminal_survives_later_deadline_and_physical_close() {
     };
     assert_eq!(returned, handle);
     assert_eq!(wire(&original), wire(&batch(1)));
-    assert!(matches!(cause, ClientFailure::Stopped));
+    assert!(matches!(cause, ClientError::Stopped));
     assert!(client.poll_event().is_none());
-    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientFailure::Stopped));
+    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientError::Stopped));
 }
 
 #[test]
@@ -967,7 +967,7 @@ fn lifetime_expiry_terminal_is_not_rewritten_by_later_explicit_stop() {
     };
     assert_eq!(returned, handle);
     assert_eq!(wire(&original), wire(&batch(1)));
-    assert!(matches!(cause, ClientFailure::RequestLifetimeExpired));
+    assert!(matches!(cause, ClientError::RequestLifetimeExpired));
     assert!(client.poll_event().is_none());
 }
 
@@ -977,7 +977,7 @@ fn construct_limits(
     frame: u32,
     outcome: u32,
     unavailable: u32,
-) -> Result<BatchClient, ClientFailure> {
+) -> Result<BatchClient, ClientError> {
     BatchClient::bounded(
         identity,
         NonZeroU128::MIN,
@@ -1002,7 +1002,7 @@ fn constructor_refuses_empty_context_identity(component: usize) {
     identity[component] = Digest32::new([0; 32]);
     assert!(matches!(
         construct_limits((identity[0], identity[1], identity[2]), COMMAND_LIMIT, FRAME_LIMIT, OUTCOME_LIMIT, 3),
-        Err(ClientFailure::InvalidIdentity)
+        Err(ClientError::InvalidIdentity)
     ));
 }
 
@@ -1023,7 +1023,7 @@ fn constructor_refuses_frame_capacity_below_necessary_replies(frame: u32) {
                 OUTCOME_LIMIT,
                 3,
             ),
-            Err(ClientFailure::InvalidLimit)
+            Err(ClientError::InvalidLimit)
         ),
         "construction must reject a frame budget that cannot receive its replies"
     );
@@ -1042,7 +1042,7 @@ fn unrepresentable_capacity_and_unavailable_limits_are_refused(commands: u32, fr
             OUTCOME_LIMIT,
             unavailable
         ),
-        Err(ClientFailure::InvalidLimit)
+        Err(ClientError::InvalidLimit)
     ));
 }
 
@@ -1072,6 +1072,6 @@ fn constructor_rejects_unusable_outcome_capacity(outcome: u32) {
             outcome,
             3,
         ),
-        Err(ClientFailure::InvalidLimit)
+        Err(ClientError::InvalidLimit)
     ));
 }

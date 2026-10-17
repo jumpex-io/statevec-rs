@@ -47,8 +47,8 @@ impl IngressClientOwner {
         let deadline = match now.checked_add(*operation_millis) {
             Ok(deadline) => deadline,
             Err(source) => {
-                self.stop_batches(ClientFailure::InvalidTime { source });
-                return Some(ClientResult::ClockFailed { cause: ClientFailure::InvalidTime { source } });
+                self.stop_batches(ClientError::InvalidTime { source });
+                return Some(ClientResult::ClockFailed { cause: ClientError::InvalidTime { source } });
             }
         };
         let encode =
@@ -56,7 +56,7 @@ impl IngressClientOwner {
         let bytes = match encode(&request_context, batch, *maximum_frame_bytes as usize, *maximum_commands as usize) {
             Ok(bytes) => bytes,
             Err(source) => {
-                self.suspend_batch(ClientFailure::BatchFrame { source });
+                self.suspend_batch(ClientError::BatchFrame { source });
                 return Some(self.batch_effect());
             }
         };
@@ -90,7 +90,7 @@ impl IngressClientOwner {
         operation_id: u64,
         request_id: NonZeroU64,
         result: std::io::Result<()>,
-        sample: Result<MonotonicMillis, ClockReadFailure>,
+        sample: Result<MonotonicMillis, ClockReadError>,
     ) -> ClientResult {
         // Physical buffer return precedes the time guard, even when the reply
         // already latched/was consumed. A stale ID cannot clear another write.
@@ -115,7 +115,7 @@ impl IngressClientOwner {
         if returned_deadline.is_some() {
             if let Err(source) = result {
                 self.require_batch_close(operation_id, now.ok());
-                return ClientResult::ConnectionFault { operation_id, cause: ClientFailure::BatchWrite { source } };
+                return ClientResult::ConnectionFault { operation_id, cause: ClientError::BatchWrite { source } };
             }
         }
         match now {
@@ -133,8 +133,8 @@ impl IngressClientOwner {
     fn read_batch_reply(
         &mut self,
         operation_id: u64,
-        result: Result<Vec<u8>, ingress_api::stream_batch::ReadFailure>,
-        sample: Result<MonotonicMillis, ClockReadFailure>,
+        result: Result<Vec<u8>, ingress_api::stream_batch::ReadError>,
+        sample: Result<MonotonicMillis, ClockReadError>,
     ) -> ClientResult {
         let matching = matches!(&self.state, ClientState::Batch {
             connection: BatchConnection::Connected { operation_id: current, .. }
@@ -154,7 +154,7 @@ impl IngressClientOwner {
             Ok(bytes) => bytes,
             Err(source) => {
                 self.require_batch_close(operation_id, now.ok());
-                return ClientResult::ConnectionFault { operation_id, cause: ClientFailure::BatchRead { source } };
+                return ClientResult::ConnectionFault { operation_id, cause: ClientError::BatchRead { source } };
             }
         };
         let now = match now {
@@ -192,7 +192,7 @@ impl IngressClientOwner {
             Ok(reply) => reply,
             Err(source) => {
                 self.require_batch_close(operation_id, Some(now));
-                return ClientResult::ConnectionFault { operation_id, cause: ClientFailure::BatchFrame { source } };
+                return ClientResult::ConnectionFault { operation_id, cause: ClientError::BatchFrame { source } };
             }
         };
         // Associate an actually dispatched operation before validating context.
@@ -237,7 +237,7 @@ impl IngressClientOwner {
             if query {
                 self.consume_batch_query();
             }
-            self.suspend_batch(ClientFailure::BatchReply { source });
+            self.suspend_batch(ClientError::BatchReply { source });
             return self.batch_effect();
         }
         self.observe_submit_write(operation_id, reply.binding.context.request_id);
@@ -281,7 +281,7 @@ impl IngressClientOwner {
         }
         if let (Some(known), Some(observed)) = (*committed, incoming_committed) {
             if known != observed {
-                self.suspend_batch(ClientFailure::ConflictingCommittedEntry { known, observed });
+                self.suspend_batch(ClientError::ConflictingCommittedEntry { known, observed });
                 return;
             }
         }
@@ -336,15 +336,15 @@ impl IngressClientOwner {
                 Some(0)
             }
             ReplyDisposition::ProcessedResultUnavailable { next_sequence } => {
-                self.suspend_batch(ClientFailure::InsufficientAppliedEvidence { next_sequence });
+                self.suspend_batch(ClientError::InsufficientAppliedEvidence { next_sequence });
                 None
             }
             ReplyDisposition::Conflict => {
-                self.suspend_batch(ClientFailure::BatchConflict);
+                self.suspend_batch(ClientError::BatchConflict);
                 None
             }
             ReplyDisposition::StreamGapRejected { expected_seq } => {
-                self.refuse_submit_reply(ClientFailure::StreamGap { expected_sequence: expected_seq }, first_reply);
+                self.refuse_submit_reply(ClientError::StreamGap { expected_sequence: expected_seq }, first_reply);
                 None
             }
             ReplyDisposition::Refused(reason) => {
@@ -381,7 +381,7 @@ impl IngressClientOwner {
                     BatchSubmitRefusal::InternalFailure => {
                         // Without the explicit node-failure observation, retain
                         // the execution/unknown fault rather than blindly retry.
-                        self.suspend_batch(ClientFailure::ServerRefused { reason });
+                        self.suspend_batch(ClientError::ServerRefused { reason });
                         None
                     }
                     BatchSubmitRefusal::TooLarge
@@ -389,7 +389,7 @@ impl IngressClientOwner {
                     | BatchSubmitRefusal::Unauthorized
                     | BatchSubmitRefusal::ShuttingDown
                     | BatchSubmitRefusal::IncompatibleContext => {
-                        self.refuse_submit_reply(ClientFailure::ServerRefused { reason }, first_reply);
+                        self.refuse_submit_reply(ClientError::ServerRefused { reason }, first_reply);
                         None
                     }
                 }
@@ -405,7 +405,7 @@ impl IngressClientOwner {
                     {
                         Some(unavailable_limit)
                     } else {
-                        self.suspend_batch(ClientFailure::CommittedHistoryMissing { known });
+                        self.suspend_batch(ClientError::CommittedHistoryMissing { known });
                         None
                     }
                 } else {
@@ -435,7 +435,7 @@ impl IngressClientOwner {
         *slot = Some(BatchSlot::Terminal { event });
     }
 
-    fn refuse_submit_reply(&mut self, cause: ClientFailure, proven: bool) {
+    fn refuse_submit_reply(&mut self, cause: ClientError, proven: bool) {
         if !proven {
             self.suspend_batch(cause);
             return;
@@ -447,7 +447,7 @@ impl IngressClientOwner {
         *slot = Some(BatchSlot::Terminal { event: BatchTerminal::NotAdmitted { handle, batch, cause } });
     }
 
-    fn suspend_batch(&mut self, cause: ClientFailure) {
+    fn suspend_batch(&mut self, cause: ClientError) {
         let ClientState::Batch { slot, .. } = &mut self.state;
         let Some(BatchSlot::Pending { attempt, notice, .. }) = slot else { return };
         if attempt.is_suspended() {
@@ -478,7 +478,7 @@ impl IngressClientOwner {
         }
         match now.checked_add(*retry_millis) {
             Ok(retry_at) => *attempt = BatchAttempt::Eligible { at: retry_at },
-            Err(source) => self.stop_batches(ClientFailure::InvalidTime { source }),
+            Err(source) => self.stop_batches(ClientError::InvalidTime { source }),
         }
     }
 
@@ -526,7 +526,7 @@ impl IngressClientOwner {
         let retry_at = match self.next_reconnect_at(now) {
             Ok(due) => due,
             Err(source) => {
-                self.stop_batches(ClientFailure::InvalidTime { source });
+                self.stop_batches(ClientError::InvalidTime { source });
                 return;
             }
         };

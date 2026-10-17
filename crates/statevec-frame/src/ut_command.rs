@@ -4,18 +4,18 @@ use test_case::test_case;
 #[test]
 fn lengths_are_checked_without_allocating_the_declared_body() {
     assert_eq!(encoded_length(0), Ok((0, 30)));
-    assert_eq!(encoded_length(usize::MAX), Err(CommandPayloadFailure::LengthOverflow));
+    assert_eq!(encoded_length(usize::MAX), Err(CommandPayloadError::LengthOverflow));
     #[cfg(target_pointer_width = "64")]
     {
         assert_eq!(encoded_length(u32::MAX as usize), Ok((u32::MAX, u32::MAX as usize + 30)));
-        assert_eq!(encoded_length(u32::MAX as usize + 1), Err(CommandPayloadFailure::LengthOverflow));
+        assert_eq!(encoded_length(u32::MAX as usize + 1), Err(CommandPayloadError::LengthOverflow));
     }
     let mut payload = runtime_binary_v0_payload(1, 1, 0, 0, &[]);
     Arc::make_mut(&mut payload.payload_bytes)[26..30].copy_from_slice(&u32::MAX.to_le_bytes());
     let expected = if usize::BITS > 32 {
-        CommandPayloadFailure::Truncated
+        CommandPayloadError::Truncated
     } else {
-        CommandPayloadFailure::LengthOverflow
+        CommandPayloadError::LengthOverflow
     };
     assert_eq!(decode_runtime_binary_v0(&payload), Err(expected));
 }
@@ -27,7 +27,7 @@ fn every_partial_header_is_truncated() {
         let payload = EngineCommandPayload {
             payload_codec: full.payload_codec.clone(), payload_bytes: Arc::from(&full.payload_bytes[..length]),
         };
-        assert_eq!(decode_runtime_binary_v0(&payload), Err(CommandPayloadFailure::Truncated), "length={length}");
+        assert_eq!(decode_runtime_binary_v0(&payload), Err(CommandPayloadError::Truncated), "length={length}");
     }
 }
 
@@ -35,11 +35,11 @@ fn every_partial_header_is_truncated() {
 fn codec_version_and_full_width_fields_remain_exact() {
     let command = Command::new(USER_KIND_MAX, u64::MAX, u64::MAX, Vec::new());
     let mut payload = encode_runtime_binary_v0_command_payload(&command).unwrap();
-    let fields = RuntimeBinaryV0CommandDecoder.decode_checked_fields(&payload).unwrap();
+    let fields = CommandDecoder.decode_checked_fields(&payload).unwrap();
     assert_eq!((fields.command_kind, fields.ext_seq, fields.ref_ext_time_us), (USER_KIND_MAX, u64::MAX, u64::MAX));
     assert!(fields.payload.is_empty());
     payload.payload_codec.codec_version = u16::MAX;
-    assert_eq!(decode_runtime_binary_v0(&payload), Err(CommandPayloadFailure::UnsupportedCodecVersion { version: u16::MAX }));
+    assert_eq!(decode_runtime_binary_v0(&payload), Err(CommandPayloadError::UnsupportedCodecVersion { version: u16::MAX }));
 }
 
 #[test_case(INVALID_KIND; "invalid_zero")]
@@ -51,7 +51,7 @@ fn encoder_rejects_invalid_command_kind(kind: u16) {
     let result = encode_runtime_binary_v0_command_payload(&command);
 
     assert!(
-        matches!(result, Err(CommandPayloadFailure::InvalidKind { kind: actual }) if actual == kind),
+        matches!(result, Err(CommandPayloadError::InvalidKind { kind: actual }) if actual == kind),
         "encoder must reject a kind its decoder cannot accept: {result:?}"
     );
 }
@@ -62,7 +62,7 @@ fn legal_command_kind_round_trips(kind: u16) {
     let command = Command::new(kind, 17, 9, vec![1, 2, 3]);
 
     let encoded = encode_runtime_binary_v0_command_payload(&command).unwrap();
-    let decoded = RuntimeBinaryV0CommandDecoder.decode_checked(&encoded).unwrap();
+    let decoded = CommandDecoder.decode_checked(&encoded).unwrap();
 
     assert_eq!(decoded, command);
 }
@@ -109,16 +109,16 @@ fn runtime_binary_v0_payload(
     }
 }
 
-fn decode_runtime_binary_v0(payload: &EngineCommandPayload) -> Result<Command, CommandPayloadFailure> {
-    RuntimeBinaryV0CommandDecoder.decode_checked(payload)
+fn decode_runtime_binary_v0(payload: &EngineCommandPayload) -> Result<Command, CommandPayloadError> {
+    CommandDecoder.decode_checked(payload)
 }
 
-fn assert_current_payload_failure(error: CommandPayloadFailure, expected: CommandPayloadFailure) {
+fn assert_current_payload_failure(error: CommandPayloadError, expected: CommandPayloadError) {
     assert_eq!(error, expected);
 }
 
 #[test]
-fn runtime_binary_v0_decoder_decodes_flagged_payload() -> Result<(), CommandPayloadFailure> {
+fn runtime_binary_v0_decoder_decodes_flagged_payload() -> Result<(), CommandPayloadError> {
     let inner_payload = b"inner-command-payload";
     let encoded = runtime_binary_v0_payload(0x0001 | 0x0002, 42, 9, 123_456, inner_payload);
 
@@ -133,7 +133,7 @@ fn runtime_binary_v0_decoder_decodes_flagged_payload() -> Result<(), CommandPayl
 }
 
 #[test]
-fn runtime_binary_v0_decoder_uses_neutral_values_for_absent_optional_fields() -> Result<(), CommandPayloadFailure> {
+fn runtime_binary_v0_decoder_uses_neutral_values_for_absent_optional_fields() -> Result<(), CommandPayloadError> {
     let encoded = runtime_binary_v0_payload(0, 7, 0, 0, b"body");
 
     let decoded = decode_runtime_binary_v0(&encoded)?;
@@ -150,20 +150,20 @@ fn runtime_binary_v0_decoder_rejects_reserved_flags_and_absent_nonzero_fields() 
     let reserved = runtime_binary_v0_payload(0x0004, 7, 0, 0, b"body");
     assert_current_payload_failure(
         decode_runtime_binary_v0(&reserved).expect_err("reserved flags should reject"),
-        CommandPayloadFailure::ReservedFlags { flags: 4 },
+        CommandPayloadError::ReservedFlags { flags: 4 },
     );
 
     let ext_without_flag = runtime_binary_v0_payload(0, 7, 1, 0, b"body");
     assert_current_payload_failure(
         decode_runtime_binary_v0(&ext_without_flag).expect_err("non-zero ext_seq without flag should reject"),
-        CommandPayloadFailure::SequenceWithoutFlag,
+        CommandPayloadError::SequenceWithoutFlag,
     );
 
     let ref_time_without_flag = runtime_binary_v0_payload(0, 7, 0, 1, b"body");
     assert_current_payload_failure(
         decode_runtime_binary_v0(&ref_time_without_flag)
             .expect_err("non-zero ref_ext_time_us without flag should reject"),
-        CommandPayloadFailure::TimeWithoutFlag,
+        CommandPayloadError::TimeWithoutFlag,
     );
 }
 
@@ -173,13 +173,13 @@ fn runtime_binary_v0_decoder_rejects_unknown_codec_and_bad_command_kind() {
     unknown_codec.payload_codec.codec_id = "other".into();
     assert!(matches!(
         decode_runtime_binary_v0(&unknown_codec).expect_err("unknown codec should reject"),
-        CommandPayloadFailure::UnsupportedCodec { codec_id } if codec_id == "other"
+        CommandPayloadError::UnsupportedCodec { codec_id } if codec_id == "other"
     ));
 
     let invalid_command_kind = runtime_binary_v0_payload(0, 0, 0, 0, b"body");
     assert_current_payload_failure(
         decode_runtime_binary_v0(&invalid_command_kind).expect_err("invalid command kind should reject"),
-        CommandPayloadFailure::InvalidKind { kind: 0 },
+        CommandPayloadError::InvalidKind { kind: 0 },
     );
 }
 
@@ -189,14 +189,14 @@ fn runtime_binary_v0_decoder_rejects_structural_payload_errors() {
     Arc::make_mut(&mut bad_magic.payload_bytes)[0] = b'X';
     assert_current_payload_failure(
         decode_runtime_binary_v0(&bad_magic).expect_err("bad magic should reject"),
-        CommandPayloadFailure::WrongMagic,
+        CommandPayloadError::WrongMagic,
     );
 
     let mut bad_version = runtime_binary_v0_payload(0, 7, 0, 0, b"body");
     Arc::make_mut(&mut bad_version.payload_bytes)[4..6].copy_from_slice(&1u16.to_le_bytes());
     assert_current_payload_failure(
         decode_runtime_binary_v0(&bad_version).expect_err("bad version should reject"),
-        CommandPayloadFailure::UnsupportedVersion { version: 1 },
+        CommandPayloadError::UnsupportedVersion { version: 1 },
     );
 
     let mut trailing = runtime_binary_v0_payload(0, 7, 0, 0, b"body");
@@ -205,7 +205,7 @@ fn runtime_binary_v0_decoder_rejects_structural_payload_errors() {
     trailing.payload_bytes = trailing_bytes.into();
     assert_current_payload_failure(
         decode_runtime_binary_v0(&trailing).expect_err("trailing bytes should reject"),
-        CommandPayloadFailure::TrailingBytes,
+        CommandPayloadError::TrailingBytes,
     );
 
     let mut truncated_inner = runtime_binary_v0_payload(0, 7, 0, 0, b"body");
@@ -214,7 +214,7 @@ fn runtime_binary_v0_decoder_rejects_structural_payload_errors() {
     truncated_inner.payload_bytes = truncated_inner_bytes.into();
     assert_current_payload_failure(
         decode_runtime_binary_v0(&truncated_inner).expect_err("truncated inner payload should reject"),
-        CommandPayloadFailure::Truncated,
+        CommandPayloadError::Truncated,
     );
 
     let mut truncated_header = runtime_binary_v0_payload(0, 7, 0, 0, b"body");
@@ -223,6 +223,6 @@ fn runtime_binary_v0_decoder_rejects_structural_payload_errors() {
     truncated_header.payload_bytes = truncated_header_bytes.into();
     assert_current_payload_failure(
         decode_runtime_binary_v0(&truncated_header).expect_err("truncated header should reject"),
-        CommandPayloadFailure::Truncated,
+        CommandPayloadError::Truncated,
     );
 }

@@ -2,7 +2,7 @@
 //! No request mailbox, result queue, retry facts or mirrored client phase.
 use crate::{
     BatchConnectIo, BatchDriverStep, BatchDriverWorker, BatchEvent, BatchHandle, BatchRefused, BatchTcpWorker,
-    ClientFailure, ClientStatus, IngressClientOwner,
+    ClientError, ClientStatus, IngressClientOwner,
 };
 use statevec_frame::ClientStreamBatch;
 use statevec_frame::stream_batch_protocol::EntryBinding;
@@ -35,7 +35,7 @@ pub struct BatchBackground {
     stop: Arc<AtomicBool>,
     finished: Arc<AtomicBool>,
     notify: Arc<dyn Fn() -> io::Result<()> + Send + Sync>,
-    error: Arc<Mutex<Option<ClientFailure>>>,
+    error: Arc<Mutex<Option<ClientError>>>,
     waiter: Arc<Mutex<Option<Waker>>>,
     // Scheduling cut only: the real worker still owns Stop and completion.
     #[cfg(test)]
@@ -59,10 +59,10 @@ impl std::fmt::Debug for BatchBackground {
 impl BatchBackground {
     /// Start an unbound batch owner on real nonblocking TCP. OS construction
     /// failure returns the complete original owner; no fresh owner replaces it.
-    pub fn spawn(client: IngressClientOwner) -> Result<Self, (ClientFailure, IngressClientOwner)> {
+    pub fn spawn(client: IngressClientOwner) -> Result<Self, (ClientError, IngressClientOwner)> {
         let io = match BatchTcpWorker::new() {
             Ok(io) => io,
-            Err(source) => return Err((ClientFailure::BatchWait { source }, client)),
+            Err(source) => return Err((ClientError::BatchWait { source }, client)),
         };
         let notify = io.notifier();
         Self::spawn_with_io(client, io, notify)
@@ -76,7 +76,7 @@ impl BatchBackground {
         client: IngressClientOwner,
         io: P,
         notify: Arc<dyn Fn() -> io::Result<()> + Send + Sync>,
-    ) -> Result<Self, (ClientFailure, IngressClientOwner)>
+    ) -> Result<Self, (ClientError, IngressClientOwner)>
     where
         P: BatchConnectIo + Send + 'static,
         P::Stream: Send,
@@ -99,7 +99,7 @@ impl BatchBackground {
                         let mut client = match owned.lock() {
                             Ok(client) => client,
                             Err(_) => {
-                                record(&errors, ClientFailure::DriverPanicked);
+                                record(&errors, ClientError::DriverPanicked);
                                 break;
                             }
                         };
@@ -155,7 +155,7 @@ impl BatchBackground {
                     if runnable {
                         std::thread::yield_now();
                     } else if let Err(source) = driver.wait_io(Some(timeout)) {
-                        record(&errors, ClientFailure::BatchWait { source });
+                        record(&errors, ClientError::BatchWait { source });
                         // A failed poller is reported and parked at the physical
                         // ceiling; it cannot create a hot retry loop or a result.
                         std::thread::park_timeout(WAIT_CEILING);
@@ -163,7 +163,7 @@ impl BatchBackground {
                 }
             }));
             if run.is_err() {
-                record(&errors, ClientFailure::DriverPanicked);
+                record(&errors, ClientError::DriverPanicked);
                 // A physical wait panic leaves the owner intact; a panic under
                 // its lock may have interrupted a transition. Never resume the
                 // latter just because catch_unwind returned. Drop the driver
@@ -199,7 +199,7 @@ impl BatchBackground {
                 #[cfg(test)]
                 on_contention: None,
             }),
-            Err(source) => Err((ClientFailure::DriverSpawn { source }, unwrap_client(client))),
+            Err(source) => Err((ClientError::DriverSpawn { source }, unwrap_client(client))),
         }
     }
 
@@ -232,11 +232,11 @@ impl BatchBackground {
         result
     }
 
-    pub fn status(&self) -> Result<ClientStatus, ClientFailure> {
+    pub fn status(&self) -> Result<ClientStatus, ClientError> {
         Ok(self.client()?.status())
     }
 
-    pub fn poll_event(&self) -> Result<Option<BatchEvent>, ClientFailure> {
+    pub fn poll_event(&self) -> Result<Option<BatchEvent>, ClientError> {
         // Only an intact owner may consume a terminal, including after Stop.
         let event = self.client()?.poll_event();
         if event.is_some() {
@@ -250,11 +250,11 @@ impl BatchBackground {
         self.finished.load(Ordering::Acquire)
     }
 
-    fn poll_async_event(&self) -> Poll<Result<Option<BatchEvent>, ClientFailure>> {
+    fn poll_async_event(&self) -> Poll<Result<Option<BatchEvent>, ClientError>> {
         let event = match self.client.try_lock() {
             Ok(mut client) => client.poll_event(),
             Err(std::sync::TryLockError::WouldBlock) => return Poll::Pending,
-            Err(std::sync::TryLockError::Poisoned(_)) => return Poll::Ready(Err(ClientFailure::DriverPanicked)),
+            Err(std::sync::TryLockError::Poisoned(_)) => return Poll::Ready(Err(ClientError::DriverPanicked)),
         };
         if event.is_some() {
             self.wake();
@@ -266,13 +266,13 @@ impl BatchBackground {
     /// take precedence, with DriverPanicked strongest. Operational I/O errors
     /// are diagnostics; the owner alone decides recovery and batch terminals.
     /// An accepted batch is never refused because a later notification failed.
-    pub fn take_driver_error(&self) -> Option<ClientFailure> {
+    pub fn take_driver_error(&self) -> Option<ClientError> {
         lock(&self.error).take()
     }
 
-    fn take_presentation_error(&self) -> Option<ClientFailure> {
+    fn take_presentation_error(&self) -> Option<ClientError> {
         let mut error = lock(&self.error);
-        if matches!(error.as_ref(), Some(ClientFailure::DriverPanicked | ClientFailure::WaiterPanicked)) {
+        if matches!(error.as_ref(), Some(ClientError::DriverPanicked | ClientError::WaiterPanicked)) {
             error.take()
         } else {
             None
@@ -285,15 +285,15 @@ impl BatchBackground {
     /// faults remain available through take_driver_error while this future waits
     /// for owner events. Owner fail-stop causes travel with the retained terminal;
     /// all consumable terminals precede Ok(None), which marks driver completion.
-    pub fn next_event(&mut self) -> impl Future<Output = Result<Option<BatchEvent>, ClientFailure>> + '_ {
+    pub fn next_event(&mut self) -> impl Future<Output = Result<Option<BatchEvent>, ClientError>> + '_ {
         poll_fn(|cx| {
             let waker = match catch_unwind(AssertUnwindSafe(|| cx.waker().clone())) {
                 Ok(waker) => waker,
-                Err(_) => return Poll::Ready(Err(ClientFailure::WaiterPanicked)),
+                Err(_) => return Poll::Ready(Err(ClientError::WaiterPanicked)),
             };
             let previous = lock(&self.waiter).replace(waker);
             if catch_unwind(AssertUnwindSafe(|| drop(previous))).is_err() {
-                return Poll::Ready(Err(ClientFailure::WaiterPanicked));
+                return Poll::Ready(Err(ClientError::WaiterPanicked));
             }
             let result = match self.poll_async_event() {
                 Poll::Ready(Ok(Some(event))) => Some(Ok(Some(event))),
@@ -331,7 +331,7 @@ impl BatchBackground {
                 Some(result) => {
                     let retired = lock(&self.waiter).take();
                     if catch_unwind(AssertUnwindSafe(|| drop(retired))).is_err() {
-                        record(&self.error, ClientFailure::WaiterPanicked);
+                        record(&self.error, ClientError::WaiterPanicked);
                     }
                     Poll::Ready(result)
                 }
@@ -352,7 +352,7 @@ impl BatchBackground {
     /// panic interrupted an owner-locked turn, Err retains this joined wrapper
     /// and its quarantined owner. There is no unpoison/reuse escape hatch;
     /// dropping that wrapper has the documented memory-only crash semantics.
-    pub fn shutdown(mut self) -> Result<(IngressClientOwner, Option<ClientFailure>), Self> {
+    pub fn shutdown(mut self) -> Result<(IngressClientOwner, Option<ClientError>), Self> {
         self.join();
         if self.client.is_poisoned() {
             return Err(self);
@@ -365,7 +365,7 @@ impl BatchBackground {
         Ok((unwrap_client(client), error))
     }
 
-    fn client(&self) -> Result<MutexGuard<'_, IngressClientOwner>, ClientFailure> {
+    fn client(&self) -> Result<MutexGuard<'_, IngressClientOwner>, ClientError> {
         match self.client.try_lock() {
             Ok(client) => Ok(client),
             Err(std::sync::TryLockError::WouldBlock) => {
@@ -373,16 +373,16 @@ impl BatchBackground {
                 if let Some(cut) = &self.on_contention {
                     cut();
                 }
-                self.client.lock().map_err(|_| ClientFailure::DriverPanicked)
+                self.client.lock().map_err(|_| ClientError::DriverPanicked)
             }
-            Err(std::sync::TryLockError::Poisoned(_)) => Err(ClientFailure::DriverPanicked),
+            Err(std::sync::TryLockError::Poisoned(_)) => Err(ClientError::DriverPanicked),
         }
     }
     fn wake(&self) {
         match catch_unwind(AssertUnwindSafe(|| (self.notify)())) {
             Ok(Ok(())) => (),
-            Ok(Err(source)) => record(&self.error, ClientFailure::BatchWait { source }),
-            Err(_) => record(&self.error, ClientFailure::DriverPanicked),
+            Ok(Err(source)) => record(&self.error, ClientError::BatchWait { source }),
+            Err(_) => record(&self.error, ClientError::DriverPanicked),
         }
         if let Some(thread) = &self.thread {
             thread.thread().unpark();
@@ -393,7 +393,7 @@ impl BatchBackground {
             self.request_stop();
             thread.thread().unpark();
             if thread.join().is_err() {
-                record(&self.error, ClientFailure::DriverPanicked);
+                record(&self.error, ClientError::DriverPanicked);
             }
         }
     }
@@ -414,21 +414,21 @@ fn unwrap_client(client: Arc<Mutex<IngressClientOwner>>) -> IngressClientOwner {
         Err(_) => unreachable!("only joined thread and exclusive presentation own the client"),
     }
 }
-fn record(errors: &Mutex<Option<ClientFailure>>, cause: ClientFailure) {
+fn record(errors: &Mutex<Option<ClientError>>, cause: ClientError) {
     let mut error = lock(errors);
-    if matches!(cause, ClientFailure::DriverPanicked)
-        || (matches!(cause, ClientFailure::WaiterPanicked) && !matches!(*error, Some(ClientFailure::DriverPanicked)))
+    if matches!(cause, ClientError::DriverPanicked)
+        || (matches!(cause, ClientError::WaiterPanicked) && !matches!(*error, Some(ClientError::DriverPanicked)))
     {
         *error = Some(cause);
     } else {
         error.get_or_insert(cause);
     }
 }
-fn wake_waiter(waiter: &Mutex<Option<Waker>>, errors: &Mutex<Option<ClientFailure>>) {
+fn wake_waiter(waiter: &Mutex<Option<Waker>>, errors: &Mutex<Option<ClientError>>) {
     let waker = lock(waiter).take();
     if let Some(waker) = waker
         && catch_unwind(AssertUnwindSafe(|| waker.wake())).is_err()
     {
-        record(errors, ClientFailure::WaiterPanicked);
+        record(errors, ClientError::WaiterPanicked);
     }
 }
