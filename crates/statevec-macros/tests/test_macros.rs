@@ -71,6 +71,7 @@ pub struct DecimalAccount {
 
 #[test]
 fn single_uk() {
+    assert_eq!(Order::UNIQUE_KEY_ID, 0);
     let mut buf = [0u8; OrderAccess::LEN];
     let client_id = FixedBytes::<16>::new(b"abc-001").unwrap();
 
@@ -298,9 +299,9 @@ fn multiple_named_uk_definitions_generate_stable_metadata_and_helpers() {
     assert_eq!(def.unique_keys[2].id, 2);
     assert_eq!(def.unique_keys[2].name, "by_account_external");
     assert_eq!(def.unique_keys[2].fields, &["account_id", "external_id"]);
-    assert_eq!(MultiUkOrder::BY_ACCOUNT_CLIENT_UK_ID, 0);
-    assert_eq!(MultiUkOrder::BY_EXTERNAL_ID_UK_ID, 1);
-    assert_eq!(MultiUkOrder::BY_ACCOUNT_EXTERNAL_UK_ID, 2);
+    assert_eq!(MultiUkOrder::BY_ACCOUNT_CLIENT_UNIQUE_KEY_ID, 0);
+    assert_eq!(MultiUkOrder::BY_EXTERNAL_ID_UNIQUE_KEY_ID, 1);
+    assert_eq!(MultiUkOrder::BY_ACCOUNT_EXTERNAL_UNIQUE_KEY_ID, 2);
 
     let first = <MultiUkOrder as UniqueKeyCodec>::encode_unique_key_from_bytes(&buf);
     assert_eq!(first, MultiUkOrder::unique_key(42, &client_id));

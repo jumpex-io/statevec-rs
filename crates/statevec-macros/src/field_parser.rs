@@ -87,10 +87,10 @@ pub(crate) fn parse_record_args(args_ts: proc_macro2::TokenStream) -> syn::Resul
                     let mut out = Vec::new();
                     for elem in elems {
                         let Expr::Path(p) = elem else {
-                            return Err(syn::Error::new(elem.span(), "uk field must be an ident"));
+                            return Err(syn::Error::new(elem.span(), "unique_key field must be an ident"));
                         };
                         let Some(ident) = p.path.get_ident() else {
-                            return Err(syn::Error::new(p.span(), "uk field must be an ident"));
+                            return Err(syn::Error::new(p.span(), "unique_key field must be an ident"));
                         };
                         out.push(ident.clone());
                     }
@@ -154,7 +154,7 @@ pub(crate) fn parse_record_args(args_ts: proc_macro2::TokenStream) -> syn::Resul
     if args.unique_keys.len() > statevec_model::MAX_UNIQUE_KEYS_PER_RECORD {
         return Err(syn::Error::new(
             proc_macro2::Span::call_site(),
-            format!("record supports at most {} UK definitions", statevec_model::MAX_UNIQUE_KEYS_PER_RECORD),
+            format!("record supports at most {} unique_key definitions", statevec_model::MAX_UNIQUE_KEYS_PER_RECORD),
         ));
     }
     let mut uk_ids = std::collections::BTreeSet::new();
@@ -163,21 +163,21 @@ pub(crate) fn parse_record_args(args_ts: proc_macro2::TokenStream) -> syn::Resul
             return Err(syn::Error::new(
                 proc_macro2::Span::call_site(),
                 format!(
-                    "uk id {} is out of range; valid range is [0, {})",
+                    "unique_key id {} is out of range; valid range is [0, {})",
                     uk.id,
                     statevec_model::MAX_UNIQUE_KEYS_PER_RECORD
                 ),
             ));
         }
         if !uk_ids.insert(uk.id) {
-            return Err(syn::Error::new(proc_macro2::Span::call_site(), format!("duplicate uk id {}", uk.id)));
+            return Err(syn::Error::new(proc_macro2::Span::call_site(), format!("duplicate unique_key id {}", uk.id)));
         }
     }
     for expected in 0..args.unique_keys.len() {
         if !uk_ids.contains(&(expected as u8)) {
             return Err(syn::Error::new(
                 proc_macro2::Span::call_site(),
-                format!("uk ids must be contiguous from 0; missing id {}", expected),
+                format!("unique_key ids must be contiguous from 0; missing id {}", expected),
             ));
         }
     }
@@ -191,16 +191,16 @@ pub(crate) fn parse_record_args(args_ts: proc_macro2::TokenStream) -> syn::Resul
                 ));
             };
             if name.is_empty() {
-                return Err(syn::Error::new(proc_macro2::Span::call_site(), "uk name cannot be empty"));
+                return Err(syn::Error::new(proc_macro2::Span::call_site(), "unique_key name cannot be empty"));
             }
             if syn::parse_str::<Ident>(name).is_err() {
                 return Err(syn::Error::new(
                     proc_macro2::Span::call_site(),
-                    format!("uk name '{name}' must be a valid Rust identifier"),
+                    format!("unique_key name '{name}' must be a valid Rust identifier"),
                 ));
             }
             if !names.insert(name.clone()) {
-                return Err(syn::Error::new(proc_macro2::Span::call_site(), format!("duplicate uk name '{name}'")));
+                return Err(syn::Error::new(proc_macro2::Span::call_site(), format!("duplicate unique_key name '{name}'")));
             }
         }
     } else if let Some(uk) = args.unique_keys.first()
@@ -209,7 +209,7 @@ pub(crate) fn parse_record_args(args_ts: proc_macro2::TokenStream) -> syn::Resul
     {
         return Err(syn::Error::new(
             proc_macro2::Span::call_site(),
-            format!("uk name '{name}' must be a valid Rust identifier"),
+            format!("unique_key name '{name}' must be a valid Rust identifier"),
         ));
     }
 

@@ -1,4 +1,4 @@
-error: uk field 'missing_field' not found
+error: unique_key field 'missing_field' not found
  --> tests/compile_fail/uk/uk_field_not_found.rs:6:66
   |
 6 | #[record(kind = 1, record_len = 64, unique_key(id = 0, fields = [missing_field]))]

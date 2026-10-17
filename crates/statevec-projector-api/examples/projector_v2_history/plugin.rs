@@ -171,16 +171,16 @@ impl PreparedProjector for Prepared {
                 continue;
             }
             match source.next_timeout(Duration::from_millis(10))? {
-                Delivery::RaftEntry(loan) => {
-                    let cut = loan.token();
-                    let entry = store::Entry::read(loan.view(), cut.offset().ok_or(ProjectorError::Application { code: 1103 })?)?;
+                Delivery::RaftEntry(delivery) => {
+                    let token = delivery.token();
+                    let entry = store::Entry::read(delivery.view(), token.offset().ok_or(ProjectorError::Application { code: 1103 })?)?;
                     self.store
                         .commit_entry(&entry)
                         .map_err(|e| e.failure(ProjectorIoStage::StoreWrite))?;
                     // No automatic ACK: this assertion follows confirmed save.
                     let restored = self.restored.as_ref().map_or(0, |p| p.raft_index);
                     if entry.offset.raft_index >= restored {
-                        report = Some(PendingDurableOffset::new(cut.declare_durable().map_err(|_| ProjectorError::Application { code: 1103 })?));
+                        report = Some(PendingDurableOffset::new(token.declare_durable().map_err(|_| ProjectorError::Application { code: 1103 })?));
                     }
                 }
                 Delivery::Empty | Delivery::TimedOut => (),

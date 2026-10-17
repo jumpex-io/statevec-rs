@@ -1,4 +1,4 @@
-error: uk field '_reserved' cannot be reserved
+error: unique_key field '_reserved' cannot be reserved
  --> tests/compile_fail/record/reserved_in_uk.rs:6:66
   |
 6 | #[record(kind = 1, record_len = 64, unique_key(id = 0, fields = [_reserved]))]

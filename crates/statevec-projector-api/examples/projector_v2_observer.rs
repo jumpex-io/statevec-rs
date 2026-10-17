@@ -44,10 +44,10 @@ impl PreparedProjector for Prepared {
         writeln!(self.report, "running").map_err(|e| failure(e, ProjectorIoStage::StoreWrite))?;
         loop {
             match source.next_timeout(Duration::from_secs(60))? {
-                Delivery::RaftEntry(loan) => {
-                    let frame = loan.view();
-                    let position = frame.position();
-                    writeln!(self.report, "frame {} {} {}", position.raft_term, position.raft_index, frame.tx_count())
+                Delivery::RaftEntry(entry) => {
+                    let view = entry.view();
+                    let position = view.position();
+                    writeln!(self.report, "frame {} {} {}", position.raft_term, position.raft_index, view.tx_count())
                         .map_err(|e| failure(e, ProjectorIoStage::StoreWrite))?;
                 }
                 Delivery::Stop | Delivery::Disconnected => break,

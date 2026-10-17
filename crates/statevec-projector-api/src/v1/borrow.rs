@@ -21,8 +21,9 @@ pub(super) unsafe fn bytes<'a>(raw: SvBytes) -> Result<&'a [u8], A> {
     }
     if raw.len == 0 { return Ok(&[]); }
     pointer(raw.ptr)?;
-    // SAFETY: the checked host supplies readable spans until the owning entry
-    // is released; callers tie this borrow to that borrow, never to the table.
+    // SAFETY: callers require the host to supply an initialized, readable span
+    // for 'a. They bound 'a by the input call, held entry, or current snapshot
+    // read, as appropriate; pointer/length checks alone do not prove liveness.
     Ok(unsafe { std::slice::from_raw_parts(raw.ptr, raw.len as usize) })
 }
 

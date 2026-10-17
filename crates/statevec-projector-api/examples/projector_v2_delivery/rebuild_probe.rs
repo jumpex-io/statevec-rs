@@ -1,6 +1,6 @@
 //! Test-only loaded ABI probe, not a configured latest-state application.
 //! The model is intentionally local; native source, EOF, token and owner reply
-//! all come through the public SDK. No durable offset or fixture cut is used.
+//! all come through the public SDK. No durable offset or fixture token is used.
 use statevec_projector_api::v1::host::*;
 use super::*;
 use std::{collections::BTreeMap, time::{Duration, Instant}};
@@ -25,10 +25,10 @@ fn digest(model: &Model) -> [u8; 32] {
     }
     hash.finalize().into()
 }
-fn accept(control: &ProjectorControlPort<'_>, cut: &SnapshotToken) -> Result<(), ProjectorError> {
+fn accept(control: &ProjectorControlPort<'_>, token: &SnapshotToken) -> Result<(), ProjectorError> {
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut reply = loop {
-        match control.offer_snapshot_confirmation(cut)? {
+        match control.offer_snapshot_confirmation(token)? {
             Offer::Queued(reply) => break reply,
             Offer::OwnerQueueFull if Instant::now() < deadline => std::thread::yield_now(),
             _ => return Err(fail(920)),
@@ -46,20 +46,20 @@ fn run(io: ProjectorIo<'_>, suffix: bool, report: &mut RebuildReport, acquired: 
     let statevec_projector_api::StartInstruction::Rebuild { target } = io.start_instruction() else { return Err(fail(922)); };
     let ProjectorIoParts { mut source, control, .. } = io.split();
     let mut model = Model::new();
-    let cut = {
-        let Delivery::Snapshot(mut loan) = source.next_timeout(Duration::from_secs(20))? else { return Err(fail(923)); };
-        let info = loan.info();
+    let token = {
+        let Delivery::Snapshot(mut snapshot) = source.next_timeout(Duration::from_secs(20))? else { return Err(fail(923)); };
+        let info = snapshot.info();
         if info.position.raft_index != target { return Err(fail(924)); }
         // Physical test rendezvous: hold the actual SDK borrow while the driver
-        // persists a suffix. It supplies no record, cut or owner decision.
+        // persists a suffix. It supplies no record, token or owner decision.
         if acquired() != 0 { return Err(fail(938)); }
         report.baseline = target;
         // Local premature finish must not reach the host or consume the borrow.
-        if !matches!(loan.finish(), Err(ProjectorError::SnapshotRead(ProjectorSnapshotReadError::Incomplete))) { return Err(fail(925)); }
+        if !matches!(snapshot.finish(), Err(ProjectorError::SnapshotRead(ProjectorSnapshotReadError::Incomplete))) { return Err(fail(925)); }
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             if Instant::now() >= deadline { return Err(fail(926)); }
-            match loan.next_record()? {
+            match snapshot.next_record()? {
                 SnapshotRead::Record(record) => {
                     if model.insert((record.key.kind, record.key.sys_id), (record.revision, record.bytes.to_vec())).is_some() { return Err(fail(927)); }
                 }
@@ -71,15 +71,15 @@ fn run(io: ProjectorIo<'_>, suffix: bool, report: &mut RebuildReport, acquired: 
         if model.len() as u64 != info.record_count { return Err(fail(929)); }
         report.records = info.record_count;
         report.baseline_digest = digest(&model);
-        loan.finish()?
+        snapshot.finish()?
     };
     // Only the complete, installed in-memory model precedes this ACK. It is not
     // a persisted history checkpoint and does not issue report_durable_offset.
-    accept(&control, &cut)?;
+    accept(&control, &token)?;
     if suffix {
-        let Delivery::RaftEntry(loan) = source.next_timeout(Duration::from_secs(20))? else { return Err(fail(930)); };
-        if loan.token().offset().is_some() { return Err(fail(931)); }
-        let view = loan.view();
+        let Delivery::RaftEntry(entry) = source.next_timeout(Duration::from_secs(20))? else { return Err(fail(930)); };
+        if entry.token().offset().is_some() { return Err(fail(931)); }
+        let view = entry.view();
         report.suffix_index = view.position().raft_index;
         if report.suffix_index != target + 1 { return Err(fail(932)); }
         for i in 0..view.tx_count() {
@@ -103,7 +103,7 @@ fn run(io: ProjectorIo<'_>, suffix: bool, report: &mut RebuildReport, acquired: 
         }
     }
     // An exact repeated ACK remains accepted after the live suffix.
-    accept(&control, &cut)?;
+    accept(&control, &token)?;
     report.model_records = model.len() as u64;
     report.suffix_digest = digest(&model);
     Ok(())

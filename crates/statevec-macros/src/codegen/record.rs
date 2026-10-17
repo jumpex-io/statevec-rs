@@ -111,25 +111,25 @@ pub(crate) fn expand_record(
     let field_count = active_fields.len();
     let has_unique_keys = !record_args.unique_keys.is_empty();
 
-    // validate uk fields
+    // Validate unique_key fields.
     for unique_key in &record_args.unique_keys {
         if unique_key.fields.is_empty() {
             return Err(syn::Error::new(name.span(), "unique_key(id = N, fields = [...]) cannot be empty"));
         }
         for uk in unique_key.fields.iter() {
             let Some(found) = parsed_fields.iter().find(|f| f.ident == *uk) else {
-                return Err(syn::Error::new(uk.span(), format!("uk field '{}' not found", uk)));
+                return Err(syn::Error::new(uk.span(), format!("unique_key field '{}' not found", uk)));
             };
             if found.reserved {
-                return Err(syn::Error::new(uk.span(), format!("uk field '{}' cannot be reserved", uk)));
+                return Err(syn::Error::new(uk.span(), format!("unique_key field '{}' cannot be reserved", uk)));
             }
             if !found.uk_supported {
-                return Err(syn::Error::new(uk.span(), format!("field '{}' type is not supported in UK v1", uk)));
+                return Err(syn::Error::new(uk.span(), format!("field '{}' type is not supported in unique_key v1", uk)));
             }
             if !found.immutable {
                 return Err(syn::Error::new(
                     uk.span(),
-                    format!("uk field '{}' must be declared #[field(immutable)]", uk),
+                    format!("unique_key field '{}' must be declared #[field(immutable)]", uk),
                 ));
             }
         }
@@ -230,8 +230,8 @@ pub(crate) fn expand_record(
         let uk_id_const = unique_key
             .name
             .as_deref()
-            .map(|name| format_ident!("{}_UK_ID", screaming(name)))
-            .unwrap_or_else(|| format_ident!("UK_ID"));
+            .map(|name| format_ident!("{}_UNIQUE_KEY_ID", screaming(name)))
+            .unwrap_or_else(|| format_ident!("UNIQUE_KEY_ID"));
         uk_public_fns.push(quote! {
             pub const #uk_id_const: u8 = #uk_id;
         });
@@ -267,7 +267,7 @@ pub(crate) fn expand_record(
 
         if let Some(uk_name) = unique_key.name.as_deref() {
             let fn_name = syn::parse_str::<syn::Ident>(&format!("unique_key_{uk_name}")).map_err(|_| {
-                syn::Error::new(name.span(), format!("uk name '{uk_name}' cannot be used as a Rust helper name"))
+                syn::Error::new(name.span(), format!("unique_key name '{uk_name}' cannot be used as a Rust helper name"))
             })?;
             let named_uk_fn_args = unique_key.fields.iter().map(|uk_ident| {
                 let f = parsed_fields.iter().find(|f| f.ident == *uk_ident).unwrap();

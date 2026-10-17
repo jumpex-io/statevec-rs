@@ -29,7 +29,7 @@ pub enum ProjectionContext {
 }
 
 /// Read-only source identity and position. This is persistable metadata, not a
-/// live token token. A loaded position must be verified by runtime restore/replay.
+/// live delivery token. A loaded position must be verified by runtime restore/replay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourcePosition {
     pub cluster_identity: Digest32,
@@ -99,7 +99,7 @@ pub enum SupportedHistoryModes { Continuous, LatestState, Both }
 #[non_exhaustive]
 pub enum StartInstruction { DeliverEntries, Rebuild { target: u64 } }
 
-/// Runtime disposition of a checkpoint publication. It never changes store durability.
+/// Native owner's refusal of a control request. It never changes store durability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProjectorControlRejection {

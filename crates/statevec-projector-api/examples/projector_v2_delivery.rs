@@ -31,8 +31,8 @@ pub unsafe extern "C" fn statevec_projector_delivery_probe_v2(
     let run = unsafe { p::host::with_host(&*table, &*startup, |io| {
         let parts = io.split();
         let control = parts.control.clone();
-        let cut = consume(parts, count, &mut result)?;
-        offer_fixture_checkpoint(control, cut)
+        let token = consume(parts, count, &mut result)?;
+        offer_fixture_checkpoint(control, token)
     }) };
     match run {
         Ok(value) => { unsafe { report.write(result); completion.write(value); } SvStatus::SUCCESS }
@@ -53,8 +53,8 @@ fn consume(parts: ProjectorIoParts<'_>, count: u64, result: &mut Report) -> Resu
         while result.frames < count {
             if std::time::Instant::now() >= deadline { return Err(ProjectorError::Application { code: 900 }); }
             match source.next_timeout(std::time::Duration::from_millis(2))? {
-                Delivery::RaftEntry(loan) => {
-                    let view = loan.view();
+                Delivery::RaftEntry(entry) => {
+                    let view = entry.view();
                     result.frames += 1;
                     result.empty += u64::from(view.tx_count() == 0);
                     result.replay += u64::from(view.context() == statevec_projector_api::ProjectionContext::Replay);
@@ -92,7 +92,7 @@ fn consume(parts: ProjectorIoParts<'_>, count: u64, result: &mut Report) -> Resu
                             hash.update((after.len() as u64).to_le_bytes()); hash.update(after);
                         }
                     }
-                    latest = Some(loan.token());
+                    latest = Some(entry.token());
                 }
                 Delivery::Empty | Delivery::TimedOut => {},
                 Delivery::Stop | Delivery::Disconnected | Delivery::Snapshot(_) => return Err(ProjectorError::Application { code: 901 }),
@@ -102,17 +102,17 @@ fn consume(parts: ProjectorIoParts<'_>, count: u64, result: &mut Report) -> Resu
         latest.ok_or(ProjectorError::Application { code: 902 })
 }
 
-fn offer_fixture_checkpoint(control: ProjectorControlPort<'_>, cut: RaftEntryToken) -> Result<(), ProjectorError> {
+fn offer_fixture_checkpoint(control: ProjectorControlPort<'_>, token: RaftEntryToken) -> Result<(), ProjectorError> {
         // Only the raw transport probe calls this synthetic acknowledgement. It
         // tests the control channel, not durable storage or crash recovery.
         // A real author must save effects AND this offset durably before offering
         // it, then return that saved offset from start_request() on the next startup.
         // The report-only configured example below deliberately does neither.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        cut.offset().ok_or(ProjectorError::Application { code: 903 })?.encode_properties().map_err(|_| ProjectorError::Application { code: 903 })?;
-        let publication = cut.declare_durable().map_err(|_| ProjectorError::Application { code: 903 })?;
+        token.offset().ok_or(ProjectorError::Application { code: 903 })?.encode_properties().map_err(|_| ProjectorError::Application { code: 903 })?;
+        let report = token.declare_durable().map_err(|_| ProjectorError::Application { code: 903 })?;
         let mut reply = loop {
-            match control.report_durable_offset(&publication)? {
+            match control.report_durable_offset(&report)? {
                 Offer::Queued(reply) => break reply,
                 Offer::OwnerQueueFull => { if std::time::Instant::now() >= deadline { return Err(ProjectorError::Application { code: 904 }); } std::thread::yield_now(); },
                 _ => return Err(ProjectorError::Application { code: 905 }),

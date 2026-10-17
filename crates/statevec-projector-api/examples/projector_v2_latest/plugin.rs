@@ -55,10 +55,10 @@ pub(crate) fn write_reset(report: &mut std::fs::File, model: &Model, target: u64
     report.write_all(b"\n").map_err(|e| io_failure(e, ProjectorIoStage::StoreWrite))?;
     write(report, model.reset(target))
 }
-// Queue pressure and reply loss retain this exact EOF-issued cut. No retry can
+// Queue pressure and reply loss retain this exact EOF-issued token. No retry can
 // fabricate a replacement or assert persistent history. Stop is not a receipt.
-fn accept(control: &ProjectorControlPort<'_>, stop: &ProjectorStop<'_>, cut: &SnapshotToken) -> Result<bool, ProjectorError> {
-    let mut pending = PendingSnapshotConfirmation::new(*cut);
+fn accept(control: &ProjectorControlPort<'_>, stop: &ProjectorStop<'_>, token: &SnapshotToken) -> Result<bool, ProjectorError> {
+    let mut pending = PendingSnapshotConfirmation::new(*token);
     loop {
         if stop.is_stopping()? { return Ok(false); }
         match pending.progress(control)? {
@@ -80,18 +80,18 @@ impl PreparedProjector for Prepared {
         let StartInstruction::Rebuild { target } = io.start_instruction() else { return Err(failure(1206)); };
         let ProjectorIoParts { mut source, control, stop, .. } = io.split();
         let mut model = Model::default();
-        let cut = loop {
+        let token = loop {
             match source.next_timeout(Duration::from_millis(10))? {
-                Delivery::Snapshot(mut state) => {
+                Delivery::Snapshot(mut snapshot) => {
                     loop {
-                        match state.next_record()? {
+                        match snapshot.next_record()? {
                             SnapshotRead::Record(record) => model.insert(record.key.kind, record.key.sys_id, record.revision, record.bytes)?,
                             SnapshotRead::Progress => (),
                             SnapshotRead::End => break,
                             SnapshotRead::Stop => return Ok(()),
                         }
                     }
-                    break state.finish()?;
+                    break snapshot.finish()?;
                 }
                 Delivery::Empty | Delivery::TimedOut => (),
                 Delivery::Stop => return Ok(()),
@@ -103,15 +103,15 @@ impl PreparedProjector for Prepared {
         // This output is NOT a durable checkpoint; no fsync/offset is needed.
         if stop.is_stopping()? { return Ok(()); }
         write_reset(&mut self.report, &model, target)?;
-        if !accept(&control, &stop, &cut)? { return Ok(()); }
+        if !accept(&control, &stop, &token)? { return Ok(()); }
         write(&mut self.report, serde_json::json!({ "type": "ready", "raft_index": target.to_string() }))?;
         let mut index = target;
         loop {
             match source.next_timeout(Duration::from_millis(10))? {
-                Delivery::RaftEntry(frame) => {
-                    let view = frame.view();
+                Delivery::RaftEntry(entry) => {
+                    let view = entry.view();
                     let next = view.position().raft_index;
-                    if index.checked_add(1) != Some(next) || frame.token().offset().is_some() { return Err(failure(1207)); }
+                    if index.checked_add(1) != Some(next) || entry.token().offset().is_some() { return Err(failure(1207)); }
                     let mut changes = Vec::new();
                     for i in 0..view.tx_count() {
                         let tx = view.tx(i)?;

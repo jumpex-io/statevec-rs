@@ -193,11 +193,11 @@ For latest-state initialization, the first source delivery is a `SnapshotReader`
 `info()` gives the exact frozen baseline and live-record count. `next_record()`
 lends one record, returns `Progress` for a bounded scan quantum, or returns `End`
 only after the real complete scan. Neither an error nor `Stop` is EOF. Borrowed
-bytes must end before another read; the source entry cannot move between threads.
-After `End`, `finish()` consumes the native entry and yields a `SnapshotToken`.
+bytes must end before another read; the snapshot reader cannot move between threads.
+After `End`, `finish()` releases the native snapshot reader and yields a `SnapshotToken`.
 Install the complete in-memory model before `control.offer_snapshot_confirmation(&token)`;
 Accepted permits ordered delivery from S+1. No offset file or database is read
-or written by this path. Dropping an unfinished entry cannot grant readiness;
+or written by this path. Dropping an unfinished snapshot reader cannot grant readiness;
 an explicit model/read/service failure retains precedence over abandonment.
 
 ## Export a configured continuous-history worker

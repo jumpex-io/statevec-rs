@@ -1,4 +1,4 @@
-error: record supports at most 3 UK definitions
+error: record supports at most 3 unique_key definitions
   --> tests/compile_fail/uk/uk_too_many.rs:3:1
    |
  3 | / #[record(
