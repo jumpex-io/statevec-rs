@@ -19,6 +19,10 @@ use an exact `rev` and retain the lockfile for reproducible deployments, not a
 moving branch head. Promotion to `dev` is not a registry release or release
 qualification, and the package version alone does not establish compatibility.
 
+The unused SDK `throughput-probe` feature and `RuntimeApiProbe` have been
+retired. Runtime-engine instrumentation is owned by the native host, not the
+SDK; this removal does not retire the native engine's separate probe.
+
 ## Start here
 
 Read the [user guide](docs/user-guide/README.md), then run the examples:

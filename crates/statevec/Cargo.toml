@@ -34,6 +34,3 @@ crate-type = ["cdylib"]
 [[example]]
 name = "core_v3_exchange_no_rules"
 crate-type = ["cdylib"]
-
-[features]
-throughput-probe = ["statevec_api/throughput-probe"]

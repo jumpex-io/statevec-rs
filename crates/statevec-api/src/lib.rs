@@ -20,7 +20,6 @@ pub mod plugin_v3;
 mod transaction_position;
 pub use transaction_position::TxPositionUnavailable;
 pub use business_code::BusinessRejectCode;
-mod throughput_probe;
 pub use plugin_abi_v1::{
     ExportedRuntimePluginV2Handle, RUNTIME_PLUGIN_ABI_VERSION_V2, RUNTIME_PLUGIN_ENTRY_V2_SYMBOL, RuntimeBytesMutRef,
     RuntimeBytesMutVisitor, RuntimeBytesRef, RuntimeBytesVisitor, RuntimeCallStatus, RuntimeCanonicalIndexCountView,
@@ -31,11 +30,6 @@ pub use plugin_abi_v1::{
     runtime_error_text, runtime_plugin_create_runtime_v1, runtime_plugin_destroy_runtime_v1, runtime_plugin_name_v1,
     runtime_plugin_on_unload_v1, runtime_plugin_run_tx_v1, runtime_plugin_schema_bytes_v1,
     runtime_plugin_validate_biz_invariants_v1, write_runtime_error,
-};
-pub use throughput_probe::RuntimeApiProbe;
-use throughput_probe::{
-    on_runtime_host_update_typed_by_uk, on_runtime_host_with_read_typed_by_uk,
-    on_typed_tx_update_or_create_typed_by_uk, on_typed_tx_update_typed_by_uk, on_typed_tx_with_read_typed_by_uk,
 };
 
 /// Logical API compatibility version.
@@ -270,7 +264,6 @@ pub trait RuntimeHostContextExt: RuntimeHostContext {
         P: AsRef<[u8]>,
         F: FnOnce(R::Access<'_>) -> T,
     {
-        on_runtime_host_with_read_typed_by_uk();
         let mut f = Some(f);
         let mut out = None;
         let found = self.with_read_typed_by_uk_raw(R::KIND, uk.as_ref(), &mut |data| {
@@ -306,7 +299,6 @@ pub trait RuntimeHostContextExt: RuntimeHostContext {
         P: AsRef<[u8]>,
         F: for<'b> FnOnce(&mut R::UpdateBuilder<'b>) -> T,
     {
-        on_runtime_host_update_typed_by_uk();
         let mut f = Some(f);
         let mut out = None;
         let found = self.update_typed_by_uk_raw(R::KIND, uk.as_ref(), &mut |buf| {
@@ -825,7 +817,6 @@ impl<Ctx: TxContext + ?Sized> TypedTxContext for Ctx {
         P: AsRef<[u8]>,
         F: FnOnce(R::Access<'_>) -> T,
     {
-        on_typed_tx_with_read_typed_by_uk();
         let Some(sys_id) = TxUkContext::resolve_uk_id(self, R::KIND, uk_id, uk.as_ref())? else {
             return Ok(None);
         };
@@ -883,7 +874,6 @@ impl<Ctx: TxContext + ?Sized> TypedTxContext for Ctx {
         P: AsRef<[u8]>,
         F: for<'b> FnOnce(&mut R::UpdateBuilder<'b>) -> T,
     {
-        on_typed_tx_update_typed_by_uk();
         let Some(sys_id) = TxUkContext::resolve_uk_id(self, R::KIND, uk_id, uk.as_ref())? else {
             return Ok(None);
         };
@@ -900,7 +890,6 @@ impl<Ctx: TxContext + ?Sized> TypedTxContext for Ctx {
         FU: for<'b> FnOnce(&mut R::UpdateBuilder<'b>) -> T,
         FC: for<'b> FnOnce(&mut R::NewBuilder<'b>) -> T,
     {
-        on_typed_tx_update_or_create_typed_by_uk();
         if let Some(value) = self.update_typed_by_uk::<R, P, T, FU>(uk, update)? {
             return Ok(value);
         }

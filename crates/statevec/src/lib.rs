@@ -20,7 +20,7 @@ pub use statevec_model;
 
 pub use statevec_api::{
     BizInvariantReadContext, BusinessRejectCode, CanonicalIndexCount, CommittedStatus, InvariantReadContextExt,
-    ReferenceTimeUnavailable, RejectedErrorCode, RuntimeApiProbe, RuntimeCommandEnvelope, RuntimeCommandRef,
+    ReferenceTimeUnavailable, RejectedErrorCode, RuntimeCommandEnvelope, RuntimeCommandRef,
     RuntimeHostContext, RuntimeHostContextExt, RuntimeHostError, RuntimePlugin, RuntimePluginError, RuntimePluginFactory,
     RuntimePluginLoadError, RuntimePluginUnloadError, STATEVEC_API_COMPAT_VERSION, STATEVEC_API_VERSION, TxContext,
     TxPositionUnavailable, TxReadContext, TxSysIdCreateContext, TxUkContext, TxWriteContext, TypedTxContext,
