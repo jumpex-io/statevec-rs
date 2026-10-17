@@ -37,7 +37,7 @@ statevec_projector_api = { package = "statevec-projector-api", version = "0.4.0"
 # External
 proc-macro2 = "1"
 quote = "1"
-serde = { version = "1", features = ["derive", "rc"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 smallvec = "1"

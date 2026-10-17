@@ -101,5 +101,22 @@ pub struct EngineCommandPayload {
     /// Payload codec.
     pub payload_codec: PayloadCodec,
     /// Encoded payload bytes.
+    #[serde(with = "shared_payload_bytes")]
     pub payload_bytes: Arc<[u8]>,
+}
+
+// Only the byte sequence is serialized, not its shared allocation. Keep the
+// existing sequence representation (not serialize_bytes) without serde's rc
+// feature; ordinary payload clones still share the Arc allocation.
+mod shared_payload_bytes {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::sync::Arc;
+
+    pub(super) fn serialize<S: Serializer>(bytes: &Arc<[u8]>, serializer: S) -> Result<S::Ok, S::Error> {
+        bytes.as_ref().serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Arc<[u8]>, D::Error> {
+        Box::<[u8]>::deserialize(deserializer).map(Arc::from)
+    }
 }
