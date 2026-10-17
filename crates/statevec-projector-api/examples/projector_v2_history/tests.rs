@@ -1,4 +1,4 @@
-use super::author::store;
+use super::plugin::store;
 use std::path::PathBuf;
 use std::{
     path::Path,

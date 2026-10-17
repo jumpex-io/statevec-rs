@@ -43,13 +43,13 @@ crate-type = ["cdylib"]
 name = "projector_v2_latest"
 crate-type = ["cdylib"]
 
-# Real latest author paused at a physical read or before the native rebuild offer.
+# Real latest plugin paused at a physical read or before the native rebuild offer.
 [[example]]
 name = "projector_v2_latest_probe"
 path = "tests/fixtures/latest_probe.rs"
 crate-type = ["cdylib"]
 
-# Physical queue/reply faults around the same public history author.
+# Physical queue/reply faults around the same public history plugin.
 [[example]]
 name = "projector_v2_history_probe"
 path = "tests/fixtures/history_probe.rs"

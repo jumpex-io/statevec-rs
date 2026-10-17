@@ -1,9 +1,9 @@
-//! Physical faults around the exact public history author. The native receiver,
+//! Physical faults around the exact public history plugin. The native receiver,
 //! publication/cookies and owner ACK remain real; only queue/reply observations
 //! are delayed/lost. No configurable production fault switch.
 #![cfg(target_os = "linux")]
-#[path = "../../examples/projector_v2_history/author.rs"]
-mod author;
+#[path = "../../examples/projector_v2_history/plugin.rs"]
+mod plugin;
 mod history_crash;
 use statevec_projector_api::plugin_v2::{__export, host::ControlReply, ProjectorFailure, ffi::*};
 use std::{
@@ -18,7 +18,7 @@ use std::{
 
 unsafe extern "C" fn configure(config: SvBytes, base: SvBytes, out: *mut *mut c_void) -> SvStatus {
     caught(|| {
-        let result = unsafe { __export::configure(&author::History, config, base, out) };
+        let result = unsafe { __export::configure(&plugin::History, config, base, out) };
         if result.is_success() {
             // The real configure already validated the borrowed UTF-8 span.
             let bytes = unsafe { std::slice::from_raw_parts(base.ptr, base.len as usize) };
@@ -28,7 +28,7 @@ unsafe extern "C" fn configure(config: SvBytes, base: SvBytes, out: *mut *mut c_
     })
 }
 static BASE: __export::ProjectorExportTable =
-    __export::ProjectorExportTable::new::<author::History>(configure);
+    __export::ProjectorExportTable::new::<plugin::History>(configure);
 fn base() -> SvProjectorV2 {
     let mut out = SvDiscovery {
         table: ptr::null(),

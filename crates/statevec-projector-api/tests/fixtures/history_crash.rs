@@ -1,4 +1,4 @@
-//! Test-only physical callback cuts around the unchanged public history author.
+//! Test-only physical callback cuts around the unchanged public history plugin.
 //! No frame, publication, persisted offset or native acceptance is manufactured.
 use statevec_projector_api::{ProjectorCheckpointStatus, plugin_v2::{host::ControlReply, ffi::*}};
 use std::{io::{Read, Write}, os::unix::net::UnixStream, path::{Path, PathBuf},

@@ -1,4 +1,4 @@
-//! Durable public-SDK reference consumer. SQLite mode commits effects and the
+//! Durable public-SDK reference plugin. SQLite mode commits effects and the
 //! four offset fields together; file mode uses idempotent DB effects then the
 //! default offset file. All control work progresses during idle waits.
 use statevec_projector_api::{ProjectorCheckpointStatus, plugin_v2::ProjectorRecovery, plugin_v2::*};

@@ -1,4 +1,4 @@
-//! Public SDK only: fresh private model -> real EOF -> reset -> baseline ACK
+//! Public-SDK plugin: fresh private model -> real EOF -> reset -> baseline ACK
 //! -> ordered deltas. No offset, cache or report is ever read for recovery.
 use statevec_projector_api::{ProjectorInitialization, plugin_v2::ProjectorRecovery, plugin_v2::*};
 use std::{io::Write, num::NonZeroUsize, path::PathBuf, time::Duration};

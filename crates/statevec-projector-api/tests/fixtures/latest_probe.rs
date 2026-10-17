@@ -1,9 +1,9 @@
-//! Linux qualification only: pause the unchanged public latest author at an
+//! Linux qualification only: pause the unchanged public latest plugin at an
 //! actual state read or its first rebuild offer. No model, source, EOF, cut,
 //! native status or ACK is synthesized. The harness owns the SIGKILL decision.
 #![cfg(target_os = "linux")]
-#[path = "../../examples/projector_v2_latest/author.rs"]
-mod author;
+#[path = "../../examples/projector_v2_latest/plugin.rs"]
+mod plugin;
 use statevec_projector_api::{ProjectorCheckpointStatus, plugin_v2::{__export, host::ControlReply, ProjectorFailure, ffi::*}};
 use std::{ffi::c_void, io::{Read, Write}, mem::{ManuallyDrop, size_of}, os::unix::net::UnixStream,
     path::PathBuf, ptr, sync::{Mutex, OnceLock, atomic::{AtomicBool, AtomicUsize, Ordering}}, time::{Duration, Instant}};
@@ -18,7 +18,7 @@ fn caught(f: impl FnOnce() -> SvStatus) -> SvStatus {
 }
 unsafe extern "C" fn configure(config: SvBytes, base_dir: SvBytes, out: *mut *mut c_void) -> SvStatus {
     caught(|| {
-        let result = unsafe { __export::configure(&author::Latest, config, base_dir, out) };
+        let result = unsafe { __export::configure(&plugin::Latest, config, base_dir, out) };
         if result.is_success() {
             // Real configure has validated these borrowed spans and JSON. The
             // fixture only locates its control socket/output, not recovery data.
@@ -33,7 +33,7 @@ unsafe extern "C" fn configure(config: SvBytes, base_dir: SvBytes, out: *mut *mu
         result
     })
 }
-static BASE: __export::ProjectorExportTable = __export::ProjectorExportTable::new::<author::Latest>(configure);
+static BASE: __export::ProjectorExportTable = __export::ProjectorExportTable::new::<plugin::Latest>(configure);
 fn base() -> SvProjectorV2 {
     let mut out = SvDiscovery { table: ptr::null(), table_bytes: 0 };
     assert_eq!(unsafe { BASE.discover(size_of::<SvDiscovery>() as u64, &mut out) }, 0);

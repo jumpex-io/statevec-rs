@@ -1,7 +1,7 @@
 #[allow(dead_code)]
-#[path = "../examples/projector_v2_latest/author.rs"]
-mod author;
-use author::model::Model;
+#[path = "../examples/projector_v2_latest/plugin.rs"]
+mod plugin;
+use plugin::model::Model;
 use statevec_model::RecordKey;
 use statevec_projector_api::plugin_v2::*;
 
@@ -34,7 +34,7 @@ fn duplicate_and_inconsistent_delta_leave_the_model_unchanged() {
 #[test]
 fn configuration_is_strict_and_never_opens_the_report() {
     let directory = tempfile::tempdir().unwrap();
-    let configure = |bytes| author::Latest.configure(ProjectorConfig { bytes, base_dir: directory.path() });
+    let configure = |bytes| plugin::Latest.configure(ProjectorConfig { bytes, base_dir: directory.path() });
     assert!(configure(br#"{"report_path":"output"}"#).is_ok());
     for bytes in [br#"["output"]"#.as_slice(), br#"{"report_path":""}"#, br#"{"report_path":"x","offset_path":"y"}"#, br#"{"report_path":"x","report_path":"y"}"#] {
         assert!(configure(bytes).is_err(), "{bytes:?}");
@@ -50,7 +50,7 @@ fn reset_starts_a_new_output_row_without_reading_or_replacing_old_output() {
     std::fs::write(&path, partial).unwrap();
     // A write-only append descriptor cannot load the previous model or offset.
     let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
-    author::write_reset(&mut file, &Model::default(), 9).unwrap();
+    plugin::write_reset(&mut file, &Model::default(), 9).unwrap();
     let bytes = std::fs::read(&path).unwrap();
     assert_eq!(&bytes[..partial.len()], partial, "old output is not a cache to delete");
     assert_eq!(bytes[partial.len()], b'\n', "partial previous output cannot swallow the new reset");
