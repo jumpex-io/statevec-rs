@@ -7,7 +7,7 @@ use statevec::command_dispatch;
 use statevec::event::GeneratedEventAccess;
 use statevec::record::RecordSchema;
 use statevec::{
-    BizInvariantReadContext, InvariantReadContextExt, RuntimeCommandEnvelope, RuntimeHostContext,
+    BusinessInvariantReadContext, InvariantReadContextExt, RuntimeCommandEnvelope, RuntimeHostContext,
     RuntimePlugin, RuntimePluginError, RuntimePluginFactory, RuntimePluginLoadError,
     RuntimePluginUnloadError, TypedTxContext,
 };
@@ -25,7 +25,7 @@ const ENTRY_TYPE_TRANSFER: u8 = 3;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BankError {
     Host(statevec::RuntimeHostError),
-    InvalidInput(statevec::model::CommandSchemaFailure),
+    InvalidInput(statevec::model::CommandSchemaError),
     UnsupportedCommand(statevec::CommandKind),
     InsufficientFunds,
     InvalidAmount,
@@ -52,10 +52,10 @@ impl From<statevec::RuntimeHostError> for BankError {
     fn from(source: statevec::RuntimeHostError) -> Self { Self::Host(source) }
 }
 
-impl From<statevec::model::CommandSchemaFailure> for BankError {
-    fn from(source: statevec::model::CommandSchemaFailure) -> Self {
+impl From<statevec::model::CommandSchemaError> for BankError {
+    fn from(source: statevec::model::CommandSchemaError) -> Self {
         match source {
-            statevec::model::CommandSchemaFailure::UnsupportedKind { kind } => Self::UnsupportedCommand(kind),
+            statevec::model::CommandSchemaError::UnsupportedKind { kind } => Self::UnsupportedCommand(kind),
             other => Self::InvalidInput(other),
         }
     }
@@ -100,8 +100,8 @@ impl BankRuntime {
         debit_delta: u64,
         check_nonneg: bool,
     ) -> Result<(u64, u64), BankError> {
-        tx.update_or_create_typed_by_uk::<Account, _, _, _, _>(
-            Account::uk(account_id),
+        tx.update_or_create_typed_by_unique_key::<Account, _, _, _, _>(
+            Account::unique_key(account_id),
             |r| -> Result<(u64, u64), BankError> {
                 let new_credit = r
                     .total_credit()
@@ -242,7 +242,7 @@ impl RuntimePlugin for BankRuntime {
         self.dispatch(tx, command).map_err(|error| RuntimePluginError::new(error.to_string()))
     }
 
-    fn validate_biz_invariants(&self, ctx: &dyn BizInvariantReadContext) -> Result<(), String> {
+    fn validate_business_invariants(&self, ctx: &dyn BusinessInvariantReadContext) -> Result<(), String> {
         let mut keys = Vec::new();
         ctx.for_each_record_key_raw(Account::KIND, &mut |key| keys.push(key))
             .map_err(|e| e.to_string())?;
@@ -318,11 +318,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            host.expect::<Account, _>(Account::uk(1), |account| account.total_credit()),
+            host.expect::<Account, _>(Account::unique_key(1), |account| account.total_credit()),
             100
         );
         assert_eq!(
-            host.expect::<Account, _>(Account::uk(PLATFORM_ACCOUNT_ID), |account| {
+            host.expect::<Account, _>(Account::unique_key(PLATFORM_ACCOUNT_ID), |account| {
                 account.total_debit()
             }),
             100

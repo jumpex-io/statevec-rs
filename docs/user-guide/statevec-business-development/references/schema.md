@@ -26,7 +26,7 @@ pub mod v1_0 {
         Cancelled = 3,
     }
 
-    #[record(kind = 1, record_len = 64, uk(id = 0, fields = [account_id]))]
+    #[record(kind = 1, record_len = 64, unique_key(id = 0, fields = [account_id]))]
     pub struct Account {
         #[field(index = 1, immutable)]
         pub account_id: u64,
@@ -88,8 +88,8 @@ neither bytes nor schema identity.
 #[record(
     kind = 11,
     record_len = 128,
-    uk(id = 0, name = "by_account_client", fields = [account_id, client_id]),
-    uk(id = 1, name = "by_external_id", fields = [external_id]),
+    unique_key(id = 0, name = "by_account_client", fields = [account_id, client_id]),
+    unique_key(id = 1, name = "by_external_id", fields = [external_id]),
     index(id = 0, name = "by_account_status", fields = [account_id, status])
 )]
 pub struct Order { /* fields */ }
@@ -121,9 +121,9 @@ parser rejects it.
   with its sign bit flipped. Byte order matches signed value order within that
   field's schema scale; the scale is preserved in IDL and schema identity.
   Generated helpers and IDL-imported generic encoders produce the same bytes.
-- Generated helpers: `Order::uk(..)` encodes UK 0, `Order::uk_<name>(..)`
+- Generated helpers: `Order::unique_key(..)` encodes UK 0, `Order::unique_key_<name>(..)`
   encodes a named UK, and `Order::<NAME>_UK_ID` is its id. For
-  `name = "by_external_id"`, use `Order::uk_by_external_id(..)`.
+  `name = "by_external_id"`, use `Order::unique_key_by_external_id(..)`.
 - A UK value identifies at most one live record of that kind. Choose fields the
   business already treats as an identity, such as an account number or an
   external order id.

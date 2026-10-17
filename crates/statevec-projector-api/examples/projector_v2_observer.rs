@@ -13,9 +13,9 @@ struct Prepared { report: std::fs::File }
 impl ProjectorModule for Observer {
     const SUPPORTED_HISTORY_MODES: SupportedHistoryModes = SupportedHistoryModes::Continuous;
     type Configured = Config;
-    fn configure(&self, input: ProjectorConfig<'_>) -> Result<Config, ConfigureFailure> {
-        let mut config: Config = serde_json::from_slice(input.bytes).map_err(|_| ConfigureFailure::Invalid { code: 1 })?;
-        if config.report_path.as_os_str().is_empty() { return Err(ConfigureFailure::Invalid { code: 2 }); }
+    fn configure(&self, input: ProjectorConfig<'_>) -> Result<Config, ConfigureError> {
+        let mut config: Config = serde_json::from_slice(input.bytes).map_err(|_| ConfigureError::Invalid { code: 1 })?;
+        if config.report_path.as_os_str().is_empty() { return Err(ConfigureError::Invalid { code: 2 }); }
         if config.report_path.is_relative() { config.report_path = input.base_dir.join(config.report_path); }
         Ok(config)
     }

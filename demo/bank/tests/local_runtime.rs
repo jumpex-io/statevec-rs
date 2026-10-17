@@ -21,7 +21,7 @@ fn withdrawal_is_refused_without_changing_state() {
 
     assert_eq!(error, BankError::InsufficientFunds);
     assert_eq!(error.rejection_code().unwrap().get(), 1);
-    assert_eq!(engine.expect::<Account, _>(Account::uk(42), |r| r.total_credit()), 100);
+    assert_eq!(engine.expect::<Account, _>(Account::unique_key(42), |r| r.total_credit()), 100);
     assert_eq!(engine.events(), events_before);
 }
 

@@ -1,4 +1,4 @@
-error: pk(...) is no longer supported; use uk(id = 0, fields = [...])
+error: pk(...) is no longer supported; use unique_key(id = 0, fields = [...])
  --> tests/compile_fail/record/old_pk_attribute.rs:3:37
   |
 3 | #[record(kind = 1, record_len = 64, pk(fields = [id]))]

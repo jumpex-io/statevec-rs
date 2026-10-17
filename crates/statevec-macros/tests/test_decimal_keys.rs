@@ -16,7 +16,7 @@ pub enum Side {
 }
 
 #[record(kind = 20, record_len = 128,
-    uk(id = 0, fields = [symbol_id, side, price]),
+    unique_key(id = 0, fields = [symbol_id, side, price]),
     index(id = 0, name = "by_price", fields = [symbol_id, price]))]
 pub struct PriceLevel {
     #[field(index = 1, immutable)]
@@ -67,18 +67,18 @@ fn decimal_composite_keys_preserve_full_signed_order_and_idl_equivalence() {
             .init_symbol_id(7)
             .init_side(Side::Buy)
             .init_price(value);
-        let generated = PriceLevel::uk(7, Side::Buy, value);
+        let generated = PriceLevel::unique_key(7, Side::Buy, value);
         assert_eq!(generated.len(), 25);
         let mut expected = 7u64.to_be_bytes().to_vec();
         expected.push(1);
         expected.extend_from_slice(&((mantissa as u128) ^ (1u128 << 127)).to_be_bytes());
         assert_eq!(generated.as_slice(), expected);
         assert_eq!(
-            registry.encode_uk(PriceLevel::KIND, &bytes),
+            registry.encode_unique_key(PriceLevel::KIND, &bytes),
             Some(generated.clone())
         );
         assert_eq!(
-            imported.encode_uk(PriceLevel::KIND, &bytes),
+            imported.encode_unique_key(PriceLevel::KIND, &bytes),
             Some(generated.clone())
         );
         assert_eq!(
@@ -89,15 +89,15 @@ fn decimal_composite_keys_preserve_full_signed_order_and_idl_equivalence() {
             assert!(previous < generated);
         }
         previous = Some(generated);
-        assert!(imported.encode_uk(PriceLevel::KIND, &bytes[..24]).is_none());
+        assert!(imported.encode_unique_key(PriceLevel::KIND, &bytes[..24]).is_none());
     }
     assert!(
-        PriceLevel::uk(7, Side::Buy, Decimal::from_mantissa(i128::MAX))
-            < PriceLevel::uk(7, Side::Sell, Decimal::from_mantissa(i128::MIN))
+        PriceLevel::unique_key(7, Side::Buy, Decimal::from_mantissa(i128::MAX))
+            < PriceLevel::unique_key(7, Side::Sell, Decimal::from_mantissa(i128::MIN))
     );
     assert!(
-        PriceLevel::uk(7, Side::Sell, Decimal::from_mantissa(i128::MAX))
-            < PriceLevel::uk(8, Side::Buy, Decimal::from_mantissa(i128::MIN))
+        PriceLevel::unique_key(7, Side::Sell, Decimal::from_mantissa(i128::MAX))
+            < PriceLevel::unique_key(8, Side::Buy, Decimal::from_mantissa(i128::MIN))
     );
     assert_eq!(imported.identity(), registry.identity());
     assert_eq!(
@@ -111,14 +111,14 @@ fn same_scale_decimal_literals_have_one_key_representation() {
     let a = "1.5".parse::<Decimal<8>>().unwrap();
     let b = "1.50000000".parse::<Decimal<8>>().unwrap();
     assert_eq!(
-        PriceLevel::uk(1, Side::Buy, a),
-        PriceLevel::uk(1, Side::Buy, b)
+        PriceLevel::unique_key(1, Side::Buy, a),
+        PriceLevel::unique_key(1, Side::Buy, b)
     );
     let a = "-0".parse::<Decimal<8>>().unwrap();
     let b = "0.00000000".parse::<Decimal<8>>().unwrap();
     assert_eq!(
-        PriceLevel::uk(1, Side::Buy, a),
-        PriceLevel::uk(1, Side::Buy, b)
+        PriceLevel::unique_key(1, Side::Buy, a),
+        PriceLevel::unique_key(1, Side::Buy, b)
     );
 }
 

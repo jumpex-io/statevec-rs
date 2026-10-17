@@ -52,7 +52,7 @@ pub struct TxView<'a> { host: &'a ScopeData, cookie: u64, index: u64, raw: SvTra
 impl TxView<'_> {
     pub fn result(&self) -> TxResult<'_> {
         TxResult { tx_seq: self.raw.tx_seq, ordinal: self.raw.ordinal, tx_id: Digest32::new(self.raw.tx_id), tx_chain_hash: Digest32::new(self.raw.tx_chain_hash),
-            result_digest_profile: self.raw.result_digest_profile, result_digest: unsafe { bytes(self.raw.result_digest).expect("validated loan span") }, sys_result_code: self.raw.sys_result_code, biz_code: self.raw.biz_code }
+            result_digest_profile: self.raw.result_digest_profile, result_digest: unsafe { bytes(self.raw.result_digest).expect("validated loan span") }, system_code: self.raw.sys_result_code, business_code: self.raw.biz_code }
     }
     pub fn schema_identity(&self) -> SchemaIdentity {
         let s = self.raw.schema;

@@ -62,7 +62,7 @@ use statevec::prelude::*;
 pub mod ledger {
     use super::*;
 
-    #[record(kind = 1, record_len = 64, uk(id = 0, fields = [account_id]))]
+    #[record(kind = 1, record_len = 64, unique_key(id = 0, fields = [account_id]))]
     pub struct Account {
         #[field(index = 1, immutable)]
         pub account_id: u64,

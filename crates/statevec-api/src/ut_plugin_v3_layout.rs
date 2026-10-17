@@ -1,4 +1,4 @@
-use crate::plugin_v3::ffi::*;
+use crate::v1::ffi::*;
 use std::mem::{align_of, offset_of, size_of};
 use statevec_model::{SchemaIdentity, Version};
 

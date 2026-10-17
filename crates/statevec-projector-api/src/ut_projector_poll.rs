@@ -35,7 +35,7 @@ struct Value(Arc<Held>);
 impl ProjectorModule for Module {
     const SUPPORTED_HISTORY_MODES: SupportedHistoryModes = SupportedHistoryModes::Continuous;
     type Configured = Value;
-    fn configure(&self, _: ProjectorConfig<'_>) -> Result<Value, ConfigureFailure> { Ok(Value(self.0.clone())) }
+    fn configure(&self, _: ProjectorConfig<'_>) -> Result<Value, ConfigureError> { Ok(Value(self.0.clone())) }
 }
 impl ConfiguredProjector for Value {
     type Prepared = Value;

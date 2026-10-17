@@ -1,7 +1,7 @@
 //! Safe authoring surface for the fixed-version Core V3 host.
-use super::{ConfigureFailure, CreateFailure, ExecutionFailure, TxFailure, tx::PluginTx};
+use super::{ConfigureError, CoreCreateError, CoreExecutionError, CoreTxError, tx::PluginTx};
 use crate::{ReferenceTimeUnavailable, RuntimeCommandRef};
-use statevec_model::{CommandSchemaFailure, RecordKey, SchemaRegistry};
+use statevec_model::{CommandSchemaError, RecordKey, SchemaRegistry};
 
 pub struct CoreConfig<'a> {
     pub bytes: &'a [u8],
@@ -15,7 +15,7 @@ pub struct CoreMetadata<'a> {
 
 pub trait CoreModule: Send + Sync + 'static {
     type Configured: ConfiguredCore;
-    fn configure(&self, config: CoreConfig<'_>) -> Result<Self::Configured, ConfigureFailure>;
+    fn configure(&self, config: CoreConfig<'_>) -> Result<Self::Configured, ConfigureError>;
 }
 
 /// Immutable configuration, parsed once before a profile/root is selected.
@@ -24,10 +24,10 @@ pub trait CoreModule: Send + Sync + 'static {
 pub trait ConfiguredCore: Send + Sync + 'static {
     type Runtime: CoreRuntime;
     fn metadata(&self) -> CoreMetadata<'_>;
-    fn create_instance(&self) -> Result<Self::Runtime, CreateFailure>;
+    fn create_instance(&self) -> Result<Self::Runtime, CoreCreateError>;
 }
 
-pub type TxInvariantHook<R> = fn(&R, &dyn CandidateRead) -> Result<(), TxFailure>;
+pub type TxInvariantHook<R> = fn(&R, &dyn CandidateRead) -> Result<(), CoreTxError>;
 
 /// One engine-thread instance. The SDK catches unwinds at every C boundary;
 /// catching an unwind does not authorize reuse of this instance.
@@ -36,12 +36,12 @@ pub trait CoreRuntime: Sized + 'static {
     fn preflight_command(
         &self,
         command: &RuntimeCommandRef<'_>,
-    ) -> Result<(), CommandSchemaFailure>;
+    ) -> Result<(), CommandSchemaError>;
     fn run_tx(
         &self,
         tx: &mut PluginTx<'_>,
         command: &RuntimeCommandRef<'_>,
-    ) -> Result<(), TxFailure>;
+    ) -> Result<(), CoreTxError>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,30 +77,30 @@ pub trait CandidateRead {
         &self,
         key: RecordKey,
         visit: &mut dyn FnMut(&[u8]),
-    ) -> Result<bool, ExecutionFailure>;
+    ) -> Result<bool, CoreExecutionError>;
     fn read_after(
         &self,
         key: RecordKey,
         visit: &mut dyn FnMut(&[u8]),
-    ) -> Result<bool, ExecutionFailure>;
-    fn resolve_uk_before(
+    ) -> Result<bool, CoreExecutionError>;
+    fn resolve_unique_key_before(
         &self,
         kind: u16,
-        uk_id: u8,
+        unique_key_id: u8,
         key: &[u8],
-    ) -> Result<Option<u64>, ExecutionFailure>;
-    fn resolve_uk_after(
+    ) -> Result<Option<u64>, CoreExecutionError>;
+    fn resolve_unique_key_after(
         &self,
         kind: u16,
-        uk_id: u8,
+        unique_key_id: u8,
         key: &[u8],
-    ) -> Result<Option<u64>, ExecutionFailure>;
+    ) -> Result<Option<u64>, CoreExecutionError>;
     fn for_each_change(
         &self,
         visit: &mut dyn FnMut(CandidateChange<'_>),
-    ) -> Result<(), ExecutionFailure>;
+    ) -> Result<(), CoreExecutionError>;
     fn for_each_after_change(
         &self,
         visit: &mut dyn FnMut(CandidateAfterChange<'_>),
-    ) -> Result<(), ExecutionFailure>;
+    ) -> Result<(), CoreExecutionError>;
 }

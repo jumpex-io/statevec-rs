@@ -1,11 +1,12 @@
 // Copyright 2026 Jumpex Technology.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Fixed-version Core V3 authoring, exports and typed failure transport.
+//! Core plugin contracts and typed error transport.
 //!
 //! Authors implement CoreModule, ConfiguredCore and CoreRuntime, and use
-//! `statevec_api::export_core_plugin_v3!` to build a loadable library. The host's
-//! native execution/recovery integration is still under construction. A status
+//! `statevec_api::export_core_plugin_v3!` to build a loadable library. `v1`
+//! names the safe Rust API; the macro still exports Core C ABI 3. Neither the
+//! Rust module name nor the Cargo version changes the C ABI. A status
 //! does not prove speculation was discarded or authorize instance reuse. This
 //! API does not bridge the legacy plugin ABI or supply a durable host.
 
@@ -18,7 +19,7 @@ mod borrow;
 mod candidate;
 mod tx;
 #[doc(hidden)]
-#[path = "plugin_v3/export.rs"]
+#[path = "v1/export.rs"]
 pub mod __export;
 pub mod ffi;
 
@@ -28,9 +29,9 @@ pub use author::{
 };
 pub use tx::PluginTx;
 
-pub use failure::{AccessFailure, SchemaFailure, StorageFailure};
-pub use status::{StatusDecodeFailure, SvStatus};
-pub use core_failure::{AbiFailure, ConfigureFailure, CoreFailure, CoreOperation, CreateFailure, ExecutionFailure, HostFailure, ResourceFailure, TxFailure};
+pub use failure::{CoreAccessError, CoreSchemaError, CoreStorageError};
+pub use status::{CoreStatusDecodeError, SvStatus};
+pub use core_failure::{CoreAbiError, ConfigureError, CoreError, CoreOperation, CoreCreateError, CoreExecutionError, HostError, ResourceError, CoreTxError};
 
 #[cfg(test)]
 #[path = "ut_plugin_v3_status.rs"]

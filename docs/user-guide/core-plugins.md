@@ -12,7 +12,7 @@ cargo build -p statevec-api --example core_v3_minimal
 ```
 
 For your own library, set `crate-type = ["cdylib"]` under `[lib]` and implement
-these interfaces from `statevec_api::plugin_v3`:
+these interfaces from `statevec_api::v1`:
 
 - `CoreModule`: parse bounded configuration once. Use a unit struct as the module.
 - `ConfiguredCore`: expose schema and revision, and create independent runtime
@@ -21,6 +21,9 @@ these interfaces from `statevec_api::plugin_v3`:
   `TX_INVARIANTS = None` or a candidate-rule function. The declaration is required.
 
 Export the unit module with `statevec_api::export_core_plugin_v3!(MyModule)`.
+The `v1` module names the safe Rust API. The macro exports Core C ABI 3;
+the Rust module version and Cargo package version do not change the C ABI.
+Use the shared [glossary](../glossary.md) for the public terms.
 Invoke this macro in the final `cdylib` crate, even if the implementation lives
 in another library crate. The macro checks the panic strategy of the crate where
 it expands; exporting through an intermediate `rlib` cannot check the final
@@ -47,9 +50,9 @@ snapshot-candidate runtime instances can coexist; an engine can create and
 discard instances repeatedly.
 
 `PluginTx` implements the existing typed/raw record, unique-key, index-count,
-supplied-id and event interfaces. Its error is `ExecutionFailure`, preserving
-`Access(AccessFailure)` separately from host, panic and ABI failures. Use `?` to
-convert it into `TxFailure`; only `TxFailure::Rejected` carries a business code.
+supplied-id and event interfaces. Its error is `CoreExecutionError`, preserving
+`Access(CoreAccessError)` separately from host, panic and ABI failures. Use `?` to
+convert it into `CoreTxError`; only `CoreTxError::Rejected` carries a business code.
 Time is nanoseconds from `ref_tx_time_ns()`, independent of external command
 time; `tx_seq()` supplies the executing transaction's position. Neither uses a
 local clock. Shared read callbacks may perform other reads. Mutable visitors

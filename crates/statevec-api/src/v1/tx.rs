@@ -1,8 +1,8 @@
 //! Call-scoped safe transaction facade over a checked host table.
-use super::{AbiFailure, ExecutionFailure, SvStatus, TxFailure, borrow::*, ffi::*};
+use super::{CoreAbiError, CoreExecutionError, SvStatus, CoreTxError, borrow::*, ffi::*};
 use crate::{
     CanonicalIndexCount, ReferenceTimeUnavailable, TxPositionUnavailable, TxReadContext,
-    TxSysIdCreateContext, TxUkContext, TxWriteContext,
+    TxSysIdCreateContext, TxUniqueKeyContext, TxWriteContext,
 };
 use statevec_model::RecordKey;
 use std::ffi::c_void;
@@ -12,12 +12,12 @@ use std::ffi::c_void;
 /// visitors require &mut self and cannot call back into this transaction.
 ///
 /// ```compile_fail
-/// use statevec_api::plugin_v3::PluginTx;
+/// use statevec_api::v1::PluginTx;
 /// fn retain<'call>(tx: PluginTx<'call>) -> PluginTx<'static> { tx }
 /// ```
 ///
 /// ```compile_fail
-/// use statevec_api::plugin_v3::PluginTx;
+/// use statevec_api::v1::PluginTx;
 /// fn move_to_thread(tx: PluginTx<'_>) {
 ///     std::thread::scope(|scope| { scope.spawn(move || drop(tx)); });
 /// }
@@ -32,7 +32,7 @@ impl<'call> PluginTx<'call> {
     /// Host table, context and callback storage are live for 'call, have their
     /// V3 C signatures and never unwind, retain loans or run callbacks in
     /// parallel. The table header must be readable even when incompatible.
-    pub(super) unsafe fn from_raw(raw: *const SvTxV3) -> Result<Self, AbiFailure> {
+    pub(super) unsafe fn from_raw(raw: *const SvTxV3) -> Result<Self, CoreAbiError> {
         // SAFETY: forwarding the caller's header/table lifetime obligation.
         let table = unsafe { table(raw, 3, CORE_BASE_CAPABILITIES)? };
         if table.context.is_null()
@@ -50,7 +50,7 @@ impl<'call> PluginTx<'call> {
             || table.delete_uk.is_none()
             || table.emit_event.is_none()
         {
-            return Err(AbiFailure::NullPointer);
+            return Err(CoreAbiError::NullPointer);
         }
         Ok(Self {
             table,
@@ -61,7 +61,7 @@ impl<'call> PluginTx<'call> {
     fn scalar(
         &self,
         callback: unsafe extern "C" fn(*const c_void, *mut u64) -> SvStatus,
-    ) -> Result<u64, ExecutionFailure> {
+    ) -> Result<u64, CoreExecutionError> {
         self.failure.current()?;
         let mut out = 0;
         // SAFETY: validated table, scoped context and initialized output.
@@ -75,7 +75,7 @@ impl<'call> PluginTx<'call> {
         kind: u16,
         requested: Option<u64>,
         data: Vec<u8>,
-    ) -> Result<RecordKey, ExecutionFailure> {
+    ) -> Result<RecordKey, CoreExecutionError> {
         self.failure.current()?;
         let mut out = wire_key(RecordKey { kind: 0, sys_id: 0 });
         // SAFETY: the exact input lives until this synchronous call returns.
@@ -96,23 +96,23 @@ impl<'call> PluginTx<'call> {
             .map_err(abi)
             .inspect_err(|source| self.failure.remember(source))?;
         if out.kind != kind || requested.is_some_and(|id| id != out.sys_id) {
-            let source = abi(AbiFailure::InvalidHandle);
+            let source = abi(CoreAbiError::InvalidHandle);
             self.failure.remember(&source);
             return Err(source);
         }
         Ok(out)
     }
 
-    pub(super) fn finish(&self, result: Result<(), TxFailure>) -> SvStatus {
+    pub(super) fn finish(&self, result: Result<(), CoreTxError>) -> SvStatus {
         self.failure.finish(result)
     }
 }
 
 impl TxReadContext for PluginTx<'_> {
-    type Error = ExecutionFailure;
+    type Error = CoreExecutionError;
     fn ref_tx_time_ns_raw(&self) -> Result<u64, ReferenceTimeUnavailable> {
         self.scalar(self.table.time_ns.unwrap()).map_err(|source| {
-            if !matches!(source, ExecutionFailure::ReferenceTimeUnavailable) {
+            if !matches!(source, CoreExecutionError::ReferenceTimeUnavailable) {
                 self.failure.remember(&source);
             }
             ReferenceTimeUnavailable
@@ -120,7 +120,7 @@ impl TxReadContext for PluginTx<'_> {
     }
     fn tx_seq_raw(&self) -> Result<u64, TxPositionUnavailable> {
         self.scalar(self.table.tx_seq.unwrap()).map_err(|source| {
-            if !matches!(source, ExecutionFailure::TxPositionUnavailable) {
+            if !matches!(source, CoreExecutionError::TxPositionUnavailable) {
                 self.failure.remember(&source);
             }
             TxPositionUnavailable
@@ -178,13 +178,13 @@ impl TxReadContext for PluginTx<'_> {
         self.failure.check(call.failure.unwrap_or(status))?;
         self.failure.check(status)?;
         let checked = if out.reserved != 0 {
-            Err(abi(AbiFailure::Reserved {
+            Err(abi(CoreAbiError::Reserved {
                 actual: out.reserved.into(),
             }))
         } else if out.tag != 0 {
-            Err(abi(AbiFailure::Flag { actual: out.tag }))
+            Err(abi(CoreAbiError::Flag { actual: out.tag }))
         } else if out.count != call.count {
-            Err(abi(AbiFailure::CallbackCount {
+            Err(abi(CoreAbiError::CallbackCount {
                 expected: call.count,
                 actual: out.count,
             }))
@@ -219,11 +219,11 @@ impl TxReadContext for PluginTx<'_> {
         };
         self.failure.check(status)?;
         let result = if out.reserved != 0 {
-            Err(abi(AbiFailure::Reserved {
+            Err(abi(CoreAbiError::Reserved {
                 actual: out.reserved.into(),
             }))
         } else if out.count > cap as u64 {
-            Err(abi(AbiFailure::Length {
+            Err(abi(CoreAbiError::Length {
                 actual: out.count,
                 maximum: cap as u64,
             }))
@@ -231,18 +231,18 @@ impl TxReadContext for PluginTx<'_> {
             match out.tag {
                 0 if out.count < cap as u64 => Ok(CanonicalIndexCount::Exact(out.count as usize)),
                 1 if out.count == cap as u64 => Ok(CanonicalIndexCount::AtLeast(cap)),
-                actual => Err(abi(AbiFailure::Flag { actual })),
+                actual => Err(abi(CoreAbiError::Flag { actual })),
             }
         };
         result.inspect_err(|source| self.failure.remember(source))
     }
 }
 
-impl TxUkContext for PluginTx<'_> {
-    fn resolve_uk(&self, kind: u16, uk: &[u8]) -> Result<Option<u64>, Self::Error> {
-        self.resolve_uk_id(kind, 0, uk)
+impl TxUniqueKeyContext for PluginTx<'_> {
+    fn resolve_unique_key(&self, kind: u16, uk: &[u8]) -> Result<Option<u64>, Self::Error> {
+        self.resolve_unique_key_id(kind, 0, uk)
     }
-    fn resolve_uk_id(&self, kind: u16, uk_id: u8, uk: &[u8]) -> Result<Option<u64>, Self::Error> {
+    fn resolve_unique_key_id(&self, kind: u16, unique_key_id: u8, uk: &[u8]) -> Result<Option<u64>, Self::Error> {
         self.failure.current()?;
         let (mut found, mut id) = (0, 0);
         // SAFETY: checked callback, scoped immutable key and initialized outputs.
@@ -250,7 +250,7 @@ impl TxUkContext for PluginTx<'_> {
             (self.table.resolve_uk.unwrap())(
                 self.table.context,
                 kind,
-                uk_id,
+                unique_key_id,
                 SvBytes::borrowed(uk),
                 &mut found,
                 &mut id,
@@ -275,7 +275,7 @@ impl TxWriteContext for PluginTx<'_> {
         self.failure.current()?;
         let mut call = WriteCall::new(|actual, bytes: &mut [u8]| {
             if actual != key {
-                return Err(abi(AbiFailure::InvalidHandle));
+                return Err(abi(CoreAbiError::InvalidHandle));
             }
             Ok(visit(bytes))
         });
@@ -334,7 +334,7 @@ impl<F, T> WriteCall<F, T> {
     }
     fn callback(&self) -> SvWriteVisitor
     where
-        F: FnOnce(RecordKey, &mut [u8]) -> Result<T, ExecutionFailure>,
+        F: FnOnce(RecordKey, &mut [u8]) -> Result<T, CoreExecutionError>,
     {
         Some(write_visit::<F, T>)
     }
@@ -343,12 +343,12 @@ impl<F, T> WriteCall<F, T> {
         status: SvStatus,
         found: u32,
         scope: &CallFailure,
-    ) -> Result<Option<T>, ExecutionFailure> {
+    ) -> Result<Option<T>, CoreExecutionError> {
         self.0.finish(status, found, scope)
     }
 }
 unsafe extern "C" fn write_visit<
-    F: FnOnce(RecordKey, &mut [u8]) -> Result<T, ExecutionFailure>,
+    F: FnOnce(RecordKey, &mut [u8]) -> Result<T, CoreExecutionError>,
     T,
 >(
     context: *mut c_void,
@@ -363,7 +363,7 @@ unsafe extern "C" fn write_visit<
     let status = caught(|| {
         call.calls = call.calls.saturating_add(1);
         let Some(visit) = call.visit.take() else {
-            return (&AbiFailure::CallbackCount {
+            return (&CoreAbiError::CallbackCount {
                 expected: 1,
                 actual: call.calls,
             })
@@ -374,14 +374,14 @@ unsafe extern "C" fn write_visit<
             Err(source) => return (&source).into(),
         };
         if value.len > isize::MAX as u64 {
-            return (&AbiFailure::Length {
+            return (&CoreAbiError::Length {
                 actual: value.len,
                 maximum: isize::MAX as u64,
             })
                 .into();
         }
         if value.ptr.addr().checked_add(value.len as usize).is_none() {
-            return (&AbiFailure::Length {
+            return (&CoreAbiError::Length {
                 actual: value.len,
                 maximum: (usize::MAX - value.ptr.addr()) as u64,
             })
@@ -434,7 +434,7 @@ unsafe extern "C" fn key_visit(context: *mut c_void, value: SvKey, flow: *mut u3
             Err(source) => return (&source).into(),
         };
         if key.kind != call.kind {
-            return (&AbiFailure::InvalidHandle).into();
+            return (&CoreAbiError::InvalidHandle).into();
         }
         (call.visit)(key);
         call.count = call.count.saturating_add(1);

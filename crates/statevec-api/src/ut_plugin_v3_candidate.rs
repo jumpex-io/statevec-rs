@@ -58,12 +58,12 @@ unsafe extern "C" fn resolve(
     _: *const c_void,
     view: u32,
     kind: u16,
-    uk_id: u8,
+    unique_key_id: u8,
     key: SvBytes,
     found: *mut u32,
     id: *mut u64,
 ) -> SvStatus {
-    assert_eq!((kind, uk_id), (7, 2));
+    assert_eq!((kind, unique_key_id), (7, 2));
     assert_eq!(unsafe { bytes(key).unwrap() }, &[42]);
     unsafe {
         found.write(1);
@@ -216,8 +216,8 @@ fn candidate_borrows_unchanged_records_and_after_only_never_fetches_before() {
         })
         .unwrap();
     assert_eq!(seen, [(0, 0), (1, 1), (2, 2)]);
-    assert_eq!(candidate.resolve_uk_before(7, 2, &[42]).unwrap(), Some(10));
-    assert_eq!(candidate.resolve_uk_after(7, 2, &[42]).unwrap(), Some(11));
+    assert_eq!(candidate.resolve_unique_key_before(7, 2, &[42]).unwrap(), Some(10));
+    assert_eq!(candidate.resolve_unique_key_after(7, 2, &[42]).unwrap(), Some(11));
     assert!(
         candidate
             .read_before(
@@ -252,8 +252,8 @@ fn candidate_callback_failure_cannot_be_hidden_by_host_success(fault: Fault) {
         })
         .unwrap_err();
     match fault {
-        Fault::VisitorPanic => assert_eq!(failure, ExecutionFailure::PluginPanicked),
-        _ => assert!(matches!(failure, ExecutionFailure::AbiContract(_))),
+        Fault::VisitorPanic => assert_eq!(failure, CoreExecutionError::PluginPanicked),
+        _ => assert!(matches!(failure, CoreExecutionError::AbiContract(_))),
     }
     assert_eq!(candidate.failure.finish(Ok(())), SvStatus::from(&failure));
     assert_eq!(
@@ -286,6 +286,6 @@ fn candidate_null_read_is_rejected_before_borrow() {
             },
             &mut |_| panic!("invalid borrow")
         ),
-        Err(ExecutionFailure::AbiContract(AbiFailure::NullPointer))
+        Err(CoreExecutionError::AbiContract(CoreAbiError::NullPointer))
     );
 }

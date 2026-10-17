@@ -1,6 +1,6 @@
 //! SDK-generated Core V3 entrypoints. Authors implement safe traits only.
 use super::{
-    AbiFailure, SvStatus, author::*, borrow::*, candidate::Candidate, ffi::*, tx::PluginTx,
+    CoreAbiError, SvStatus, author::*, borrow::*, candidate::Candidate, ffi::*, tx::PluginTx,
 };
 use crate::RuntimeCommandRef;
 use statevec_model::SchemaIdentity;
@@ -108,7 +108,7 @@ pub unsafe fn configure<M: CoreModule>(
             Err(source) => return (&source).into(),
         };
         if std::str::from_utf8(bytes).is_err() {
-            return (&AbiFailure::Utf8).into();
+            return (&CoreAbiError::Utf8).into();
         }
         let configured = match module.configure(CoreConfig { bytes }) {
             Ok(value) => value,
@@ -117,14 +117,14 @@ pub unsafe fn configure<M: CoreModule>(
         let metadata = configured.metadata();
         for (text, maximum) in [(metadata.name, 128), (metadata.revision, 4096)] {
             if text.len() > maximum {
-                return (&AbiFailure::Length {
+                return (&CoreAbiError::Length {
                     actual: text.len() as u64,
                     maximum: maximum as u64,
                 })
                     .into();
             }
             if text.as_bytes().contains(&0) {
-                return (&AbiFailure::EmbeddedNul).into();
+                return (&CoreAbiError::EmbeddedNul).into();
             }
         }
         let (name, revision, idl, schema) = (
@@ -138,7 +138,7 @@ pub unsafe fn configure<M: CoreModule>(
         );
         let maximum = statevec_model::idl::SchemaIdlLimits::default().max_bytes;
         if idl.len() > maximum {
-            return (&AbiFailure::Length {
+            return (&CoreAbiError::Length {
                 actual: idl.len() as u64,
                 maximum: maximum as u64,
             })
@@ -208,7 +208,7 @@ unsafe extern "C" fn create<C: ConfiguredCore>(
                 runtime,
                 _allocation: 0,
             }),
-            Err(source) => return (&super::CoreFailure::Construction(source)).into(),
+            Err(source) => return (&super::CoreError::Construction(source)).into(),
         };
         // SAFETY: successful construction transfers a unique plugin allocation.
         unsafe { out.write(Box::into_raw(instance).cast()) };
@@ -216,13 +216,13 @@ unsafe extern "C" fn create<C: ConfiguredCore>(
     })
 }
 
-unsafe fn command<'a>(raw: *const SvCommand) -> Result<RuntimeCommandRef<'a>, AbiFailure> {
+unsafe fn command<'a>(raw: *const SvCommand) -> Result<RuntimeCommandRef<'a>, CoreAbiError> {
     pointer(raw)?;
     // SAFETY: caller supplies one initialized command, borrowed for the call.
     let raw = unsafe { &*raw };
     let reserved = u64::from(raw.reserved16) | u64::from(raw.reserved32);
     if reserved != 0 {
-        return Err(AbiFailure::Reserved { actual: reserved });
+        return Err(CoreAbiError::Reserved { actual: reserved });
     }
     // SAFETY: payload belongs to this command's call-scoped host input.
     Ok(RuntimeCommandRef::new(
@@ -264,7 +264,7 @@ unsafe extern "C" fn preflight<R: CoreRuntime>(
                 Err(source) => return (&source).into(),
             };
             if let Err(source) = instance.preflight_command(&command) {
-                return (&super::SchemaFailure::from(&source)).into();
+                return (&super::CoreSchemaError::from(&source)).into();
             }
         }
         // SAFETY: canonical success does not report a failing ordinal.
@@ -309,7 +309,7 @@ unsafe extern "C" fn rules_call<R: CoreRuntime>(
 ) -> SvStatus {
     caught(|| {
         let Some(hook) = R::TX_INVARIANTS else {
-            return (&AbiFailure::InvalidHandle).into();
+            return (&CoreAbiError::InvalidHandle).into();
         };
         if let Err(source) = pointer(instance.cast::<Instance<R>>()) {
             return (&source).into();
@@ -362,18 +362,18 @@ macro_rules! export_core_plugin_v3 {
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn statevec_core_plugin_entry_v3(
             out_bytes: u64,
-            out: *mut $crate::plugin_v3::ffi::SvDiscovery,
+            out: *mut $crate::v1::ffi::SvDiscovery,
         ) -> u32 {
             static MODULE: $module = $module;
             unsafe extern "C" fn configure(
-                config: $crate::plugin_v3::ffi::SvBytes,
+                config: $crate::v1::ffi::SvBytes,
                 out: *mut *mut ::std::ffi::c_void,
-            ) -> $crate::plugin_v3::SvStatus {
+            ) -> $crate::v1::SvStatus {
                 // SAFETY: forwarding the host's scoped V3 input/output contract.
-                unsafe { $crate::plugin_v3::__export::configure(&MODULE, config, out) }
+                unsafe { $crate::v1::__export::configure(&MODULE, config, out) }
             }
-            static TABLE: $crate::plugin_v3::__export::CoreExportTable =
-                $crate::plugin_v3::__export::CoreExportTable::new::<$module>(configure);
+            static TABLE: $crate::v1::__export::CoreExportTable =
+                $crate::v1::__export::CoreExportTable::new::<$module>(configure);
             // SAFETY: caller supplies a valid fixed discovery output.
             unsafe { TABLE.discover(out_bytes, out) }
         }

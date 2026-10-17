@@ -60,10 +60,10 @@ pub(crate) fn parse_record_args(args_ts: proc_macro2::TokenStream) -> syn::Resul
         }
 
         if meta.path.is_ident("pk") {
-            return Err(meta.error("pk(...) is no longer supported; use uk(id = 0, fields = [...])"));
+            return Err(meta.error("pk(...) is no longer supported; use unique_key(id = 0, fields = [...])"));
         }
 
-        if meta.path.is_ident("uk") {
+        if meta.path.is_ident("unique_key") {
             let mut uk_id: Option<u8> = None;
             let mut uk_name: Option<String> = None;
             let mut field_idents: Option<Vec<Ident>> = None;
@@ -81,7 +81,7 @@ pub(crate) fn parse_record_args(args_ts: proc_macro2::TokenStream) -> syn::Resul
                 if nested.path.is_ident("fields") {
                     let value: Expr = nested.value()?.parse()?;
                     let Expr::Array(ExprArray { elems, .. }) = value else {
-                        return Err(syn::Error::new(value.span(), "uk(fields = [...]) expected"));
+                        return Err(syn::Error::new(value.span(), "unique_key(fields = [...]) expected"));
                     };
 
                     let mut out = Vec::new();
@@ -97,10 +97,10 @@ pub(crate) fn parse_record_args(args_ts: proc_macro2::TokenStream) -> syn::Resul
                     field_idents = Some(out);
                     return Ok(());
                 }
-                Err(syn::Error::new(nested.path.span(), "unsupported uk(...) option"))
+                Err(syn::Error::new(nested.path.span(), "unsupported unique_key(...) option"))
             })?;
-            let id = uk_id.ok_or_else(|| meta.error("uk(...) requires id = N"))?;
-            let fields = field_idents.ok_or_else(|| meta.error("uk(...) requires fields = [...]"))?;
+            let id = uk_id.ok_or_else(|| meta.error("unique_key(...) requires id = N"))?;
+            let fields = field_idents.ok_or_else(|| meta.error("unique_key(...) requires fields = [...]"))?;
             unique_keys.push(ParsedUniqueKey { id, name: uk_name, fields });
             return Ok(());
         }
@@ -187,7 +187,7 @@ pub(crate) fn parse_record_args(args_ts: proc_macro2::TokenStream) -> syn::Resul
             let Some(name) = uk.name.as_ref() else {
                 return Err(syn::Error::new(
                     proc_macro2::Span::call_site(),
-                    "multiple uk(...) definitions must all declare name = \"...\"",
+                    "multiple unique_key(...) definitions must all declare name = \"...\"",
                 ));
             };
             if name.is_empty() {

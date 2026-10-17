@@ -11,7 +11,7 @@ enum Side {
 mod schema {
     use super::*;
 
-    #[record(kind = 1, record_len = 64, uk(id = 0, fields = [id]))]
+    #[record(kind = 1, record_len = 64, unique_key(id = 0, fields = [id]))]
     pub struct Order {
         #[field(index = 1, immutable)]
         pub id: u64,

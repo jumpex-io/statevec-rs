@@ -55,7 +55,7 @@ fn withdrawal_is_refused_without_changing_state() {
 
     assert_eq!(error, BankError::InsufficientFunds);
     assert_eq!(error.rejection_code().unwrap().get(), 1);
-    assert_eq!(engine.expect::<Account, _>(Account::uk(42), |r| r.total_credit()), 100);
+    assert_eq!(engine.expect::<Account, _>(Account::unique_key(42), |r| r.total_credit()), 100);
     assert_eq!(engine.events(), events_before);
 }
 ```
@@ -85,7 +85,7 @@ engine.transaction(|tx| {
 ```
 
 Use the same explicit-trait form for other overlapping helpers, such as
-`update_typed_by_uk`. Prefer `TypedTxContext` for code shared with business
+`update_typed_by_unique_key`. Prefer `TypedTxContext` for code shared with business
 handlers; `RuntimeHostContextExt` provides the plugin-host helpers.
 
 Cover success, each business refusal, missing and duplicate records, arithmetic
@@ -181,7 +181,7 @@ changes in custom context implementations, despite the patch version:
   context cannot supply it. The method has no default implementation.
 - Replace `PluginTestHost::with_ref_time` with `with_ref_ext_time_us`. Use
   `run_at`/`transaction_at` when a handler also requires transaction time.
-- Direct `TypedTxContext` implementations also implement `resolve_typed_uk`,
+- Direct `TypedTxContext` implementations also implement `resolve_typed_unique_key`,
   `update_typed` and `delete_typed` for record handles. Blanket raw-context
   implementations forward to the existing key and record operations. The V1
   plugin-host adapter refuses these operations explicitly.

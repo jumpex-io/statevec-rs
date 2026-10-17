@@ -7,7 +7,7 @@ use statevec_model::RecordSchema;
 #[schema_module(version = "1.0")]
 mod schema {
     use super::*;
-    #[record(kind = 1, record_len = 64, uk(id = 0, fields = [asset_id]))]
+    #[record(kind = 1, record_len = 64, unique_key(id = 0, fields = [asset_id]))]
     pub struct Asset {
         #[field(index = 1, immutable)]
         pub asset_id: u64,
@@ -28,9 +28,9 @@ fn one_resolved_handle_reads_updates_and_deletes_the_same_record() {
     })
     .unwrap();
     host.transaction(|tx| -> Result<(), RuntimeHostError> {
-        assert_eq!(tx.resolve_typed_uk::<Asset, _>(Asset::uk(9))?, None);
+        assert_eq!(tx.resolve_typed_unique_key::<Asset, _>(Asset::unique_key(9))?, None);
         let id = tx
-            .resolve_typed_uk::<Asset, _>(Asset::uk(1))?
+            .resolve_typed_unique_key::<Asset, _>(Asset::unique_key(1))?
             .expect("existing asset");
         assert_eq!(id, created.sys_id);
         assert_eq!(
@@ -51,7 +51,7 @@ fn one_resolved_handle_reads_updates_and_deletes_the_same_record() {
             None
         );
         assert_eq!(
-            tx.resolve_typed_uk::<Asset, _>(Asset::uk(1))?,
+            tx.resolve_typed_unique_key::<Asset, _>(Asset::unique_key(1))?,
             None,
             "deletion also releases the key"
         );
@@ -76,7 +76,7 @@ fn hosts_without_record_handles_refuse_them_explicitly() {
     })
     .unwrap();
     let plugin = &mut host as &mut dyn RuntimeHostContext;
-    assert!(plugin.resolve_typed_uk::<Asset, _>(Asset::uk(1)).is_err());
+    assert!(plugin.resolve_typed_unique_key::<Asset, _>(Asset::unique_key(1)).is_err());
     assert!(
         plugin
             .update_typed::<Asset, _, _>(created.sys_id, |asset| asset.set_precision(4).precision())

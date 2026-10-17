@@ -6,7 +6,7 @@
 use statevec::event::GeneratedEventAccess;
 use statevec::record::RecordSchema;
 use statevec::{
-    BizInvariantReadContext, CommandSchema, GeneratedCommandAccess, InvariantReadContextExt,
+    BusinessInvariantReadContext, CommandSchema, GeneratedCommandAccess, InvariantReadContextExt,
     RuntimeCommandEnvelope, RuntimeHostContext, RuntimePlugin, RuntimePluginError,
     RuntimePluginFactory, RuntimePluginLoadError, RuntimePluginUnloadError, TypedTxContext,
 };
@@ -238,7 +238,7 @@ impl FlightBookingRuntime {
             return Err(Self::bad("at least one cabin capacity must be positive"));
         }
         if tx
-            .with_read_typed_by_uk::<Flight, _, _, _>(Flight::uk(&flight_id), |_| ())
+            .with_read_typed_by_unique_key::<Flight, _, _, _>(Flight::unique_key(&flight_id), |_| ())
             .map_err(Into::into)?
             .is_some()
         {
@@ -272,7 +272,7 @@ impl FlightBookingRuntime {
     ) -> Result<(), FlightBookingError> {
         let flight_id = command.flight_id();
         let retired = tx
-            .update_typed_by_uk::<Flight, _, _, _>(Flight::uk(&flight_id), |flight| {
+            .update_typed_by_unique_key::<Flight, _, _, _>(Flight::unique_key(&flight_id), |flight| {
                 flight.set_status(FLIGHT_STATUS_RETIRED);
             })
             .map_err(Into::into)?;
@@ -293,8 +293,8 @@ impl FlightBookingRuntime {
         }
 
         let passenger_valid = tx
-            .with_read_typed_by_uk::<Passenger, _, _, _>(
-                Passenger::uk(&command.passenger_document_id()),
+            .with_read_typed_by_unique_key::<Passenger, _, _, _>(
+                Passenger::unique_key(&command.passenger_document_id()),
                 |passenger| {
                     Self::passenger_matches(
                         passenger,
@@ -310,7 +310,7 @@ impl FlightBookingRuntime {
         }
 
         let Some(flight) = tx
-            .with_read_typed_by_uk::<Flight, _, _, _>(Flight::uk(&command.flight_id()), |flight| {
+            .with_read_typed_by_unique_key::<Flight, _, _, _>(Flight::unique_key(&command.flight_id()), |flight| {
                 FlightSnapshot {
                     status: flight.status(),
                     economy_total: flight.economy_total(),
@@ -334,8 +334,8 @@ impl FlightBookingRuntime {
         }
 
         let duplicate = tx
-            .with_read_typed_by_uk::<Reservation, _, _, _>(
-                Reservation::uk(&command.flight_id(), &command.passenger_document_id()),
+            .with_read_typed_by_unique_key::<Reservation, _, _, _>(
+                Reservation::unique_key(&command.flight_id(), &command.passenger_document_id()),
                 |reservation| reservation.status() == RESERVATION_STATUS_ACTIVE,
             )
             .map_err(Into::into)?
@@ -368,8 +368,8 @@ impl FlightBookingRuntime {
         let cabin_class = command.cabin_class();
 
         if tx
-            .with_read_typed_by_uk::<Passenger, _, _, _>(
-                Passenger::uk(&passenger_document_id),
+            .with_read_typed_by_unique_key::<Passenger, _, _, _>(
+                Passenger::unique_key(&passenger_document_id),
                 |_| (),
             )
             .map_err(Into::into)?
@@ -384,14 +384,14 @@ impl FlightBookingRuntime {
             .map_err(Into::into)?;
         }
 
-        tx.update_typed_by_uk::<Flight, _, _, _>(Flight::uk(&flight_id), |flight| {
+        tx.update_typed_by_unique_key::<Flight, _, _, _>(Flight::unique_key(&flight_id), |flight| {
             Self::increment_cabin(flight, cabin_class)
         })
         .map_err(Into::into)?
         .ok_or_else(|| Self::bad("flight disappeared during reserve"))??;
 
-        tx.update_or_create_typed_by_uk::<Reservation, _, _, _, _>(
-            Reservation::uk(&flight_id, &passenger_document_id),
+        tx.update_or_create_typed_by_unique_key::<Reservation, _, _, _, _>(
+            Reservation::unique_key(&flight_id, &passenger_document_id),
             |reservation| {
                 reservation.set_order_id(&order_id);
                 reservation.set_cabin_class(cabin_class);
@@ -423,8 +423,8 @@ impl FlightBookingRuntime {
         let command_order_id = command.order_id();
 
         let Some(reservation) = tx
-            .with_read_typed_by_uk::<Reservation, _, _, _>(
-                Reservation::uk(&flight_id, &passenger_document_id),
+            .with_read_typed_by_unique_key::<Reservation, _, _, _>(
+                Reservation::unique_key(&flight_id, &passenger_document_id),
                 |reservation| ReservationSnapshot {
                     order_id: reservation.order_id(),
                     cabin_class: reservation.cabin_class(),
@@ -468,14 +468,14 @@ impl FlightBookingRuntime {
             return Ok(());
         }
 
-        tx.update_typed_by_uk::<Flight, _, _, _>(Flight::uk(&flight_id), |flight| {
+        tx.update_typed_by_unique_key::<Flight, _, _, _>(Flight::unique_key(&flight_id), |flight| {
             Self::decrement_cabin(flight, reservation.cabin_class)
         })
         .map_err(Into::into)?
         .ok_or_else(|| Self::bad("reservation references missing flight"))??;
 
-        tx.update_typed_by_uk::<Reservation, _, _, _>(
-            Reservation::uk(&flight_id, &passenger_document_id),
+        tx.update_typed_by_unique_key::<Reservation, _, _, _>(
+            Reservation::unique_key(&flight_id, &passenger_document_id),
             |reservation| {
                 reservation.set_status(RESERVATION_STATUS_CANCELED);
             },
@@ -546,7 +546,7 @@ impl RuntimePlugin for FlightBookingRuntime {
             RetireFlight::KIND => RetireFlight::validate_payload(command.payload()),
             ReserveOrder::KIND => ReserveOrder::validate_payload(command.payload()),
             CancelReservation::KIND => CancelReservation::validate_payload(command.payload()),
-            kind => Err(statevec::model::CommandSchemaFailure::UnsupportedKind { kind }),
+            kind => Err(statevec::model::CommandSchemaError::UnsupportedKind { kind }),
         };
         checked.map_err(|error| RuntimePluginError::new(format!("invalid command payload: {error:?}")))?;
         if self
@@ -561,7 +561,7 @@ impl RuntimePlugin for FlightBookingRuntime {
         )))
     }
 
-    fn validate_biz_invariants(&self, ctx: &dyn BizInvariantReadContext) -> Result<(), String> {
+    fn validate_business_invariants(&self, ctx: &dyn BusinessInvariantReadContext) -> Result<(), String> {
         let mut flight_keys = Vec::new();
         ctx.for_each_record_key_raw(Flight::KIND, &mut |key| flight_keys.push(key))
             .map_err(|e| e.to_string())?;
@@ -643,7 +643,7 @@ impl RuntimePlugin for FlightBookingRuntime {
                 continue;
             }
             if ctx
-                .with_read_typed_by_uk::<Flight, _, _, _>(Flight::uk(&flight_id), |_| ())
+                .with_read_typed_by_unique_key::<Flight, _, _, _>(Flight::unique_key(&flight_id), |_| ())
                 .map_err(|e| e.to_string())?
                 .is_none()
             {
@@ -653,8 +653,8 @@ impl RuntimePlugin for FlightBookingRuntime {
                 ));
             }
             if ctx
-                .with_read_typed_by_uk::<Passenger, _, _, _>(
-                    Passenger::uk(&passenger_document_id),
+                .with_read_typed_by_unique_key::<Passenger, _, _, _>(
+                    Passenger::unique_key(&passenger_document_id),
                     |_| (),
                 )
                 .map_err(|e| e.to_string())?
@@ -680,7 +680,7 @@ impl RuntimePlugin for FlightBookingRuntime {
 
         for (flight_id, cabin_class, count) in &aggregates {
             let Some(expected) = ctx
-                .with_read_typed_by_uk::<Flight, _, _, _>(Flight::uk(flight_id), |flight| {
+                .with_read_typed_by_unique_key::<Flight, _, _, _>(Flight::unique_key(flight_id), |flight| {
                     match *cabin_class {
                         CABIN_ECONOMY => Some(flight.economy_reserved()),
                         CABIN_BUSINESS => Some(flight.business_reserved()),
@@ -849,7 +849,7 @@ mod tests {
     }
 
     fn reserved_economy(host: &Host) -> u32 {
-        host.expect::<Flight, _>(Flight::uk(&flight_id()), |flight| flight.economy_reserved())
+        host.expect::<Flight, _>(Flight::unique_key(&flight_id()), |flight| flight.economy_reserved())
     }
 
     fn last_reserve_result(host: &Host) -> u8 {
@@ -969,9 +969,9 @@ mod tests {
         add_flight(&mut host, 2);
         reserve(&mut host, b"ORD-1", CABIN_ECONOMY);
 
-        RuntimeHostContextExt::update_typed_by_uk::<Flight, _, _, _>(
+        RuntimeHostContextExt::update_typed_by_unique_key::<Flight, _, _, _>(
             host.inner_mut(),
-            Flight::uk(&flight_id()),
+            Flight::unique_key(&flight_id()),
             |flight| {
                 flight.set_economy_reserved(0);
             },

@@ -11,7 +11,7 @@ use statevec_api::{
     runtime_plugin_on_unload_v1, runtime_plugin_run_tx_v1, runtime_plugin_validate_biz_invariants_v1,
 };
 use statevec_model::event::{EventKind, GeneratedEventAccess};
-use statevec_model::record::{RecordKind, UkCodec};
+use statevec_model::record::{RecordKind, UniqueKeyCodec};
 use statevec_model::{
     EventDefinition, EventSchema, FieldDefinition, FieldType, GeneratedRecordAccess, KeyBytes, RecordDefinition,
     RecordSchema, SchemaRegistry, Version,
@@ -32,7 +32,7 @@ pub struct UpdateAssetBuilder<'a> {
 }
 
 impl Asset {
-    fn uk(asset_id: u64) -> KeyBytes {
+    fn unique_key(asset_id: u64) -> KeyBytes {
         let mut uk = KeyBytes::new();
         uk.extend_from_slice(&asset_id.to_be_bytes());
         uk
@@ -111,7 +111,7 @@ impl RecordSchema for Asset {
             unique_keys: &[statevec_model::UniqueKeyDefinition {
                 id: 0,
                 name: "",
-                encode: Some(Asset::encode_uk_from_bytes),
+                encode: Some(Asset::encode_unique_key_from_bytes),
                 fields: &PK_FIELDS,
             }],
             canonical_indexes: &[],
@@ -122,11 +122,11 @@ impl RecordSchema for Asset {
     }
 }
 
-impl UkCodec for Asset {
-    fn encode_uk_from_bytes(data: &[u8]) -> KeyBytes {
+impl UniqueKeyCodec for Asset {
+    fn encode_unique_key_from_bytes(data: &[u8]) -> KeyBytes {
         let mut bytes = [0u8; 8];
         bytes.copy_from_slice(&data[0..8]);
-        Asset::uk(u64::from_le_bytes(bytes))
+        Asset::unique_key(u64::from_le_bytes(bytes))
     }
 }
 
@@ -230,13 +230,13 @@ impl MockRuntimeHostContext {
 
     fn asset_record_mut_by_uk(&mut self, uk: &[u8]) -> Option<&mut Vec<u8>> {
         self.records.iter_mut().find_map(|((kind, _), data)| {
-            if *kind == Asset::KIND && Asset::encode_uk_from_bytes(data).as_slice() == uk { Some(data) } else { None }
+            if *kind == Asset::KIND && Asset::encode_unique_key_from_bytes(data).as_slice() == uk { Some(data) } else { None }
         })
     }
 
     fn asset_record_by_uk(&self, uk: &[u8]) -> Option<&Vec<u8>> {
         self.records.iter().find_map(|((kind, _), data)| {
-            if *kind == Asset::KIND && Asset::encode_uk_from_bytes(data).as_slice() == uk { Some(data) } else { None }
+            if *kind == Asset::KIND && Asset::encode_unique_key_from_bytes(data).as_slice() == uk { Some(data) } else { None }
         })
     }
 }
@@ -259,7 +259,7 @@ impl RuntimeHostContext for MockRuntimeHostContext {
         Ok(true)
     }
 
-    fn with_read_typed_by_uk_raw(
+    fn with_read_typed_by_unique_key_raw(
         &self,
         record_kind: RecordKind,
         uk: &[u8],
@@ -294,7 +294,7 @@ impl RuntimeHostContext for MockRuntimeHostContext {
         Ok(RecordKey { kind: record_kind, sys_id })
     }
 
-    fn update_typed_by_uk_raw(
+    fn update_typed_by_unique_key_raw(
         &mut self,
         record_kind: RecordKind,
         uk: &[u8],
@@ -310,11 +310,11 @@ impl RuntimeHostContext for MockRuntimeHostContext {
         Ok(true)
     }
 
-    fn delete_by_uk_raw(&mut self, record_kind: RecordKind, uk: &[u8]) -> Result<bool, RuntimeHostError> {
+    fn delete_by_unique_key_raw(&mut self, record_kind: RecordKind, uk: &[u8]) -> Result<bool, RuntimeHostError> {
         let Some((&key, _)) = self
             .records
             .iter()
-            .find(|((kind, _), data)| *kind == record_kind && Asset::encode_uk_from_bytes(data).as_slice() == uk)
+            .find(|((kind, _), data)| *kind == record_kind && Asset::encode_unique_key_from_bytes(data).as_slice() == uk)
         else {
             return Ok(false);
         };
@@ -372,13 +372,13 @@ fn runtime_tx_context_is_decoupled_from_engine_tx_access() -> Result<(), Runtime
         assert_eq!(precision, 8);
 
         let precision_by_uk =
-            RuntimeHostContextExt::with_read_typed_by_uk::<Asset, _, _, _>(tx, Asset::uk(7), |asset| {
+            RuntimeHostContextExt::with_read_typed_by_unique_key::<Asset, _, _, _>(tx, Asset::unique_key(7), |asset| {
                 asset.precision()
             })?
             .expect("record missing by uk");
         assert_eq!(precision_by_uk, 8);
 
-        let updated = RuntimeHostContextExt::update_typed_by_uk::<Asset, _, _, _>(tx, Asset::uk(7), |builder| {
+        let updated = RuntimeHostContextExt::update_typed_by_unique_key::<Asset, _, _, _>(tx, Asset::unique_key(7), |builder| {
             builder.set_precision(9);
             9u8
         })?
@@ -392,7 +392,7 @@ fn runtime_tx_context_is_decoupled_from_engine_tx_access() -> Result<(), Runtime
         let payload = <AssetCreated as GeneratedEventAccess>::builder().set_asset_id(7).build();
         RuntimeHostContextExt::emit_typed_event::<AssetCreated>(tx, payload)?;
 
-        let deleted = RuntimeHostContextExt::delete_by_uk::<Asset, _>(tx, Asset::uk(7))?;
+        let deleted = RuntimeHostContextExt::delete_by_unique_key::<Asset, _>(tx, Asset::unique_key(7))?;
         assert!(deleted);
     }
 
@@ -420,7 +420,7 @@ fn runtime_host_context_ext_typed_reads_return_none_when_missing() -> Result<(),
     assert_eq!(precision, Some(3));
 
     let precision_by_uk =
-        RuntimeHostContextExt::with_read_typed_by_uk::<Asset, _, _, _>(tx, Asset::uk(9), |asset| asset.precision())?;
+        RuntimeHostContextExt::with_read_typed_by_unique_key::<Asset, _, _, _>(tx, Asset::unique_key(9), |asset| asset.precision())?;
     assert_eq!(precision_by_uk, Some(3));
 
     let missing =
@@ -454,7 +454,7 @@ impl RuntimePlugin for TestPlugin {
         Ok(())
     }
 
-    fn validate_biz_invariants(&self, _ctx: &dyn statevec_api::BizInvariantReadContext) -> Result<(), String> {
+    fn validate_business_invariants(&self, _ctx: &dyn statevec_api::BusinessInvariantReadContext) -> Result<(), String> {
         Ok(())
     }
 

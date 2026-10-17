@@ -1,4 +1,4 @@
-use super::{ConfigureFailure, HostFailure, ResourceFailure};
+use super::{ConfigureError, HostError, ResourceError};
 
 macro_rules! scalar_enum {
     ($name:ident { $($variant:ident = $code:literal),+ $(,)? }) => {
@@ -58,10 +58,10 @@ impl ProjectorIoKind {
 pub enum ProjectorError {
     Application { code: u32 },
     Io { stage: ProjectorIoStage, kind: ProjectorIoKind, os_code: Option<i32> },
-    Construction(ResourceFailure),
+    Construction(ResourceError),
     PluginPanicked,
     HostPanicked,
-    Host(HostFailure),
+    Host(HostError),
     AbiContract(ProjectorAbiError),
     SnapshotRead(ProjectorSnapshotReadError),
 }
@@ -83,7 +83,7 @@ pub enum ProjectorWorkerError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProjectorCallError {
-    Configuration(ConfigureFailure),
+    Configuration(ConfigureError),
     Operation(ProjectorError),
     WorkerJoinPanicked,
     ServiceJoinPanicked,

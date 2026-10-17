@@ -50,7 +50,7 @@ impl RuntimePlugin for ScanPlugin {
                 tx.with_read_typed_raw(1, 7, &mut |_| panic!("read visitor panic")).map(|_| ())
             }
             kind if kind == Command::ReadUkVisitorPanic as u16 => tx
-                .with_read_typed_by_uk_raw(1, b"key", &mut |_| panic!("read visitor panic"))
+                .with_read_typed_by_unique_key_raw(1, b"key", &mut |_| panic!("read visitor panic"))
                 .map(|_| ()),
             kind if kind == Command::CreateVisitorPanic as u16 => tx
                 .create_typed_raw(1, &mut |bytes| {
@@ -59,7 +59,7 @@ impl RuntimePlugin for ScanPlugin {
                 })
                 .map(|_| ()),
             kind if kind == Command::UpdateVisitorPanic as u16 => tx
-                .update_typed_by_uk_raw(1, b"key", &mut |bytes| {
+                .update_typed_by_unique_key_raw(1, b"key", &mut |bytes| {
                     bytes[0] = 9;
                     panic!("update visitor panic")
                 })
@@ -76,7 +76,7 @@ impl RuntimePlugin for ScanPlugin {
         result.map_err(|error| RuntimePluginError::new(error.to_string()))
     }
 
-    fn validate_biz_invariants(&self, ctx: &dyn BizInvariantReadContext) -> Result<(), String> {
+    fn validate_business_invariants(&self, ctx: &dyn BusinessInvariantReadContext) -> Result<(), String> {
         match self.configuration.as_str() {
             "panic-validate" => panic!("invariant plugin panic"),
             "panic-read" => {
@@ -84,7 +84,7 @@ impl RuntimePlugin for ScanPlugin {
                     .map_err(|error| error.to_string())?;
             }
             "panic-read-uk" => {
-                ctx.with_read_typed_by_uk_raw(1, b"key", &mut |_| panic!("invariant read panic"))
+                ctx.with_read_typed_by_unique_key_raw(1, b"key", &mut |_| panic!("invariant read panic"))
                     .map_err(|error| error.to_string())?;
             }
             "panic-keys" => {

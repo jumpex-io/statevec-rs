@@ -34,7 +34,7 @@ pub use state::{SnapshotReader, SnapshotRead, SnapshotInfo, SnapshotRecordView};
 pub use control::{RaftEntryToken, DurableOffsetReport, NotContinuousHistory, ControlDecision, SnapshotToken, Offer, ReplyHandle, ReplyPoll};
 pub use pending::{ControlProgress, PendingDurableOffset, PendingSnapshotConfirmation};
 
-pub use statevec_api::plugin_v3::{ConfigureFailure, HostFailure, ResourceFailure, SvStatus};
+pub use statevec_api::v1::{ConfigureError, HostError, ResourceError, SvStatus};
 pub use failure::*;
 pub(crate) use status::{decode_call, decode_failure};
 #[cfg(test)]

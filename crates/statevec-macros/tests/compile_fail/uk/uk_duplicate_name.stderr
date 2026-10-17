@@ -4,8 +4,8 @@ error: duplicate uk name 'by_value'
 3 | / #[record(
 4 | |     kind = 1,
 5 | |     record_len = 64,
-6 | |     uk(id = 0, name = "by_value", fields = [a]),
-7 | |     uk(id = 1, name = "by_value", fields = [b])
+6 | |     unique_key(id = 0, name = "by_value", fields = [a]),
+7 | |     unique_key(id = 1, name = "by_value", fields = [b])
 8 | | )]
   | |__^
   |

@@ -270,7 +270,7 @@ impl SchemaRegistry {
 
     /// Encodes a unique key for a record buffer when the record supports it.
     #[inline]
-    pub fn encode_uk(&self, kind: RecordKind, data: &[u8]) -> Option<KeyBytes> {
+    pub fn encode_unique_key(&self, kind: RecordKind, data: &[u8]) -> Option<KeyBytes> {
         let def = self.try_get(kind)?;
         encode_unique_key(def, 0, data)
     }
@@ -298,7 +298,7 @@ impl SchemaRegistry {
 
     /// Returns whether the record kind has enough metadata for unique-key encoding.
     #[inline]
-    pub fn supports_uk_encoding(&self, kind: RecordKind) -> bool {
+    pub fn supports_unique_key_encoding(&self, kind: RecordKind) -> bool {
         let Some(def) = self.try_get(kind) else {
             return false;
         };

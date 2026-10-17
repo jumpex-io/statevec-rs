@@ -1,6 +1,6 @@
 //! Same declarations as generated access, including fields a handler may not read.
 use super::*;
-use statevec_model::{CommandSchemaFailure as Failure, GeneratedCommandAccess};
+use statevec_model::{CommandSchemaError as Failure, GeneratedCommandAccess};
 
 // The generated check must not resolve Result to the caller's application alias.
 type Result<T> = std::result::Result<T, ()>;
@@ -28,7 +28,7 @@ mod application_names {
         assert_eq!(ReportFailure::validate_payload(&payload), Ok(()));
         assert!(matches!(
             ReportFailure::validate_payload(&[99]),
-            Err(statevec_model::CommandSchemaFailure::Enum { field: 1, .. })
+            Err(statevec_model::CommandSchemaError::Enum { field: 1, .. })
         ));
     }
 }

@@ -8,7 +8,7 @@ use crate::{
     SemanticTag, UniqueKeyDefinition, Version,
 };
 
-fn encode_uk(data: &[u8]) -> KeyBytes {
+fn encode_unique_key(data: &[u8]) -> KeyBytes {
     let mut uk = KeyBytes::new();
     uk.extend_from_slice(&data[..8]);
     uk
@@ -159,12 +159,12 @@ static RECORD_A_INDEX_BY_ID: &[CanonicalIndexDefinition] =
 static RECORD_A_INDEX_BY_RENAMED_ID: &[CanonicalIndexDefinition] =
     &[CanonicalIndexDefinition { id: 0, name: "by_renamed_id", encode: None, fields: &["id"] }];
 static RECORD_A_TWO_UKS: &[UniqueKeyDefinition] = &[
-    UniqueKeyDefinition { id: 0, name: "by_id", encode: Some(encode_uk), fields: &["id"] },
-    UniqueKeyDefinition { id: 1, name: "by_id_again", encode: Some(encode_uk), fields: &["id"] },
+    UniqueKeyDefinition { id: 0, name: "by_id", encode: Some(encode_unique_key), fields: &["id"] },
+    UniqueKeyDefinition { id: 1, name: "by_id_again", encode: Some(encode_unique_key), fields: &["id"] },
 ];
 static RECORD_A_TWO_UKS_REORDERED: &[UniqueKeyDefinition] = &[
-    UniqueKeyDefinition { id: 1, name: "by_id_again", encode: Some(encode_uk), fields: &["id"] },
-    UniqueKeyDefinition { id: 0, name: "by_id", encode: Some(encode_uk), fields: &["id"] },
+    UniqueKeyDefinition { id: 1, name: "by_id_again", encode: Some(encode_unique_key), fields: &["id"] },
+    UniqueKeyDefinition { id: 0, name: "by_id", encode: Some(encode_unique_key), fields: &["id"] },
 ];
 static RECORD_A_TWO_INDEXES: &[CanonicalIndexDefinition] = &[
     CanonicalIndexDefinition { id: 0, name: "by_id", encode: None, fields: &["id"] },
@@ -274,7 +274,7 @@ static RECORD_A: RecordDefinition = RecordDefinition {
     name: "A",
     data_size: 16,
     version: 1,
-    unique_keys: &[crate::UniqueKeyDefinition { id: 0, name: "", encode: Some(encode_uk), fields: &["id"] }],
+    unique_keys: &[crate::UniqueKeyDefinition { id: 0, name: "", encode: Some(encode_unique_key), fields: &["id"] }],
     canonical_indexes: &[],
     fields: RECORD_FIELDS_A,
     reserved_fields: &[],
@@ -294,7 +294,7 @@ static RECORD_A_WITH_RESERVED: RecordDefinition = RecordDefinition {
     name: "A",
     data_size: 16,
     version: 1,
-    unique_keys: &[crate::UniqueKeyDefinition { id: 0, name: "", encode: Some(encode_uk), fields: &["id"] }],
+    unique_keys: &[crate::UniqueKeyDefinition { id: 0, name: "", encode: Some(encode_unique_key), fields: &["id"] }],
     canonical_indexes: &[],
     fields: RECORD_FIELDS_A,
     reserved_fields: RESERVED_RECORD_FIELDS,
@@ -491,12 +491,12 @@ fn decimal_field_is_generic_unique_key_eligible_and_checks_payload_length() {
     };
     let registry = SchemaRegistry::new(Version::new(1, 0), &[record], &[], &[], &[]);
 
-    assert!(registry.supports_uk_encoding(record.kind));
+    assert!(registry.supports_unique_key_encoding(record.kind));
     let mut expected = vec![0u8; 16];
     expected[0] = 0x80;
-    assert_eq!(registry.encode_uk(record.kind, &[0u8; 16]).unwrap().as_slice(), expected);
+    assert_eq!(registry.encode_unique_key(record.kind, &[0u8; 16]).unwrap().as_slice(), expected);
     for len in 0..16 {
-        assert!(registry.encode_uk(record.kind, &vec![0u8; len]).is_none());
+        assert!(registry.encode_unique_key(record.kind, &vec![0u8; len]).is_none());
     }
 }
 

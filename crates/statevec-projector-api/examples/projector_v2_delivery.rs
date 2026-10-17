@@ -68,7 +68,7 @@ fn consume(parts: ProjectorIoParts<'_>, count: u64, result: &mut Report) -> Resu
                         hash.update(r.tx_seq.to_le_bytes()); hash.update(r.ordinal.to_le_bytes());
                         hash.update(r.tx_id.bytes()); hash.update(r.tx_chain_hash.bytes());
                         hash.update([r.result_digest_profile]); hash.update(r.result_digest);
-                        hash.update(r.sys_result_code.to_le_bytes()); hash.update(r.biz_code.to_le_bytes());
+                        hash.update(r.system_code.to_le_bytes()); hash.update(r.business_code.to_le_bytes());
                         let s = tx.schema_identity();
                         hash.update([s.schema_version.main(), s.schema_version.minor()]);
                         hash.update(s.types_schema_fingerprint); hash.update(s.record_schema_fingerprint);
@@ -139,9 +139,9 @@ struct PreparedDelivery { file: std::fs::File, frames: u64 }
 impl ProjectorModule for DeliveryModule {
     const SUPPORTED_HISTORY_MODES: SupportedHistoryModes = SupportedHistoryModes::Continuous;
     type Configured = DeliveryConfig;
-    fn configure(&self, input: ProjectorConfig<'_>) -> Result<DeliveryConfig, ConfigureFailure> {
-        let mut parsed: DeliveryConfig = serde_json::from_slice(input.bytes).map_err(|_| ConfigureFailure::Invalid { code: 1 })?;
-        if parsed.frames == 0 { return Err(ConfigureFailure::Invalid { code: 2 }); }
+    fn configure(&self, input: ProjectorConfig<'_>) -> Result<DeliveryConfig, ConfigureError> {
+        let mut parsed: DeliveryConfig = serde_json::from_slice(input.bytes).map_err(|_| ConfigureError::Invalid { code: 1 })?;
+        if parsed.frames == 0 { return Err(ConfigureError::Invalid { code: 2 }); }
         if parsed.report_path.is_relative() { parsed.report_path = input.base_dir.join(&parsed.report_path); }
         Ok(parsed)
     }

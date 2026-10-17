@@ -30,7 +30,7 @@ mod ut_model;
 #[cfg(test)]
 mod ut_registry;
 
-/// Backward-compatible re-export: `statevec_model::record::*` still works.
+/// Public record types grouped by domain.
 pub mod record {
     pub use crate::model::{
         AccessError, CanonicalIndexDefinition, Decimal, DecimalParseError, DecimalRounding,
@@ -40,14 +40,14 @@ pub mod record {
         MAX_UNIQUE_KEYS_PER_RECORD, RECORD_HEADER_SIZE, RecordDefinition, RecordKey, RecordKind, RecordSchema,
         SYSTEM_KIND_MAX, SYSTEM_KIND_MIN, SYSTEM_RUNTIME_MANIFEST_RECORD_KIND, SYSTEM_SCHEMA_RECORD_KIND,
         SemanticCompatibilityError, SemanticTag, SemanticTagParseError, SysId, TxSeq, USER_KIND_MAX, USER_KIND_MIN,
-        UkCodec, UniqueKeyBytes, UniqueKeyDefinition, Version, read_bool, read_decimal_le, read_fixed_bytes,
+        UniqueKeyCodec, UniqueKeyBytes, UniqueKeyDefinition, Version, read_bool, read_decimal_le, read_fixed_bytes,
         read_i32_le, read_i64_le, read_u8, read_u16_le, read_u32_le, read_u64_le, read_u128_le,
         validate_decimal_scale_compat, validate_semantic_compat, write_bool, write_decimal_le, write_fixed_bytes,
         write_i32_le, write_i64_le, write_u8, write_u16_le, write_u32_le, write_u64_le, write_u128_le,
     };
 }
 
-/// Backward-compatible re-export: `statevec_model::command::*` still works.
+/// Public command types grouped by domain.
 pub mod command {
     pub use crate::model::{
         Command, CommandDefinition, CommandKind, CommandSchema, GeneratedCommandAccess, INVALID_KIND,
@@ -60,7 +60,7 @@ pub mod command {
     };
 }
 
-/// Backward-compatible re-export: `statevec_model::event::*` still works.
+/// Public event types grouped by domain.
 pub mod event {
     pub use crate::model::{
         Event, EventDefinition, EventFrame, EventKind, EventSchema, GeneratedEventAccess, INVALID_KIND,

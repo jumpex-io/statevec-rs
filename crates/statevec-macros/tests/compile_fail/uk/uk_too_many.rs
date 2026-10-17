@@ -3,10 +3,10 @@ use statevec_macros::record;
 #[record(
     kind = 1,
     record_len = 64,
-    uk(id = 0, name = "by_a", fields = [a]),
-    uk(id = 1, name = "by_b", fields = [b]),
-    uk(id = 2, name = "by_c", fields = [c]),
-    uk(id = 3, name = "by_d", fields = [d])
+    unique_key(id = 0, name = "by_a", fields = [a]),
+    unique_key(id = 1, name = "by_b", fields = [b]),
+    unique_key(id = 2, name = "by_c", fields = [c]),
+    unique_key(id = 3, name = "by_d", fields = [d])
 )]
 pub struct TooManyUk {
     #[field(index = 1, immutable)]

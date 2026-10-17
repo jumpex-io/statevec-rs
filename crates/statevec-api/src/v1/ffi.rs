@@ -120,7 +120,7 @@ pub struct SvKey { pub kind: u16, pub reserved16: u16, pub reserved32: u32, pub 
 pub struct SvWalk { pub tag: u32, pub reserved: u32, pub count: u64 }
 
 // C callers can pass NULL. Preserve it as a valid Rust value at ABI ingress;
-// adapters must return AbiFailure::NullPointer before borrowing or invoking it.
+// adapters must return CoreAbiError::NullPointer before borrowing or invoking it.
 pub type SvReadVisitor = Option<unsafe extern "C" fn(*mut c_void, SvBytes) -> SvStatus>;
 pub type SvWriteVisitor = Option<unsafe extern "C" fn(*mut c_void, SvKey, SvMutBytes) -> SvStatus>;
 pub type SvKeyVisitor = Option<unsafe extern "C" fn(*mut c_void, SvKey, *mut u32) -> SvStatus>;

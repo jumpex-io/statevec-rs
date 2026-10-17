@@ -114,7 +114,7 @@ pub(crate) fn expand_record(
     // validate uk fields
     for unique_key in &record_args.unique_keys {
         if unique_key.fields.is_empty() {
-            return Err(syn::Error::new(name.span(), "uk(id = N, fields = [...]) cannot be empty"));
+            return Err(syn::Error::new(name.span(), "unique_key(id = N, fields = [...]) cannot be empty"));
         }
         for uk in unique_key.fields.iter() {
             let Some(found) = parsed_fields.iter().find(|f| f.ident == *uk) else {
@@ -257,7 +257,7 @@ pub(crate) fn expand_record(
         if uk_id == 0 {
             uk_public_fns.push(quote! {
                 #[inline]
-                pub fn uk(#(#uk_fn_args_for_public),*) -> statevec_model::KeyBytes {
+                pub fn unique_key(#(#uk_fn_args_for_public),*) -> statevec_model::KeyBytes {
                     let mut __uk = statevec_model::KeyBuilder::new();
                     #( #uk_fn_pushes_for_public )*
                     __uk.finish()
@@ -266,7 +266,7 @@ pub(crate) fn expand_record(
         }
 
         if let Some(uk_name) = unique_key.name.as_deref() {
-            let fn_name = syn::parse_str::<syn::Ident>(&format!("uk_{uk_name}")).map_err(|_| {
+            let fn_name = syn::parse_str::<syn::Ident>(&format!("unique_key_{uk_name}")).map_err(|_| {
                 syn::Error::new(name.span(), format!("uk name '{uk_name}' cannot be used as a Rust helper name"))
             })?;
             let named_uk_fn_args = unique_key.fields.iter().map(|uk_ident| {
@@ -389,9 +389,9 @@ pub(crate) fn expand_record(
     let schema_version = record_args.version;
     let uk_codec_impl = if has_unique_keys {
         quote! {
-            impl statevec_model::UkCodec for #name {
+            impl statevec_model::UniqueKeyCodec for #name {
                 #[inline]
-                fn encode_uk_from_bytes(data: &[u8]) -> statevec_model::KeyBytes {
+                fn encode_unique_key_from_bytes(data: &[u8]) -> statevec_model::KeyBytes {
                     #name::__statevec_encode_uk_0_from_bytes(data)
                 }
             }

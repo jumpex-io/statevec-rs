@@ -5,7 +5,7 @@ use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use crate::{
-    BizInvariantReadContext, CanonicalIndexCount, CommandKind, EventKind, RecordKey, RecordKind, RuntimeCommandRef,
+    BusinessInvariantReadContext, CanonicalIndexCount, CommandKind, EventKind, RecordKey, RecordKind, RuntimeCommandRef,
     RuntimeHostContext, RuntimeHostError, RuntimePlugin, RuntimePluginFactory, SysId,
 };
 
@@ -767,7 +767,7 @@ pub unsafe fn runtime_plugin_validate_biz_invariants_v1(
         };
 
         let host_adapter = unsafe { RuntimeReadContextV1Adapter::from_raw(&host) };
-        match handle.plugin.validate_biz_invariants(&host_adapter) {
+        match handle.plugin.validate_business_invariants(&host_adapter) {
             Ok(()) => RuntimeCallStatus::Success,
             Err(err) => {
                 unsafe {
@@ -972,7 +972,7 @@ impl RuntimeHostContext for RuntimeHostContextV1Adapter<'_> {
         }
     }
 
-    fn with_read_typed_by_uk_raw(
+    fn with_read_typed_by_unique_key_raw(
         &self,
         record_kind: RecordKind,
         uk: &[u8],
@@ -1032,7 +1032,7 @@ impl RuntimeHostContext for RuntimeHostContextV1Adapter<'_> {
         }
     }
 
-    fn update_typed_by_uk_raw(
+    fn update_typed_by_unique_key_raw(
         &mut self,
         record_kind: RecordKind,
         uk: &[u8],
@@ -1063,7 +1063,7 @@ impl RuntimeHostContext for RuntimeHostContextV1Adapter<'_> {
         }
     }
 
-    fn delete_by_uk_raw(&mut self, record_kind: RecordKind, uk: &[u8]) -> Result<bool, RuntimeHostError> {
+    fn delete_by_unique_key_raw(&mut self, record_kind: RecordKind, uk: &[u8]) -> Result<bool, RuntimeHostError> {
         let mut deleted = false;
         let mut error = RuntimeErrorBuf::new(
             RuntimeErrorPhase::RunTx,
@@ -1214,7 +1214,7 @@ impl<'call> RuntimeReadContextV1Adapter<'call> {
     }
 }
 
-impl BizInvariantReadContext for RuntimeReadContextV1Adapter<'_> {
+impl BusinessInvariantReadContext for RuntimeReadContextV1Adapter<'_> {
     fn with_read_typed_raw(
         &self,
         record_kind: RecordKind,
@@ -1246,7 +1246,7 @@ impl BizInvariantReadContext for RuntimeReadContextV1Adapter<'_> {
         }
     }
 
-    fn with_read_typed_by_uk_raw(
+    fn with_read_typed_by_unique_key_raw(
         &self,
         record_kind: RecordKind,
         uk: &[u8],

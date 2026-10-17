@@ -61,7 +61,7 @@ Keep expected business refusals and execution failures distinct.
 #[derive(Debug, Clone)]
 pub enum LedgerError {
     Host { source: statevec::RuntimeHostError },
-    InvalidInput { source: statevec::model::CommandSchemaFailure },
+    InvalidInput { source: statevec::model::CommandSchemaError },
     UnsupportedCommand { kind: statevec::CommandKind },
     InsufficientFunds,
     UnknownAccount,
@@ -132,13 +132,13 @@ currently platform-internal and are not exposed through this SDK.
 
 | Call | Use |
 | --- | --- |
-| `with_read_typed_by_uk::<R, _, _, _>(R::uk(..), read)` | Read a record by UK 0 |
-| `with_read_typed_by_uk_id::<R, _, _, _>(id, uk, read)` | Read by another unique key |
-| `update_typed_by_uk::<R, _, _, _>(uk, update)` | Update an existing record |
-| `update_or_create_typed_by_uk::<R, _, _, _, _>(uk, update, create)` | Update or create |
+| `with_read_typed_by_unique_key::<R, _, _, _>(R::unique_key(..), read)` | Read a record by UK 0 |
+| `with_read_typed_by_unique_key_id::<R, _, _, _>(id, uk, read)` | Read by another unique key |
+| `update_typed_by_unique_key::<R, _, _, _>(uk, update)` | Update an existing record |
+| `update_or_create_typed_by_unique_key::<R, _, _, _, _>(uk, update, create)` | Update or create |
 | `create_typed::<R, _>(create)` | Create a record with initialized immutable fields |
-| `delete_by_uk::<R, _>(uk)` | Delete by unique key |
-| `resolve_typed_uk::<R, _>(uk)` | Resolve UK 0 to the record's system id |
+| `delete_by_unique_key::<R, _>(uk)` | Delete by unique key |
+| `resolve_typed_unique_key::<R, _>(uk)` | Resolve UK 0 to the record's system id |
 | `with_read_typed::<R, _, _>(sys_id, read)` | Read by system id |
 | `update_typed::<R, _, _>(sys_id, update)` | Update by system id |
 | `delete_typed::<R>(sys_id)` | Delete by system id |

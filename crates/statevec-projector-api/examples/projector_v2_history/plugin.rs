@@ -24,7 +24,7 @@ pub struct Prepared {
 impl ProjectorModule for History {
     const SUPPORTED_HISTORY_MODES: SupportedHistoryModes = SupportedHistoryModes::Continuous;
     type Configured = Config;
-    fn configure(&self, input: ProjectorConfig<'_>) -> Result<Config, ConfigureFailure> {
+    fn configure(&self, input: ProjectorConfig<'_>) -> Result<Config, ConfigureError> {
         struct Object;
         impl<'de> serde::de::Visitor<'de> for Object {
             type Value = Config;
@@ -37,16 +37,16 @@ impl ProjectorModule for History {
         }
         let mut decoder = serde_json::Deserializer::from_slice(input.bytes);
         let mut config: Config = serde::Deserializer::deserialize_map(&mut decoder, Object)
-            .map_err(|_| ConfigureFailure::Invalid { code: 1 })?;
+            .map_err(|_| ConfigureError::Invalid { code: 1 })?;
         decoder
             .end()
-            .map_err(|_| ConfigureFailure::Invalid { code: 1 })?;
+            .map_err(|_| ConfigureError::Invalid { code: 1 })?;
         for path in std::iter::once(&mut config.database_path)
             .chain(config.offset_path.iter_mut())
             .chain(config.status_path.iter_mut())
         {
             if path.as_os_str().is_empty() {
-                return Err(ConfigureFailure::Invalid { code: 2 });
+                return Err(ConfigureError::Invalid { code: 2 });
             }
             if path.is_relative() {
                 *path = input.base_dir.join(&*path);

@@ -401,7 +401,7 @@ pub struct UniqueKeyDefinition {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct UniqueKeyBytes {
     /// Stable unique-key id within the enclosing record kind.
-    pub uk_id: u8,
+    pub unique_key_id: u8,
     /// Encoded unique-key bytes.
     pub bytes: KeyBytes,
 }
@@ -409,8 +409,8 @@ pub struct UniqueKeyBytes {
 impl UniqueKeyBytes {
     /// Creates tagged unique-key bytes.
     #[inline]
-    pub fn new(uk_id: u8, bytes: KeyBytes) -> Self {
-        Self { uk_id, bytes }
+    pub fn new(unique_key_id: u8, bytes: KeyBytes) -> Self {
+        Self { unique_key_id, bytes }
     }
 }
 
@@ -470,9 +470,9 @@ pub trait RecordSchema {
 }
 
 /// Unique-key encoding hook implemented by generated record types.
-pub trait UkCodec {
+pub trait UniqueKeyCodec {
     /// Encodes unique-key bytes from a fixed-layout record buffer.
-    fn encode_uk_from_bytes(data: &[u8]) -> KeyBytes;
+    fn encode_unique_key_from_bytes(data: &[u8]) -> KeyBytes;
 }
 
 /// Generated typed accessors for a fixed-layout record.
@@ -529,7 +529,7 @@ impl std::error::Error for AccessError {}
 
 /// Static command-schema failure. Never a business rejection or execution result.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CommandSchemaFailure {
+pub enum CommandSchemaError {
     UnsupportedKind {
         kind: CommandKind,
     },
@@ -562,13 +562,13 @@ pub enum CommandSchemaFailure {
     },
 }
 
-impl fmt::Display for CommandSchemaFailure {
+impl fmt::Display for CommandSchemaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "command schema: {self:?}")
     }
 }
 
-impl std::error::Error for CommandSchemaFailure {
+impl std::error::Error for CommandSchemaError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::FieldAccess { source, .. } => Some(source),
@@ -1572,7 +1572,7 @@ pub trait GeneratedCommandAccess: CommandSchema {
     /// Check every field and exact payload consumption without constructing
     /// an unchecked accessor or invoking business code. FixedBytes requires
     /// zero padding after its logical length, without normalizing input bytes.
-    fn validate_payload(data: &[u8]) -> Result<(), CommandSchemaFailure>;
+    fn validate_payload(data: &[u8]) -> Result<(), CommandSchemaError>;
     /// Creates a payload builder.
     fn builder() -> Self::Builder;
 }

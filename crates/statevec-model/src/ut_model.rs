@@ -23,14 +23,14 @@ fn encoded_keys_preserve_bytes_order_and_lookup_across_inline_boundary(len: usiz
         assert!(!encoded.spilled(), "common short keys must not allocate");
     }
 
-    let key = UniqueKeyBytes { uk_id: 2, bytes: encoded };
-    let lookup = UniqueKeyBytes { uk_id: 2, bytes: KeyBytes::from_slice(&expected) };
+    let key = UniqueKeyBytes { unique_key_id: 2, bytes: encoded };
+    let lookup = UniqueKeyBytes { unique_key_id: 2, bytes: KeyBytes::from_slice(&expected) };
     let mut index = std::collections::HashMap::new();
     index.insert(key.clone(), 91_u64);
     assert_eq!(index.get(&lookup), Some(&91), "independent encoding must find the same key");
     let mut successor = expected.clone();
     *successor.last_mut().unwrap() += 1;
-    assert!(key < UniqueKeyBytes { uk_id: 2, bytes: KeyBytes::from_slice(&successor) });
+    assert!(key < UniqueKeyBytes { unique_key_id: 2, bytes: KeyBytes::from_slice(&successor) });
 }
 
 #[test]

@@ -32,7 +32,7 @@ struct Prepared { harness: Arc<Harness>, control: UnixStream }
 impl ProjectorModule for Module {
     const SUPPORTED_HISTORY_MODES: SupportedHistoryModes = SupportedHistoryModes::Both;
     type Configured = Configured;
-    fn configure(&self, _: ProjectorConfig<'_>) -> Result<Configured, ConfigureFailure> { Ok(Configured(self.0.clone())) }
+    fn configure(&self, _: ProjectorConfig<'_>) -> Result<Configured, ConfigureError> { Ok(Configured(self.0.clone())) }
 }
 impl ConfiguredProjector for Configured {
     type Prepared = Prepared;

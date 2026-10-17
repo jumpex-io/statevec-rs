@@ -1,5 +1,5 @@
 use super::{
-    ConfigureFailure, HostFailure, ResourceFailure, SvStatus, ProjectorAbiError as A,
+    ConfigureError, HostError, ResourceError, SvStatus, ProjectorAbiError as A,
     ProjectorCallError as C, ProjectorError as F, ProjectorOperation as O,
     ProjectorIoStage, ProjectorIoKind, ProjectorSnapshotReadError, ProjectorStatusDecodeError as D,
 };
@@ -54,10 +54,10 @@ impl Raw {
     fn u32(self, slot: u8) -> Result<u32, A> { self.bounded(slot, u32::MAX.into()).map(|n| n as u32) }
     fn usize(self, slot: u8) -> Result<usize, A> { self.bounded(slot, usize::MAX as u64).map(|n| n as usize) }
     fn unknown(self) -> A { A::Status(D::UnknownCause { tag: self.0.tag, cause: self.0.cause }) }
-    fn resource(self) -> Result<ResourceFailure, A> {
+    fn resource(self) -> Result<ResourceError, A> {
         match self.0.cause {
-            1 => { self.zeros(1)?; Ok(ResourceFailure::Allocation { requested: self.usize(0)? }) }
-            2 => { self.zeros(1)?; Ok(ResourceFailure::Os { code: self.u32(0)? as i32 }) }
+            1 => { self.zeros(1)?; Ok(ResourceError::Allocation { requested: self.usize(0)? }) }
+            2 => { self.zeros(1)?; Ok(ResourceError::Os { code: self.u32(0)? as i32 }) }
             _ => Err(self.unknown()),
         }
     }
@@ -69,7 +69,7 @@ fn fields(r: Raw) -> Result<Option<C>, A> {
             if s.cause != 0 { return Err(A::Status(D::NonzeroSuccessCause { cause: s.cause })); }
             r.zeros(0)?; return Ok(None);
         }
-        4 => C::Operation(F::Host(HostFailure::Resource(r.resource()?))),
+        4 => C::Operation(F::Host(HostError::Resource(r.resource()?))),
         7 | 8 => {
             if s.cause != 0 { return Err(r.unknown()); }
             r.zeros(0)?;
@@ -78,10 +78,10 @@ fn fields(r: Raw) -> Result<Option<C>, A> {
         9 => C::Operation(F::AbiContract(abi(r)?)),
         10 => {
             let value = match s.cause {
-                1 => ConfigureFailure::Invalid { code: r.u32(0)? },
-                2 => ConfigureFailure::UnsupportedCapabilities { required: s.detail[0] },
-                3 => ConfigureFailure::Resource(ResourceFailure::Allocation { requested: r.usize(0)? }),
-                4 => ConfigureFailure::Resource(ResourceFailure::Os { code: r.u32(0)? as i32 }),
+                1 => ConfigureError::Invalid { code: r.u32(0)? },
+                2 => ConfigureError::UnsupportedCapabilities { required: s.detail[0] },
+                3 => ConfigureError::Resource(ResourceError::Allocation { requested: r.usize(0)? }),
+                4 => ConfigureError::Resource(ResourceError::Os { code: r.u32(0)? as i32 }),
                 _ => return Err(r.unknown()),
             };
             r.zeros(1)?; C::Configuration(value)
@@ -221,10 +221,10 @@ fn check_nested(outer: u32, nested: D) -> Result<(), A> {
     if canonical { Ok(()) } else { Err(A::Status(D::NoncanonicalNestedError { cause: outer })) }
 }
 
-fn resource(tag: u32, source: ResourceFailure) -> SvStatus {
+fn resource(tag: u32, source: ResourceError) -> SvStatus {
     let (cause, value) = match source {
-        ResourceFailure::Allocation { requested } => (1, requested as u64),
-        ResourceFailure::Os { code } => (2, u64::from(code as u32)),
+        ResourceError::Allocation { requested } => (1, requested as u64),
+        ResourceError::Os { code } => (2, u64::from(code as u32)),
     };
     SvStatus { tag, cause, detail: [value, 0, 0] }
 }
@@ -245,7 +245,7 @@ impl From<&F> for SvStatus {
             F::Application { code } => Self { tag: 12, cause: 1, detail: [code.into(), 0, 0] },
             F::Io { stage, kind, os_code } => Self { tag: 12, cause: 2, detail: [stage.code().into(), kind.code().into(), os_code.map_or(0, |code| (1u64 << 32) | u64::from(code as u32))] },
             F::Construction(cause) => resource(11, cause),
-            F::Host(HostFailure::Resource(cause)) => resource(4, cause),
+            F::Host(HostError::Resource(cause)) => resource(4, cause),
             F::PluginPanicked => Self { tag: 7, cause: 0, detail: [0; 3] },
             F::HostPanicked => Self { tag: 8, cause: 0, detail: [0; 3] },
             F::AbiContract(cause) => (&cause).into(),

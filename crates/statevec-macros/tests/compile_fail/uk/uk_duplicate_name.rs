@@ -3,8 +3,8 @@ use statevec_macros::record;
 #[record(
     kind = 1,
     record_len = 64,
-    uk(id = 0, name = "by_value", fields = [a]),
-    uk(id = 1, name = "by_value", fields = [b])
+    unique_key(id = 0, name = "by_value", fields = [a]),
+    unique_key(id = 1, name = "by_value", fields = [b])
 )]
 pub struct DuplicateUkName {
     #[field(index = 1, immutable)]

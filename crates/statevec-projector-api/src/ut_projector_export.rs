@@ -15,7 +15,7 @@ impl Drop for PanicPayload { fn drop(&mut self) { panic!("payload must be retain
 impl ProjectorModule for Module {
     const SUPPORTED_HISTORY_MODES: SupportedHistoryModes = SupportedHistoryModes::Continuous;
     type Configured = Config;
-    fn configure(&self, input: ProjectorConfig<'_>) -> Result<Config, ConfigureFailure> {
+    fn configure(&self, input: ProjectorConfig<'_>) -> Result<Config, ConfigureError> {
         assert_eq!(input.bytes, b"{}");
         assert!(input.base_dir.is_absolute());
         note(&self.log, "configure");

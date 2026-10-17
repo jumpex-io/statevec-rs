@@ -16,7 +16,7 @@ use statevec_model::{CommandDefinition, CommandKind, SchemaRegistry};
 
 mod business_code;
 mod plugin_abi_v1;
-pub mod plugin_v3;
+pub mod v1;
 mod transaction_position;
 pub use transaction_position::TxPositionUnavailable;
 pub use business_code::BusinessRejectCode;
@@ -185,7 +185,7 @@ pub trait RuntimeHostContext {
     ) -> Result<bool, RuntimeHostError>;
 
     /// Reads a record by unique-key bytes and passes its bytes to `f` when found.
-    fn with_read_typed_by_uk_raw(
+    fn with_read_typed_by_unique_key_raw(
         &self,
         record_kind: RecordKind,
         uk: &[u8],
@@ -200,7 +200,7 @@ pub trait RuntimeHostContext {
     ) -> Result<RecordKey, RuntimeHostError>;
 
     /// Updates a record by unique-key bytes in-place when found.
-    fn update_typed_by_uk_raw(
+    fn update_typed_by_unique_key_raw(
         &mut self,
         record_kind: RecordKind,
         uk: &[u8],
@@ -208,7 +208,7 @@ pub trait RuntimeHostContext {
     ) -> Result<bool, RuntimeHostError>;
 
     /// Deletes a record by unique-key bytes.
-    fn delete_by_uk_raw(&mut self, record_kind: RecordKind, uk: &[u8]) -> Result<bool, RuntimeHostError>;
+    fn delete_by_unique_key_raw(&mut self, record_kind: RecordKind, uk: &[u8]) -> Result<bool, RuntimeHostError>;
 
     /// Emits an event payload from the current transaction.
     fn emit_typed_event_raw(&mut self, event_kind: EventKind, payload: &[u8]) -> Result<(), RuntimeHostError>;
@@ -255,10 +255,10 @@ pub trait RuntimeHostContextExt: RuntimeHostContext {
 
     /// Read a record by unique key without mutating it.
     ///
-    /// Prefer [`RuntimeHostContextExt::update_typed_by_uk`] when the next step
+    /// Prefer [`RuntimeHostContextExt::update_typed_by_unique_key`] when the next step
     /// is to modify the same record. The update path keeps the mutation
     /// in-place and avoids an extra resolve/read/then-update round-trip.
-    fn with_read_typed_by_uk<R, P, T, F>(&self, uk: P, f: F) -> Result<Option<T>, RuntimeHostError>
+    fn with_read_typed_by_unique_key<R, P, T, F>(&self, uk: P, f: F) -> Result<Option<T>, RuntimeHostError>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
@@ -266,7 +266,7 @@ pub trait RuntimeHostContextExt: RuntimeHostContext {
     {
         let mut f = Some(f);
         let mut out = None;
-        let found = self.with_read_typed_by_uk_raw(R::KIND, uk.as_ref(), &mut |data| {
+        let found = self.with_read_typed_by_unique_key_raw(R::KIND, uk.as_ref(), &mut |data| {
             let apply = f.take().expect("callback invoked more than once");
             out = Some(apply(R::wrap(data)));
         })?;
@@ -293,7 +293,7 @@ pub trait RuntimeHostContextExt: RuntimeHostContext {
     /// This is the preferred hot-path API when a command needs to mutate an
     /// existing record. It avoids the read-then-update pattern that would
     /// otherwise resolve the unique key and touch the same record twice.
-    fn update_typed_by_uk<R, P, T, F>(&mut self, uk: P, f: F) -> Result<Option<T>, RuntimeHostError>
+    fn update_typed_by_unique_key<R, P, T, F>(&mut self, uk: P, f: F) -> Result<Option<T>, RuntimeHostError>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
@@ -301,7 +301,7 @@ pub trait RuntimeHostContextExt: RuntimeHostContext {
     {
         let mut f = Some(f);
         let mut out = None;
-        let found = self.update_typed_by_uk_raw(R::KIND, uk.as_ref(), &mut |buf| {
+        let found = self.update_typed_by_unique_key_raw(R::KIND, uk.as_ref(), &mut |buf| {
             let apply = f.take().expect("update callback invoked more than once");
             let mut builder = R::wrap_update(buf);
             out = Some(apply(&mut builder));
@@ -310,7 +310,7 @@ pub trait RuntimeHostContextExt: RuntimeHostContext {
     }
 
     /// Updates an existing record by unique key or creates a new one.
-    fn update_or_create_typed_by_uk<R, P, T, FU, FC>(
+    fn update_or_create_typed_by_unique_key<R, P, T, FU, FC>(
         &mut self,
         uk: P,
         update: FU,
@@ -322,7 +322,7 @@ pub trait RuntimeHostContextExt: RuntimeHostContext {
         FU: for<'b> FnOnce(&mut R::UpdateBuilder<'b>) -> T,
         FC: for<'b> FnOnce(&mut R::NewBuilder<'b>) -> T,
     {
-        if let Some(value) = self.update_typed_by_uk::<R, P, T, FU>(uk, update)? {
+        if let Some(value) = self.update_typed_by_unique_key::<R, P, T, FU>(uk, update)? {
             return Ok(value);
         }
 
@@ -334,12 +334,12 @@ pub trait RuntimeHostContextExt: RuntimeHostContext {
     }
 
     /// Deletes a generated record by unique key.
-    fn delete_by_uk<R, P>(&mut self, uk: P) -> Result<bool, RuntimeHostError>
+    fn delete_by_unique_key<R, P>(&mut self, uk: P) -> Result<bool, RuntimeHostError>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
     {
-        self.delete_by_uk_raw(R::KIND, uk.as_ref())
+        self.delete_by_unique_key_raw(R::KIND, uk.as_ref())
     }
 
     /// Emits a generated event payload.
@@ -378,9 +378,9 @@ pub trait RuntimePluginFactory {
 /// Read-only state access surface for invariant validation.
 ///
 /// This is the read-only subset of [`RuntimeHostContext`], provided to
-/// [`RuntimePlugin::validate_biz_invariants`] so that domain-specific business
+/// [`RuntimePlugin::validate_business_invariants`] so that domain-specific business
 /// invariants can be checked without mutating state.
-pub trait BizInvariantReadContext {
+pub trait BusinessInvariantReadContext {
     /// Reads a record by system id and passes its bytes to `f` when found.
     fn with_read_typed_raw(
         &self,
@@ -390,7 +390,7 @@ pub trait BizInvariantReadContext {
     ) -> Result<bool, RuntimeHostError>;
 
     /// Reads a record by unique-key bytes and passes its bytes to `f` when found.
-    fn with_read_typed_by_uk_raw(
+    fn with_read_typed_by_unique_key_raw(
         &self,
         record_kind: RecordKind,
         uk: &[u8],
@@ -401,8 +401,8 @@ pub trait BizInvariantReadContext {
     fn for_each_record_key_raw(&self, kind: RecordKind, f: &mut dyn FnMut(RecordKey)) -> Result<(), RuntimeHostError>;
 }
 
-/// Typed convenience methods for [`BizInvariantReadContext`].
-pub trait InvariantReadContextExt: BizInvariantReadContext {
+/// Typed convenience methods for [`BusinessInvariantReadContext`].
+pub trait InvariantReadContextExt: BusinessInvariantReadContext {
     /// Reads a generated record by system id.
     fn with_read_typed<R, T, F>(&self, sys_id: SysId, f: F) -> Result<Option<T>, RuntimeHostError>
     where
@@ -420,7 +420,7 @@ pub trait InvariantReadContextExt: BizInvariantReadContext {
     }
 
     /// Reads a generated record by unique key.
-    fn with_read_typed_by_uk<R, P, T, F>(&self, uk: P, f: F) -> Result<Option<T>, RuntimeHostError>
+    fn with_read_typed_by_unique_key<R, P, T, F>(&self, uk: P, f: F) -> Result<Option<T>, RuntimeHostError>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
@@ -428,7 +428,7 @@ pub trait InvariantReadContextExt: BizInvariantReadContext {
     {
         let mut result = None;
         let mut f = Some(f);
-        let found = self.with_read_typed_by_uk_raw(R::KIND, uk.as_ref(), &mut |data| {
+        let found = self.with_read_typed_by_unique_key_raw(R::KIND, uk.as_ref(), &mut |data| {
             if let Some(f) = f.take() {
                 result = Some(f(R::wrap(data)));
             }
@@ -437,7 +437,7 @@ pub trait InvariantReadContextExt: BizInvariantReadContext {
     }
 }
 
-impl<T: BizInvariantReadContext + ?Sized> InvariantReadContextExt for T {}
+impl<T: BusinessInvariantReadContext + ?Sized> InvariantReadContextExt for T {}
 
 /// Domain runtime plugin contract.
 pub trait RuntimePlugin {
@@ -467,7 +467,7 @@ pub trait RuntimePlugin {
     ///
     /// Return `Ok(())` if all invariants hold, or `Err(message)` to block
     /// the operation. The default implementation performs no checks.
-    fn validate_biz_invariants(&self, _ctx: &dyn BizInvariantReadContext) -> Result<(), String> {
+    fn validate_business_invariants(&self, _ctx: &dyn BusinessInvariantReadContext) -> Result<(), String> {
         Ok(())
     }
 
@@ -580,11 +580,11 @@ pub trait TxReadContext {
 }
 
 /// Unique-key lookup capability for raw transaction contexts.
-pub trait TxUkContext: TxReadContext {
+pub trait TxUniqueKeyContext: TxReadContext {
     /// Resolves unique-key bytes to a system id.
-    fn resolve_uk(&self, kind: RecordKind, uk: &[u8]) -> Result<Option<SysId>, Self::Error>;
+    fn resolve_unique_key(&self, kind: RecordKind, uk: &[u8]) -> Result<Option<SysId>, Self::Error>;
     /// Resolves bytes for a specific unique-key id to a system id.
-    fn resolve_uk_id(&self, kind: RecordKind, uk_id: u8, uk: &[u8]) -> Result<Option<SysId>, Self::Error>;
+    fn resolve_unique_key_id(&self, kind: RecordKind, uk_id: u8, uk: &[u8]) -> Result<Option<SysId>, Self::Error>;
 }
 
 /// Raw write capability for transaction contexts.
@@ -616,9 +616,9 @@ pub trait TxSysIdCreateContext: TxWriteContext {
 }
 
 /// Full raw transaction context capability set.
-pub trait TxContext: TxUkContext + TxSysIdCreateContext {}
+pub trait TxContext: TxUniqueKeyContext + TxSysIdCreateContext {}
 
-impl<T: TxUkContext + TxSysIdCreateContext + ?Sized> TxContext for T {}
+impl<T: TxUniqueKeyContext + TxSysIdCreateContext + ?Sized> TxContext for T {}
 
 /// Typed transaction convenience API over generated StateVec accessors.
 pub trait TypedTxContext {
@@ -652,18 +652,18 @@ pub trait TypedTxContext {
 
     /// Read a record by unique key without mutating it.
     ///
-    /// Prefer [`TypedTxContext::update_typed_by_uk`] when the next step is to
+    /// Prefer [`TypedTxContext::update_typed_by_unique_key`] when the next step is to
     /// modify the same record. The update path keeps the operation in-place and
     /// avoids the extra resolve/read/then-update round-trip that this read-first
     /// pattern introduces on hot paths.
-    fn with_read_typed_by_uk<R, P, T, F>(&self, uk: P, f: F) -> Result<Option<T>, Self::Error>
+    fn with_read_typed_by_unique_key<R, P, T, F>(&self, uk: P, f: F) -> Result<Option<T>, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
         F: FnOnce(R::Access<'_>) -> T;
 
     /// Read a record by a specific unique-key id without mutating it.
-    fn with_read_typed_by_uk_id<R, P, T, F>(&self, uk_id: u8, uk: P, f: F) -> Result<Option<T>, Self::Error>
+    fn with_read_typed_by_unique_key_id<R, P, T, F>(&self, uk_id: u8, uk: P, f: F) -> Result<Option<T>, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
@@ -676,7 +676,7 @@ pub trait TypedTxContext {
     /// and passes the id to [`TypedTxContext::with_read_typed`],
     /// [`TypedTxContext::update_typed`] and [`TypedTxContext::delete_typed`].
     /// Hosts without record handles, including the V1 host ABI, return an error.
-    fn resolve_typed_uk<R, P>(&self, uk: P) -> Result<Option<SysId>, Self::Error>
+    fn resolve_typed_unique_key<R, P>(&self, uk: P) -> Result<Option<SysId>, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>;
@@ -704,28 +704,28 @@ pub trait TypedTxContext {
     /// This is the preferred hot-path API when a command needs to modify an
     /// existing record. It avoids the read-then-update pattern that would
     /// otherwise resolve the unique key and touch the same record twice.
-    fn update_typed_by_uk<R, P, T, F>(&mut self, uk: P, f: F) -> Result<Option<T>, Self::Error>
+    fn update_typed_by_unique_key<R, P, T, F>(&mut self, uk: P, f: F) -> Result<Option<T>, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
         F: for<'b> FnOnce(&mut R::UpdateBuilder<'b>) -> T;
 
     /// Update a record in-place by a specific unique-key id.
-    fn update_typed_by_uk_id<R, P, T, F>(&mut self, uk_id: u8, uk: P, f: F) -> Result<Option<T>, Self::Error>
+    fn update_typed_by_unique_key_id<R, P, T, F>(&mut self, uk_id: u8, uk: P, f: F) -> Result<Option<T>, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
         F: for<'b> FnOnce(&mut R::UpdateBuilder<'b>) -> T;
 
     /// Updates an existing record by unique key or creates a new one.
-    fn update_or_create_typed_by_uk<R, P, T, FU, FC>(&mut self, uk: P, update: FU, create: FC) -> Result<T, Self::Error>
+    fn update_or_create_typed_by_unique_key<R, P, T, FU, FC>(&mut self, uk: P, update: FU, create: FC) -> Result<T, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
         FU: for<'b> FnOnce(&mut R::UpdateBuilder<'b>) -> T,
         FC: for<'b> FnOnce(&mut R::NewBuilder<'b>) -> T,
     {
-        if let Some(value) = self.update_typed_by_uk::<R, P, T, FU>(uk, update)? {
+        if let Some(value) = self.update_typed_by_unique_key::<R, P, T, FU>(uk, update)? {
             return Ok(value);
         }
         let mut out = None;
@@ -736,13 +736,13 @@ pub trait TypedTxContext {
     }
 
     /// Deletes a generated record by unique key.
-    fn delete_by_uk<R, P>(&mut self, uk: P) -> Result<bool, Self::Error>
+    fn delete_by_unique_key<R, P>(&mut self, uk: P) -> Result<bool, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>;
 
     /// Deletes a generated record by a specific unique-key id.
-    fn delete_by_uk_id<R, P>(&mut self, uk_id: u8, uk: P) -> Result<bool, Self::Error>
+    fn delete_by_unique_key_id<R, P>(&mut self, uk_id: u8, uk: P) -> Result<bool, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>;
@@ -802,33 +802,33 @@ impl<Ctx: TxContext + ?Sized> TypedTxContext for Ctx {
         TxReadContext::with_read_raw(self, RecordKey { kind: R::KIND, sys_id }, |data| f(R::wrap(data)))
     }
 
-    fn with_read_typed_by_uk<R, P, T, F>(&self, uk: P, f: F) -> Result<Option<T>, Self::Error>
+    fn with_read_typed_by_unique_key<R, P, T, F>(&self, uk: P, f: F) -> Result<Option<T>, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
         F: FnOnce(R::Access<'_>) -> T,
     {
-        self.with_read_typed_by_uk_id::<R, P, T, F>(0, uk, f)
+        self.with_read_typed_by_unique_key_id::<R, P, T, F>(0, uk, f)
     }
 
-    fn with_read_typed_by_uk_id<R, P, T, F>(&self, uk_id: u8, uk: P, f: F) -> Result<Option<T>, Self::Error>
+    fn with_read_typed_by_unique_key_id<R, P, T, F>(&self, uk_id: u8, uk: P, f: F) -> Result<Option<T>, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
         F: FnOnce(R::Access<'_>) -> T,
     {
-        let Some(sys_id) = TxUkContext::resolve_uk_id(self, R::KIND, uk_id, uk.as_ref())? else {
+        let Some(sys_id) = TxUniqueKeyContext::resolve_unique_key_id(self, R::KIND, uk_id, uk.as_ref())? else {
             return Ok(None);
         };
         TypedTxContext::with_read_typed::<R, T, F>(self, sys_id, f)
     }
 
-    fn resolve_typed_uk<R, P>(&self, uk: P) -> Result<Option<SysId>, Self::Error>
+    fn resolve_typed_unique_key<R, P>(&self, uk: P) -> Result<Option<SysId>, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
     {
-        TxUkContext::resolve_uk_id(self, R::KIND, 0, uk.as_ref())
+        TxUniqueKeyContext::resolve_unique_key_id(self, R::KIND, 0, uk.as_ref())
     }
 
     fn update_typed<R, T, F>(&mut self, sys_id: SysId, f: F) -> Result<Option<T>, Self::Error>
@@ -859,22 +859,22 @@ impl<Ctx: TxContext + ?Sized> TypedTxContext for Ctx {
         TxWriteContext::create_raw(self, R::KIND, data)
     }
 
-    fn update_typed_by_uk<R, P, T, F>(&mut self, uk: P, f: F) -> Result<Option<T>, Self::Error>
+    fn update_typed_by_unique_key<R, P, T, F>(&mut self, uk: P, f: F) -> Result<Option<T>, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
         F: for<'b> FnOnce(&mut R::UpdateBuilder<'b>) -> T,
     {
-        self.update_typed_by_uk_id::<R, P, T, F>(0, uk, f)
+        self.update_typed_by_unique_key_id::<R, P, T, F>(0, uk, f)
     }
 
-    fn update_typed_by_uk_id<R, P, T, F>(&mut self, uk_id: u8, uk: P, f: F) -> Result<Option<T>, Self::Error>
+    fn update_typed_by_unique_key_id<R, P, T, F>(&mut self, uk_id: u8, uk: P, f: F) -> Result<Option<T>, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
         F: for<'b> FnOnce(&mut R::UpdateBuilder<'b>) -> T,
     {
-        let Some(sys_id) = TxUkContext::resolve_uk_id(self, R::KIND, uk_id, uk.as_ref())? else {
+        let Some(sys_id) = TxUniqueKeyContext::resolve_unique_key_id(self, R::KIND, uk_id, uk.as_ref())? else {
             return Ok(None);
         };
         TxWriteContext::update_raw(self, RecordKey { kind: R::KIND, sys_id }, |data| {
@@ -883,14 +883,14 @@ impl<Ctx: TxContext + ?Sized> TypedTxContext for Ctx {
         })
     }
 
-    fn update_or_create_typed_by_uk<R, P, T, FU, FC>(&mut self, uk: P, update: FU, create: FC) -> Result<T, Self::Error>
+    fn update_or_create_typed_by_unique_key<R, P, T, FU, FC>(&mut self, uk: P, update: FU, create: FC) -> Result<T, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
         FU: for<'b> FnOnce(&mut R::UpdateBuilder<'b>) -> T,
         FC: for<'b> FnOnce(&mut R::NewBuilder<'b>) -> T,
     {
-        if let Some(value) = self.update_typed_by_uk::<R, P, T, FU>(uk, update)? {
+        if let Some(value) = self.update_typed_by_unique_key::<R, P, T, FU>(uk, update)? {
             return Ok(value);
         }
 
@@ -901,20 +901,20 @@ impl<Ctx: TxContext + ?Sized> TypedTxContext for Ctx {
         Ok(out.expect("create closure must produce a value"))
     }
 
-    fn delete_by_uk<R, P>(&mut self, uk: P) -> Result<bool, Self::Error>
+    fn delete_by_unique_key<R, P>(&mut self, uk: P) -> Result<bool, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
     {
-        self.delete_by_uk_id::<R, P>(0, uk)
+        self.delete_by_unique_key_id::<R, P>(0, uk)
     }
 
-    fn delete_by_uk_id<R, P>(&mut self, uk_id: u8, uk: P) -> Result<bool, Self::Error>
+    fn delete_by_unique_key_id<R, P>(&mut self, uk_id: u8, uk: P) -> Result<bool, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
     {
-        let Some(sys_id) = TxUkContext::resolve_uk_id(self, R::KIND, uk_id, uk.as_ref())? else {
+        let Some(sys_id) = TxUniqueKeyContext::resolve_unique_key_id(self, R::KIND, uk_id, uk.as_ref())? else {
             return Ok(false);
         };
         TxWriteContext::delete_raw(self, RecordKey { kind: R::KIND, sys_id })
@@ -968,28 +968,28 @@ impl TypedTxContext for dyn RuntimeHostContext + '_ {
         RuntimeHostContextExt::with_read_typed::<R, T, F>(self, sys_id, f)
     }
 
-    fn with_read_typed_by_uk<R, P, T, F>(&self, uk: P, f: F) -> Result<Option<T>, Self::Error>
+    fn with_read_typed_by_unique_key<R, P, T, F>(&self, uk: P, f: F) -> Result<Option<T>, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
         F: FnOnce(R::Access<'_>) -> T,
     {
-        RuntimeHostContextExt::with_read_typed_by_uk::<R, P, T, F>(self, uk, f)
+        RuntimeHostContextExt::with_read_typed_by_unique_key::<R, P, T, F>(self, uk, f)
     }
 
-    fn with_read_typed_by_uk_id<R, P, T, F>(&self, uk_id: u8, uk: P, f: F) -> Result<Option<T>, Self::Error>
+    fn with_read_typed_by_unique_key_id<R, P, T, F>(&self, uk_id: u8, uk: P, f: F) -> Result<Option<T>, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
         F: FnOnce(R::Access<'_>) -> T,
     {
         if uk_id == 0 {
-            return RuntimeHostContextExt::with_read_typed_by_uk::<R, P, T, F>(self, uk, f);
+            return RuntimeHostContextExt::with_read_typed_by_unique_key::<R, P, T, F>(self, uk, f);
         }
         Err(RuntimeHostError::new("RuntimeHostContext does not support secondary UK lookup yet"))
     }
 
-    fn resolve_typed_uk<R, P>(&self, _uk: P) -> Result<Option<SysId>, Self::Error>
+    fn resolve_typed_unique_key<R, P>(&self, _uk: P) -> Result<Option<SysId>, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
@@ -1020,42 +1020,42 @@ impl TypedTxContext for dyn RuntimeHostContext + '_ {
         RuntimeHostContextExt::create_typed::<R, F>(self, init)
     }
 
-    fn update_typed_by_uk<R, P, T, F>(&mut self, uk: P, f: F) -> Result<Option<T>, Self::Error>
+    fn update_typed_by_unique_key<R, P, T, F>(&mut self, uk: P, f: F) -> Result<Option<T>, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
         F: for<'b> FnOnce(&mut R::UpdateBuilder<'b>) -> T,
     {
-        RuntimeHostContextExt::update_typed_by_uk::<R, P, T, F>(self, uk, f)
+        RuntimeHostContextExt::update_typed_by_unique_key::<R, P, T, F>(self, uk, f)
     }
 
-    fn update_typed_by_uk_id<R, P, T, F>(&mut self, uk_id: u8, uk: P, f: F) -> Result<Option<T>, Self::Error>
+    fn update_typed_by_unique_key_id<R, P, T, F>(&mut self, uk_id: u8, uk: P, f: F) -> Result<Option<T>, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
         F: for<'b> FnOnce(&mut R::UpdateBuilder<'b>) -> T,
     {
         if uk_id == 0 {
-            return RuntimeHostContextExt::update_typed_by_uk::<R, P, T, F>(self, uk, f);
+            return RuntimeHostContextExt::update_typed_by_unique_key::<R, P, T, F>(self, uk, f);
         }
         Err(RuntimeHostError::new("RuntimeHostContext does not support secondary UK lookup yet"))
     }
 
-    fn delete_by_uk<R, P>(&mut self, uk: P) -> Result<bool, Self::Error>
+    fn delete_by_unique_key<R, P>(&mut self, uk: P) -> Result<bool, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
     {
-        RuntimeHostContextExt::delete_by_uk::<R, P>(self, uk)
+        RuntimeHostContextExt::delete_by_unique_key::<R, P>(self, uk)
     }
 
-    fn delete_by_uk_id<R, P>(&mut self, uk_id: u8, uk: P) -> Result<bool, Self::Error>
+    fn delete_by_unique_key_id<R, P>(&mut self, uk_id: u8, uk: P) -> Result<bool, Self::Error>
     where
         R: GeneratedRecordAccess,
         P: AsRef<[u8]>,
     {
         if uk_id == 0 {
-            return RuntimeHostContextExt::delete_by_uk::<R, P>(self, uk);
+            return RuntimeHostContextExt::delete_by_unique_key::<R, P>(self, uk);
         }
         Err(RuntimeHostError::new("RuntimeHostContext does not support secondary UK lookup yet"))
     }

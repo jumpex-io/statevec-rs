@@ -14,7 +14,7 @@ pub struct Prepared { report: std::fs::File }
 impl ProjectorModule for Latest {
     const SUPPORTED_HISTORY_MODES: SupportedHistoryModes = SupportedHistoryModes::LatestState;
     type Configured = Config;
-    fn configure(&self, input: ProjectorConfig<'_>) -> Result<Config, ConfigureFailure> {
+    fn configure(&self, input: ProjectorConfig<'_>) -> Result<Config, ConfigureError> {
         struct Object;
         impl<'de> serde::de::Visitor<'de> for Object {
             type Value = Config;
@@ -25,9 +25,9 @@ impl ProjectorModule for Latest {
         }
         let mut decoder = serde_json::Deserializer::from_slice(input.bytes);
         let mut config: Config = serde::Deserializer::deserialize_map(&mut decoder, Object)
-            .map_err(|_| ConfigureFailure::Invalid { code: 1 })?;
-        decoder.end().map_err(|_| ConfigureFailure::Invalid { code: 1 })?;
-        if config.report_path.as_os_str().is_empty() { return Err(ConfigureFailure::Invalid { code: 2 }); }
+            .map_err(|_| ConfigureError::Invalid { code: 1 })?;
+        decoder.end().map_err(|_| ConfigureError::Invalid { code: 1 })?;
+        if config.report_path.as_os_str().is_empty() { return Err(ConfigureError::Invalid { code: 2 }); }
         if config.report_path.is_relative() { config.report_path = input.base_dir.join(config.report_path); }
         Ok(config)
     }

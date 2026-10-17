@@ -52,8 +52,8 @@ pub struct TxResult<'a> {
     /// Preserve the producing profile alongside its exact digest bytes.
     pub result_digest_profile: u8,
     pub result_digest: &'a [u8],
-    pub sys_result_code: u16,
-    pub biz_code: u16,
+    pub system_code: u16,
+    pub business_code: u16,
 }
 
 /// Complete transaction output. Events retain their original ordinals; changes

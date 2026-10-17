@@ -1,7 +1,7 @@
 //! Core ABI qualification fixture, not an application runtime. Valid commands
 //! deliberately unwind in preflight, dispatch or the rule hook. Atomic counts
 //! observe physical calls only; they never decide business output or recovery.
-use statevec::api::plugin_v3::*;
+use statevec::api::v1::*;
 use statevec::prelude::*;
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,7 +18,7 @@ pub extern "C" fn core_fixture_call_count(slot: u32) -> u64 {
 #[schema_module(version = "1.0")]
 mod counters {
     use super::*;
-    #[record(kind = 1, record_len = 64, uk(id = 0, fields = [account_id]))]
+    #[record(kind = 1, record_len = 64, unique_key(id = 0, fields = [account_id]))]
     pub struct Account {
         #[field(index = 1, immutable = true)]
         pub account_id: u64,
@@ -81,14 +81,14 @@ struct Runtime {
 }
 impl CoreModule for Module {
     type Configured = Configured;
-    fn configure(&self, config: CoreConfig<'_>) -> Result<Configured, ConfigureFailure> {
+    fn configure(&self, config: CoreConfig<'_>) -> Result<Configured, ConfigureError> {
         let fault = match config.bytes {
             b"{}" => LifecycleFault::None,
             b"{\"fault\":\"successor_create\"}" => LifecycleFault::SuccessorCreate,
             b"{\"fault\":\"poisoned_retire\"}" => LifecycleFault::PoisonedRetire,
             b"{\"fault\":\"candidate_retire\"}" => LifecycleFault::CandidateRetire,
             b"{\"fault\":\"configured_retire\"}" => LifecycleFault::ConfiguredRetire,
-            _ => return Err(ConfigureFailure::Invalid { code: 1 }),
+            _ => return Err(ConfigureError::Invalid { code: 1 }),
         };
         Ok(Configured { schema: registry(), fault, creates: AtomicU64::new(0) })
     }
@@ -102,11 +102,11 @@ impl ConfiguredCore for Configured {
             schema: &self.schema,
         }
     }
-    fn create_instance(&self) -> Result<Runtime, CreateFailure> {
+    fn create_instance(&self) -> Result<Runtime, CoreCreateError> {
         CALLS[0].fetch_add(1, Ordering::Relaxed);
         let ordinal = self.creates.fetch_add(1, Ordering::Relaxed) + 1;
         if self.fault == LifecycleFault::SuccessorCreate && ordinal > 1 {
-            return Err(CreateFailure::Resource(ResourceFailure::Os { code: 12 }));
+            return Err(CoreCreateError::Resource(ResourceError::Os { code: 12 }));
         }
         Ok(Runtime {
             poisoned: Cell::new(false),
@@ -139,7 +139,7 @@ impl Runtime {
         self.poisoned.set(true);
         panic!("deliberate Core fixture unwind");
     }
-    fn rules(&self, view: &dyn CandidateRead) -> Result<(), TxFailure> {
+    fn rules(&self, view: &dyn CandidateRead) -> Result<(), CoreTxError> {
         CALLS[3].fetch_add(1, Ordering::Relaxed);
         view.for_each_after_change(&mut |change| {
             let data = match change {
@@ -159,7 +159,7 @@ impl CoreRuntime for Runtime {
     fn preflight_command(
         &self,
         command: &RuntimeCommandRef<'_>,
-    ) -> Result<(), statevec::model::CommandSchemaFailure> {
+    ) -> Result<(), statevec::model::CommandSchemaError> {
         CALLS[1].fetch_add(1, Ordering::Relaxed);
         assert!(!self.poisoned.get(), "a poisoned runtime must never be called again");
         match command.command_kind() {
@@ -169,20 +169,20 @@ impl CoreRuntime for Runtime {
                 PreflightPanic::validate_payload(command.payload())?;
                 self.unwind();
             }
-            kind => Err(statevec::model::CommandSchemaFailure::UnsupportedKind { kind }),
+            kind => Err(statevec::model::CommandSchemaError::UnsupportedKind { kind }),
         }
     }
     fn run_tx(
         &self,
         tx: &mut PluginTx<'_>,
         command: &RuntimeCommandRef<'_>,
-    ) -> Result<(), TxFailure> {
+    ) -> Result<(), CoreTxError> {
         CALLS[2].fetch_add(1, Ordering::Relaxed);
         assert!(!self.poisoned.get(), "a poisoned runtime must never be called again");
         // All three command layouts are the same two u64s, checked above.
         let input = Add::wrap(command.payload());
-        tx.update_or_create_typed_by_uk::<Account, _, _, _, _>(
-            Account::uk(input.account_id()),
+        tx.update_or_create_typed_by_unique_key::<Account, _, _, _, _>(
+            Account::unique_key(input.account_id()),
             |row| {
                 row.set_total(row.total() + input.amount());
             },
@@ -192,7 +192,7 @@ impl CoreRuntime for Runtime {
             },
         )?;
         let sys_id = tx
-            .resolve_uk(Account::KIND, Account::uk(input.account_id()).as_ref())?
+            .resolve_unique_key(Account::KIND, Account::unique_key(input.account_id()).as_ref())?
             .unwrap();
         let total = tx
             .with_read_typed::<Account, _, _>(sys_id, |row| row.total())?

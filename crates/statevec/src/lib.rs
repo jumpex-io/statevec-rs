@@ -19,11 +19,11 @@ pub use statevec_api;
 pub use statevec_model;
 
 pub use statevec_api::{
-    BizInvariantReadContext, BusinessRejectCode, CanonicalIndexCount, CommittedStatus, InvariantReadContextExt,
+    BusinessInvariantReadContext, BusinessRejectCode, CanonicalIndexCount, CommittedStatus, InvariantReadContextExt,
     ReferenceTimeUnavailable, RejectedErrorCode, RuntimeCommandEnvelope, RuntimeCommandRef,
     RuntimeHostContext, RuntimeHostContextExt, RuntimeHostError, RuntimePlugin, RuntimePluginError, RuntimePluginFactory,
     RuntimePluginLoadError, RuntimePluginUnloadError, STATEVEC_API_COMPAT_VERSION, STATEVEC_API_VERSION, TxContext,
-    TxPositionUnavailable, TxReadContext, TxSysIdCreateContext, TxUkContext, TxWriteContext, TypedTxContext,
+    TxPositionUnavailable, TxReadContext, TxSysIdCreateContext, TxUniqueKeyContext, TxWriteContext, TypedTxContext,
 };
 pub use statevec_macros::{EnumU8, command, command_dispatch, event, export_runtime_plugin, record, schema_module};
 pub use statevec_model::{
@@ -32,7 +32,7 @@ pub use statevec_model::{
     FieldDefinition, FieldType, FixedBytes, GeneratedCommandAccess, GeneratedEventAccess, GeneratedRecordAccess,
     KeyBuilder, KeyBytes, KeyEncodeFn, MAX_UNIQUE_KEYS_PER_RECORD, PayloadBuildError, PayloadFieldDefinition,
     RECORD_HEADER_SIZE, RecordDefinition, RecordKey, RecordKind, RecordSchema, SchemaFingerprint, SchemaIdentity,
-    SchemaRegistry, StatevecCommandPayloadBuilder, SysId, TxSeq, UkCodec, UniqueKeyBytes, UniqueKeyDefinition, Version,
+    SchemaRegistry, StatevecCommandPayloadBuilder, SysId, TxSeq, UniqueKeyCodec, UniqueKeyBytes, UniqueKeyDefinition, Version,
 };
 pub use statevec_model::{command as command_model, event as event_model, record as record_model};
 
@@ -72,10 +72,10 @@ pub mod prelude {
     pub use statevec_model;
 
     pub use statevec_api::{
-        BizInvariantReadContext, BusinessRejectCode, CanonicalIndexCount, InvariantReadContextExt,
+        BusinessInvariantReadContext, BusinessRejectCode, CanonicalIndexCount, InvariantReadContextExt,
         ReferenceTimeUnavailable, RuntimeCommandEnvelope, RuntimeCommandRef, RuntimeHostContext, RuntimeHostContextExt,
         RuntimeHostError, RuntimePlugin, RuntimePluginError, RuntimePluginFactory, RuntimePluginLoadError, RuntimePluginUnloadError,
-        TxContext, TxPositionUnavailable, TxReadContext, TxSysIdCreateContext, TxUkContext, TxWriteContext, TypedTxContext,
+        TxContext, TxPositionUnavailable, TxReadContext, TxSysIdCreateContext, TxUniqueKeyContext, TxWriteContext, TypedTxContext,
     };
     pub use statevec_macros::{EnumU8, command, command_dispatch, event, export_runtime_plugin, record, schema_module};
     pub use statevec_model::{
@@ -84,7 +84,7 @@ pub mod prelude {
         FieldDefinition, FieldType, FixedBytes, GeneratedCommandAccess, GeneratedEventAccess, GeneratedRecordAccess,
         KeyBuilder, KeyBytes, KeyEncodeFn, MAX_UNIQUE_KEYS_PER_RECORD, PayloadBuildError, PayloadFieldDefinition,
         RECORD_HEADER_SIZE, RecordDefinition, RecordKey, RecordKind, RecordSchema, SchemaFingerprint, SchemaIdentity,
-        SchemaRegistry, StatevecCommandPayloadBuilder, SysId, TxSeq, UkCodec, UniqueKeyBytes, UniqueKeyDefinition,
+        SchemaRegistry, StatevecCommandPayloadBuilder, SysId, TxSeq, UniqueKeyCodec, UniqueKeyBytes, UniqueKeyDefinition,
         Version,
     };
 }

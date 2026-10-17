@@ -1,6 +1,6 @@
 //! A synchronous host-table fixture for the public SDK facade, not an engine.
 use super::*;
-use crate::plugin_v3::{CoreFailure, CoreOperation, HostFailure, ResourceFailure};
+use crate::v1::{CoreError, CoreOperation, HostError, ResourceError};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use test_case::test_case;
@@ -125,14 +125,14 @@ unsafe extern "C" fn resolve(
 unsafe extern "C" fn read_uk(
     raw: *const c_void,
     kind: u16,
-    uk_id: u8,
+    unique_key_id: u8,
     key: SvBytes,
     visit: SvReadVisitor,
     context: *mut c_void,
     out: *mut u32,
 ) -> SvStatus {
     let mut id = 0;
-    let status = unsafe { resolve(raw, kind, uk_id, key, out, &mut id) };
+    let status = unsafe { resolve(raw, kind, unique_key_id, key, out, &mut id) };
     if !status.is_success() || unsafe { out.read() } == 0 {
         return status;
     }
@@ -251,7 +251,7 @@ unsafe extern "C" fn update(
 unsafe extern "C" fn update_uk(
     raw: *mut c_void,
     kind: u16,
-    uk_id: u8,
+    unique_key_id: u8,
     key: SvBytes,
     visit: SvWriteVisitor,
     context: *mut c_void,
@@ -259,7 +259,7 @@ unsafe extern "C" fn update_uk(
 ) -> SvStatus {
     let mut id = 0;
     unsafe {
-        resolve(raw, kind, uk_id, key, found, &mut id);
+        resolve(raw, kind, unique_key_id, key, found, &mut id);
         update(
             raw,
             wire_key(RecordKey { kind, sys_id: id }),
@@ -281,21 +281,21 @@ unsafe extern "C" fn delete(raw: *mut c_void, key: SvKey, found: *mut u32) -> Sv
 unsafe extern "C" fn delete_uk(
     raw: *mut c_void,
     kind: u16,
-    uk_id: u8,
+    unique_key_id: u8,
     key: SvBytes,
     found: *mut u32,
 ) -> SvStatus {
     let mut id = 0;
     unsafe {
-        resolve(raw, kind, uk_id, key, found, &mut id);
+        resolve(raw, kind, unique_key_id, key, found, &mut id);
         delete(raw, wire_key(RecordKey { kind, sys_id: id }), found)
     }
 }
 unsafe extern "C" fn event(raw: *mut c_void, kind: u16, value: SvBytes) -> SvStatus {
     let host = unsafe { host(raw) };
     if matches!(host.fault, Fault::EventFailure) {
-        return SvStatus::from(&ExecutionFailure::Host(HostFailure::Resource(
-            ResourceFailure::Os { code: 5 },
+        return SvStatus::from(&CoreExecutionError::Host(HostError::Resource(
+            ResourceError::Os { code: 5 },
         )));
     }
     host.events
@@ -369,7 +369,7 @@ fn transaction_views_support_shared_reentry_and_exact_time(time: u64) {
         observed,
         [(1, vec![1, 2], vec![3, 4]), (2, vec![3, 4], vec![3, 4])]
     );
-    assert_eq!(tx.resolve_uk_id(7, 1, &[2]).unwrap(), Some(2));
+    assert_eq!(tx.resolve_unique_key_id(7, 1, &[2]).unwrap(), Some(2));
     assert_eq!(
         tx.with_read_raw(RecordKey { kind: 7, sys_id: 3 }, |_| panic!(
             "absent visitor"
@@ -425,12 +425,12 @@ fn mutation_facade_preserves_supplied_id_and_returns_visitor_result() {
     );
 }
 
-#[test_case(Fault::Twice, AbiFailure::CallbackCount { expected: 1, actual: 2 }; "second visitor")]
-#[test_case(Fault::MissingVisitor, AbiFailure::CallbackCount { expected: 1, actual: 0 }; "missing visitor")]
-#[test_case(Fault::FoundFlag, AbiFailure::Flag { actual: 2 }; "bad found flag")]
-#[test_case(Fault::NullData, AbiFailure::NullPointer; "null before borrow")]
-#[test_case(Fault::LongData, AbiFailure::Length { actual: u64::MAX, maximum: isize::MAX as u64 }; "extent before borrow")]
-fn malformed_read_is_latched_even_if_host_reports_success(fault: Fault, expected: AbiFailure) {
+#[test_case(Fault::Twice, CoreAbiError::CallbackCount { expected: 1, actual: 2 }; "second visitor")]
+#[test_case(Fault::MissingVisitor, CoreAbiError::CallbackCount { expected: 1, actual: 0 }; "missing visitor")]
+#[test_case(Fault::FoundFlag, CoreAbiError::Flag { actual: 2 }; "bad found flag")]
+#[test_case(Fault::NullData, CoreAbiError::NullPointer; "null before borrow")]
+#[test_case(Fault::LongData, CoreAbiError::Length { actual: u64::MAX, maximum: isize::MAX as u64 }; "extent before borrow")]
+fn malformed_read_is_latched_even_if_host_reports_success(fault: Fault, expected: CoreAbiError) {
     let host = Host {
         fault,
         ..Default::default()
@@ -440,13 +440,13 @@ fn malformed_read_is_latched_even_if_host_reports_success(fault: Fault, expected
     let tx = unsafe { PluginTx::from_raw(&table).unwrap() };
     assert_eq!(
         tx.with_read_raw(RecordKey { kind: 7, sys_id: 1 }, |_| ()),
-        Err(ExecutionFailure::AbiContract(expected))
+        Err(CoreExecutionError::AbiContract(expected))
     );
     assert_eq!(
         tx.with_read_raw(RecordKey { kind: 7, sys_id: 1 }, |_| panic!(
             "poisoned callback"
         )),
-        Err(ExecutionFailure::AbiContract(expected))
+        Err(CoreExecutionError::AbiContract(expected))
     );
     assert_eq!(host.reads.get(), 1);
     assert_eq!(tx.finish(Ok(())), SvStatus::from(&expected));
@@ -460,7 +460,7 @@ fn visitor_create_draft_host_is_rejected_before_reading_callbacks() {
     table.create = None;
     // SAFETY: the fixture still provides a complete readable header/table.
     let failure = unsafe { PluginTx::from_raw(&table) }.err().expect("old create ABI must refuse");
-    assert_eq!(failure, AbiFailure::UnsupportedCapabilities { required: CORE_RAW_CREATE_CAPABILITY });
+    assert_eq!(failure, CoreAbiError::UnsupportedCapabilities { required: CORE_RAW_CREATE_CAPABILITY });
     assert_eq!(host.reads.get(), 0);
 }
 
@@ -491,12 +491,12 @@ fn unusable_host_failure_survives_later_business_rejection(fault: Fault) {
     let source = tx
         .with_read_raw(RecordKey { kind: 1, sys_id: 1 }, |_| ())
         .unwrap_err();
-    let result = tx.finish(Err(TxFailure::Rejected(
+    let result = tx.finish(Err(CoreTxError::Rejected(
         crate::BusinessRejectCode::new(42).unwrap(),
     )));
     assert_eq!(
         result.decode_for(CoreOperation::RunTx).unwrap(),
-        Some(CoreFailure::Transaction(TxFailure::Execution(source)))
+        Some(CoreError::Transaction(CoreTxError::Execution(source)))
     );
 }
 
@@ -510,7 +510,7 @@ fn read_visitor_panic_is_not_hidden_by_host_success() {
         tx.with_read_raw(RecordKey { kind: 7, sys_id: 1 }, |_| panic!(
             "visitor panic"
         )),
-        Err::<Option<()>, _>(ExecutionFailure::PluginPanicked)
+        Err::<Option<()>, _>(CoreExecutionError::PluginPanicked)
     );
     assert_eq!(tx.finish(Ok(())).tag, 7);
 }
@@ -522,7 +522,7 @@ enum ScalarFailure {
 }
 
 unsafe extern "C" fn ordinary_scalar_failure(_: *const c_void, _: *mut u64) -> SvStatus {
-    SvStatus::from(&ExecutionFailure::Host(HostFailure::Resource(ResourceFailure::Os { code: 5 })))
+    SvStatus::from(&CoreExecutionError::Host(HostError::Resource(ResourceError::Os { code: 5 })))
 }
 
 #[test_case(ScalarFailure::Time; "time failure before visitor panic")]
@@ -545,8 +545,8 @@ fn nested_scalar_error_cannot_mask_later_visitor_unusability(scalar: ScalarFailu
         });
         panic!("visitor fails after handling an ordinary scalar error");
     });
-    assert_eq!(result, Err(ExecutionFailure::PluginPanicked));
-    assert_eq!(tx.with_read_raw(key, |_| ()), Err(ExecutionFailure::PluginPanicked));
+    assert_eq!(result, Err(CoreExecutionError::PluginPanicked));
+    assert_eq!(tx.with_read_raw(key, |_| ()), Err(CoreExecutionError::PluginPanicked));
     assert_eq!(host.reads.get(), 1, "unusable scope never calls the host again");
-    assert_eq!(tx.finish(Ok(())), SvStatus::from(&ExecutionFailure::PluginPanicked));
+    assert_eq!(tx.finish(Ok(())), SvStatus::from(&CoreExecutionError::PluginPanicked));
 }

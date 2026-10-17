@@ -141,10 +141,10 @@ pub(crate) fn expand_command_dispatch(input: CommandDispatchInput) -> syn::Resul
                 &self,
                 kind: statevec_model::CommandKind,
                 payload: &[u8],
-            ) -> ::core::result::Result<(), statevec_model::CommandSchemaFailure> {
+            ) -> ::core::result::Result<(), statevec_model::CommandSchemaError> {
                 match kind {
                     #( #preflight_arms, )*
-                    _ => ::core::result::Result::Err(statevec_model::CommandSchemaFailure::UnsupportedKind { kind }),
+                    _ => ::core::result::Result::Err(statevec_model::CommandSchemaError::UnsupportedKind { kind }),
                 }
             }
 

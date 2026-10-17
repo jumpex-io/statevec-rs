@@ -4,7 +4,7 @@
 use statevec_macros::record;
 use statevec_model::FixedBytes;
 
-#[record(kind = 1, record_len = 64, uk(id = 0, fields = [a,b]))]
+#[record(kind = 1, record_len = 64, unique_key(id = 0, fields = [a,b]))]
 pub struct Bad {
     #[field(index = 1, immutable = true)]
     pub a: u64,

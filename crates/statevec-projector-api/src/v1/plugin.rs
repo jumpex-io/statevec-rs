@@ -1,5 +1,5 @@
 //! Plugin implementation contracts: configure, prepare, then one worker run.
-use super::{ConfigureFailure, DeliveryLimits, ProjectorError, ProjectorIo};
+use super::{ConfigureError, DeliveryLimits, ProjectorError, ProjectorIo};
 use crate::{Digest32, AppliedTxProgress, ProjectionManifest, HistoryMode, SupportedHistoryModes};
 use std::{num::NonZeroU64, path::Path};
 
@@ -62,7 +62,7 @@ pub trait ProjectorModule: Send + Sync + 'static {
     const SUPPORTED_HISTORY_MODES: SupportedHistoryModes;
     type Configured: ConfiguredProjector;
     /// Parse immutable configuration only; do not open stores/start services.
-    fn configure(&self, config: ProjectorConfig<'_>) -> Result<Self::Configured, ConfigureFailure>;
+    fn configure(&self, config: ProjectorConfig<'_>) -> Result<Self::Configured, ConfigureError>;
 }
 pub trait ConfiguredProjector: Send + Sync + 'static {
     type Prepared: PreparedProjector;

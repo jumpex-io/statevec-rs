@@ -39,7 +39,7 @@ pub fn derive_enum_u8(input: TokenStream) -> TokenStream {
 /// `record_len` includes the header and must be a power of two from 64 bytes
 /// through the runtime's 32 KiB limit ([`statevec_model::MAX_RECORD_LEN`]).
 /// Optional unique-key metadata can be provided with
-/// `uk(id = 0, fields = [field_a, field_b])`.
+/// `unique_key(id = 0, fields = [field_a, field_b])`.
 #[proc_macro_attribute]
 pub fn record(args: TokenStream, input: TokenStream) -> TokenStream {
     let args_ts: proc_macro2::TokenStream = args.into();

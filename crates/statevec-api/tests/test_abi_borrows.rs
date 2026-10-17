@@ -4,7 +4,7 @@
 use std::mem::MaybeUninit;
 
 use statevec_api::{
-    BizInvariantReadContext, RuntimeBytesRef, RuntimeBytesVisitor, RuntimeCallStatus, RuntimeErrorBuf,
+    BusinessInvariantReadContext, RuntimeBytesRef, RuntimeBytesVisitor, RuntimeCallStatus, RuntimeErrorBuf,
     RuntimeErrorPhase, RuntimeReadContextV1, RuntimeReadContextV1Adapter, RuntimeReadVTableV1, RuntimeRecordKeyView,
     RuntimeRecordKeyVisitor, clear_runtime_error, runtime_error_kind, runtime_error_text, write_runtime_error,
 };

@@ -8,7 +8,7 @@ use test_case::test_case;
 mod schema {
     use super::*;
 
-    #[record(kind = 1, record_len = 64, uk(id = 0, fields = [id]))]
+    #[record(kind = 1, record_len = 64, unique_key(id = 0, fields = [id]))]
     pub struct Row {
         #[field(index = 1, immutable)]
         pub id: u64,
@@ -80,7 +80,7 @@ impl RuntimePlugin for ClockRuntime {
             .map_err(|error| RuntimePluginError::new(format!("{error:?}")))?);
         Ok(())
     }
-    fn validate_biz_invariants(&self, _: &dyn BizInvariantReadContext) -> Result<(), String> { Ok(()) }
+    fn validate_business_invariants(&self, _: &dyn BusinessInvariantReadContext) -> Result<(), String> { Ok(()) }
     fn on_unload(&mut self) -> Result<(), RuntimePluginUnloadError> { Ok(()) }
 }
 
@@ -166,7 +166,7 @@ fn nested_transaction_restores_outer_time_and_preserves_rollback(exit: Exit, inn
         let surviving = usize::from(matches!(exit, Exit::Success));
         assert_eq!(outer.record_count(), surviving);
         assert_eq!(outer.events().len(), surviving);
-        assert_eq!(outer.read::<Row, _>(Row::uk(1), |row| row.id()), if surviving == 1 { Some(1) } else { None });
+        assert_eq!(outer.read::<Row, _>(Row::unique_key(1), |row| row.id()), if surviving == 1 { Some(1) } else { None });
         let next = TypedTxContext::create_typed::<Row, _>(outer, |row| { row.init_id(2); }).unwrap();
         assert_eq!(next.sys_id, surviving as u64 + 1, "rollback restores id allocation too");
         Ok::<_, ()>(())

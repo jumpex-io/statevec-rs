@@ -18,7 +18,7 @@ mod plain {
         Closed = 2,
     }
 
-    #[record(kind = 1, record_len = 64, uk(id = 0, fields = [id]))]
+    #[record(kind = 1, record_len = 64, unique_key(id = 0, fields = [id]))]
     pub struct Item {
         #[field(index = 1, immutable)]
         pub id: u64,
@@ -52,7 +52,7 @@ mod qualified {
         Open = 1,
     }
 
-    #[statevec_macros::record(kind = 1, record_len = 64, uk(id = 0, fields = [id]))]
+    #[statevec_macros::record(kind = 1, record_len = 64, unique_key(id = 0, fields = [id]))]
     pub struct Item {
         #[field(index = 3, enum_u8)]
         pub status: self::Status,

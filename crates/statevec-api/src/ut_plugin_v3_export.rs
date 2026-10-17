@@ -29,7 +29,7 @@ struct Runtime {
 }
 impl CoreModule for Module {
     type Configured = Bound;
-    fn configure(&self, config: CoreConfig<'_>) -> Result<Bound, super::super::ConfigureFailure> {
+    fn configure(&self, config: CoreConfig<'_>) -> Result<Bound, super::super::ConfigureError> {
         self.counts.configure.fetch_add(1, Ordering::Relaxed);
         Ok(Bound {
             schema: statevec_model::SchemaRegistry::new(
@@ -68,7 +68,7 @@ impl ConfiguredCore for Bound {
             schema: &self.schema,
         }
     }
-    fn create_instance(&self) -> Result<Runtime, super::super::CreateFailure> {
+    fn create_instance(&self) -> Result<Runtime, super::super::CoreCreateError> {
         self.counts.create.fetch_add(1, Ordering::Relaxed);
         if self.fault == 1 {
             panic!("injected constructor panic");
@@ -84,18 +84,18 @@ impl CoreRuntime for Runtime {
     fn preflight_command(
         &self,
         command: &RuntimeCommandRef<'_>,
-    ) -> Result<(), statevec_model::CommandSchemaFailure> {
+    ) -> Result<(), statevec_model::CommandSchemaError> {
         match command.command_kind() {
             1 => Ok(()),
             2 => panic!("injected preflight panic"),
-            kind => Err(statevec_model::CommandSchemaFailure::UnsupportedKind { kind }),
+            kind => Err(statevec_model::CommandSchemaError::UnsupportedKind { kind }),
         }
     }
     fn run_tx(
         &self,
         tx: &mut PluginTx<'_>,
         _: &RuntimeCommandRef<'_>,
-    ) -> Result<(), super::super::TxFailure> {
+    ) -> Result<(), super::super::CoreTxError> {
         self.counts.run.fetch_add(1, Ordering::Relaxed);
         if self.fault == 2 {
             panic!("injected handler panic");
@@ -289,7 +289,7 @@ fn oversized_configuration_is_refused_without_following_its_pointer() {
     };
     assert_eq!(
         status,
-        SvStatus::from(&AbiFailure::Length {
+        SvStatus::from(&CoreAbiError::Length {
             actual: 1024 * 1024 + 1,
             maximum: 1024 * 1024
         })
@@ -319,7 +319,7 @@ fn non_utf8_configuration_is_refused_before_user_configuration() {
     };
     let mut out = std::ptr::null_mut();
     let status = unsafe { configure(&module, SvBytes::borrowed(&[0xff]), &mut out) };
-    assert_eq!(status, SvStatus::from(&AbiFailure::Utf8));
+    assert_eq!(status, SvStatus::from(&CoreAbiError::Utf8));
     assert!(out.is_null());
     assert_eq!(counts.configure.load(Ordering::Relaxed), 0);
 }
@@ -332,8 +332,8 @@ enum HandlerExit {
 #[test_case(HandlerExit::Success; "handler returns success")]
 #[test_case(HandlerExit::Panic; "later panic cannot be downgraded to an ordinary callback error")]
 fn exported_run_preserves_void_callback_failure_without_hiding_unusability(exit: HandlerExit) {
-    use crate::plugin_v3::tx::tests::{Fault, Host, table};
-    use crate::plugin_v3::{ExecutionFailure, HostFailure, ResourceFailure};
+    use crate::v1::tx::tests::{Fault, Host, table};
+    use crate::v1::{CoreExecutionError, HostError, ResourceError};
     let mut fixture = Fixture::bound(exit as u8);
     assert!(fixture.create().is_success());
     let mut host = Host::default();
@@ -349,8 +349,8 @@ fn exported_run_preserves_void_callback_failure_without_hiding_unusability(exit:
     };
     let status = unsafe { (TABLE.0.run_tx.unwrap())(fixture.instance, &table, &command) };
     let expected = match exit {
-        HandlerExit::Panic => ExecutionFailure::PluginPanicked,
-        HandlerExit::Success => ExecutionFailure::Host(HostFailure::Resource(ResourceFailure::Os { code: 5 })),
+        HandlerExit::Panic => CoreExecutionError::PluginPanicked,
+        HandlerExit::Success => CoreExecutionError::Host(HostError::Resource(ResourceError::Os { code: 5 })),
     };
     assert_eq!(status, SvStatus::from(&expected));
     assert_eq!(fixture.counts.run.load(Ordering::Relaxed), 1);

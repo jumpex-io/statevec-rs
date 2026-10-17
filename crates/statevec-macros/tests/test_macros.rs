@@ -4,7 +4,7 @@
 //! Auxiliary tests for proc-macro expansion and compile-fail coverage.
 
 use statevec_macros::{EnumU8, record};
-use statevec_model::{Decimal, FixedBytes, GeneratedRecordAccess, RecordSchema, SchemaRegistry, UkCodec, Version};
+use statevec_model::{Decimal, FixedBytes, GeneratedRecordAccess, RecordSchema, SchemaRegistry, UniqueKeyCodec, Version};
 use std::collections::HashMap;
 
 #[test]
@@ -22,7 +22,7 @@ pub enum OrderStatus {
     Cancelled = 3,
 }
 
-#[record(kind = 2, record_len = 64, uk(id = 0, fields = [order_id]))]
+#[record(kind = 2, record_len = 64, unique_key(id = 0, fields = [order_id]))]
 pub struct Order {
     #[field(index = 1, immutable = true)]
     pub order_id: u64,
@@ -90,9 +90,9 @@ fn single_uk() {
     assert_eq!(ro.status(), OrderStatus::Filled);
     assert_eq!(ro.client_id().as_slice(), b"abc-001");
 
-    let uk = <Order as UkCodec>::encode_uk_from_bytes(&buf);
+    let uk = <Order as UniqueKeyCodec>::encode_unique_key_from_bytes(&buf);
     assert_eq!(uk.len(), 8);
-    assert_eq!(uk, Order::uk(1001));
+    assert_eq!(uk, Order::unique_key(1001));
 
     // offset consts: data-relative (no header prefix), fields packed from 0
     assert_eq!(OrderAccess::ORDER_ID_OFFSET, 0);
@@ -172,7 +172,7 @@ fn record_auto_traits_work() {
     assert!(debug.contains("Order"));
 }
 
-#[record(kind = 3, record_len = 64, uk(id = 0, fields = [account_id, ccy]))]
+#[record(kind = 3, record_len = 64, unique_key(id = 0, fields = [account_id, ccy]))]
 pub struct AccountCcyStat {
     #[field(index = 1, immutable = true)]
     pub account_id: u64,
@@ -187,7 +187,7 @@ pub struct AccountCcyStat {
     pub nonce: u8,
 }
 
-#[record(kind = 1, record_len = 128, uk(id = 0, fields = [a,b]))]
+#[record(kind = 1, record_len = 128, unique_key(id = 0, fields = [a,b]))]
 pub struct PKWithFixedBytes {
     #[field(index = 1, immutable = true)]
     pub a: u64,
@@ -209,9 +209,9 @@ fn test_composite_uk() {
     assert_eq!(ro.ccy(), FixedBytes::from(b"USD"));
     assert_eq!(ro.balance(), 1_000_000);
 
-    let uk = <AccountCcyStat as UkCodec>::encode_uk_from_bytes(&buf);
+    let uk = <AccountCcyStat as UniqueKeyCodec>::encode_unique_key_from_bytes(&buf);
     assert_eq!(uk.len(), 12);
-    assert_eq!(uk, AccountCcyStat::uk(998, &ccy));
+    assert_eq!(uk, AccountCcyStat::unique_key(998, &ccy));
     assert_eq!(ccy.key_bytes().as_slice(), b"USD\0");
     assert_eq!(&uk[8..12], b"USD\0");
 
@@ -259,9 +259,9 @@ fn reserved_field() {
 #[record(
     kind = 11,
     record_len = 128,
-    uk(id = 0, name = "by_account_client", fields = [account_id, client_id]),
-    uk(id = 1, name = "by_external_id", fields = [external_id]),
-    uk(id = 2, name = "by_account_external", fields = [account_id, external_id])
+    unique_key(id = 0, name = "by_account_client", fields = [account_id, client_id]),
+    unique_key(id = 1, name = "by_external_id", fields = [external_id]),
+    unique_key(id = 2, name = "by_account_external", fields = [account_id, external_id])
 )]
 pub struct MultiUkOrder {
     #[field(index = 1, immutable)]
@@ -302,17 +302,17 @@ fn multiple_named_uk_definitions_generate_stable_metadata_and_helpers() {
     assert_eq!(MultiUkOrder::BY_EXTERNAL_ID_UK_ID, 1);
     assert_eq!(MultiUkOrder::BY_ACCOUNT_EXTERNAL_UK_ID, 2);
 
-    let first = <MultiUkOrder as UkCodec>::encode_uk_from_bytes(&buf);
-    assert_eq!(first, MultiUkOrder::uk(42, &client_id));
-    assert_eq!(first, MultiUkOrder::uk_by_account_client(42, &client_id));
-    assert_eq!(MultiUkOrder::uk_by_external_id(9001).as_slice(), 9001u64.to_be_bytes().as_slice());
-    assert_eq!(MultiUkOrder::uk_by_account_external(42, 9001).len(), 16);
+    let first = <MultiUkOrder as UniqueKeyCodec>::encode_unique_key_from_bytes(&buf);
+    assert_eq!(first, MultiUkOrder::unique_key(42, &client_id));
+    assert_eq!(first, MultiUkOrder::unique_key_by_account_client(42, &client_id));
+    assert_eq!(MultiUkOrder::unique_key_by_external_id(9001).as_slice(), 9001u64.to_be_bytes().as_slice());
+    assert_eq!(MultiUkOrder::unique_key_by_account_external(42, 9001).len(), 16);
 }
 
 #[record(
     kind = 12,
     record_len = 128,
-    uk(id = 0, fields = [order_id]),
+    unique_key(id = 0, fields = [order_id]),
     index(id = 0, name = "by_account_status_created", fields = [account_id, status, created_seq]),
     index(id = 1, name = "by_market_client", fields = [market, client_id])
 )]

@@ -1,4 +1,4 @@
-use super::{AbiFailure, ExecutionFailure, SvStatus, author::*, borrow::*, ffi::*};
+use super::{CoreAbiError, CoreExecutionError, SvStatus, author::*, borrow::*, ffi::*};
 use crate::ReferenceTimeUnavailable;
 use statevec_model::RecordKey;
 use std::ffi::c_void;
@@ -11,7 +11,7 @@ impl<'call> Candidate<'call> {
     /// # Safety
     /// The host supplies a live immutable table/context for this call, implements
     /// its C signatures, and loans callback bytes synchronously without unwind.
-    pub unsafe fn from_raw(raw: *const SvCandidateV3) -> Result<Self, AbiFailure> {
+    pub unsafe fn from_raw(raw: *const SvCandidateV3) -> Result<Self, CoreAbiError> {
         // SAFETY: forwarding the host's readable header and scoped allocation.
         let table = unsafe { table(raw, 4, CORE_CANDIDATE_CAPABILITY | 1)? };
         if table.context.is_null()
@@ -20,7 +20,7 @@ impl<'call> Candidate<'call> {
             || table.resolve_uk.is_none()
             || table.changes.is_none()
         {
-            return Err(AbiFailure::NullPointer);
+            return Err(CoreAbiError::NullPointer);
         }
         Ok(Self {
             table,
@@ -32,7 +32,7 @@ impl<'call> Candidate<'call> {
         view: u32,
         key: RecordKey,
         visit: &mut dyn FnMut(&[u8]),
-    ) -> Result<bool, ExecutionFailure> {
+    ) -> Result<bool, CoreExecutionError> {
         self.failure.current()?;
         let mut call = ReadCall::new(|bytes: &[u8]| visit(bytes));
         let mut found = 0;
@@ -55,9 +55,9 @@ impl<'call> Candidate<'call> {
         &self,
         view: u32,
         kind: u16,
-        uk_id: u8,
+        unique_key_id: u8,
         key: &[u8],
-    ) -> Result<Option<u64>, ExecutionFailure> {
+    ) -> Result<Option<u64>, CoreExecutionError> {
         self.failure.current()?;
         let (mut found, mut id) = (0, 0);
         // SAFETY: validated callbacks, borrowed key and initialized outputs.
@@ -66,7 +66,7 @@ impl<'call> Candidate<'call> {
                 self.table.context,
                 view,
                 kind,
-                uk_id,
+                unique_key_id,
                 SvBytes::borrowed(key),
                 &mut found,
                 &mut id,
@@ -77,7 +77,7 @@ impl<'call> Candidate<'call> {
             .map(|found| found.then_some(id))
             .inspect_err(|source| self.failure.remember(source))
     }
-    fn changes(&self, visitor: ChangeVisitor<'_>) -> Result<(), ExecutionFailure> {
+    fn changes(&self, visitor: ChangeVisitor<'_>) -> Result<(), CoreExecutionError> {
         self.failure.current()?;
         let after_only = u32::from(matches!(visitor, ChangeVisitor::After(_)));
         let mut call = ChangeCall {
@@ -100,7 +100,7 @@ impl<'call> Candidate<'call> {
         self.failure.check(call.failure.unwrap_or(status))?;
         self.failure.check(status)?;
         if count != call.count {
-            let source = abi(AbiFailure::CallbackCount {
+            let source = abi(CoreAbiError::CallbackCount {
                 expected: call.count,
                 actual: count,
             });
@@ -121,7 +121,7 @@ impl CandidateRead for Candidate<'_> {
             Ok(value)
         })();
         result.map_err(|source| {
-            if !matches!(source, ExecutionFailure::ReferenceTimeUnavailable) {
+            if !matches!(source, CoreExecutionError::ReferenceTimeUnavailable) {
                 self.failure.remember(&source);
             }
             ReferenceTimeUnavailable
@@ -131,42 +131,42 @@ impl CandidateRead for Candidate<'_> {
         &self,
         key: RecordKey,
         visit: &mut dyn FnMut(&[u8]),
-    ) -> Result<bool, ExecutionFailure> {
+    ) -> Result<bool, CoreExecutionError> {
         self.read(0, key, visit)
     }
     fn read_after(
         &self,
         key: RecordKey,
         visit: &mut dyn FnMut(&[u8]),
-    ) -> Result<bool, ExecutionFailure> {
+    ) -> Result<bool, CoreExecutionError> {
         self.read(1, key, visit)
     }
-    fn resolve_uk_before(
+    fn resolve_unique_key_before(
         &self,
         kind: u16,
-        uk_id: u8,
+        unique_key_id: u8,
         key: &[u8],
-    ) -> Result<Option<u64>, ExecutionFailure> {
-        self.resolve(0, kind, uk_id, key)
+    ) -> Result<Option<u64>, CoreExecutionError> {
+        self.resolve(0, kind, unique_key_id, key)
     }
-    fn resolve_uk_after(
+    fn resolve_unique_key_after(
         &self,
         kind: u16,
-        uk_id: u8,
+        unique_key_id: u8,
         key: &[u8],
-    ) -> Result<Option<u64>, ExecutionFailure> {
-        self.resolve(1, kind, uk_id, key)
+    ) -> Result<Option<u64>, CoreExecutionError> {
+        self.resolve(1, kind, unique_key_id, key)
     }
     fn for_each_change(
         &self,
         visitor: &mut dyn FnMut(CandidateChange<'_>),
-    ) -> Result<(), ExecutionFailure> {
+    ) -> Result<(), CoreExecutionError> {
         self.changes(ChangeVisitor::Full(visitor))
     }
     fn for_each_after_change(
         &self,
         visitor: &mut dyn FnMut(CandidateAfterChange<'_>),
-    ) -> Result<(), ExecutionFailure> {
+    ) -> Result<(), CoreExecutionError> {
         self.changes(ChangeVisitor::After(visitor))
     }
 }
@@ -200,25 +200,25 @@ unsafe extern "C" fn change_visit(
         let expected_before = !after_only && matches!(value.operation, 1 | 2);
         let expected_after = matches!(value.operation, 0 | 1);
         if value.reserved != 0 {
-            return (&AbiFailure::Reserved {
+            return (&CoreAbiError::Reserved {
                 actual: value.reserved.into(),
             })
                 .into();
         }
         if value.operation > 2 {
-            return (&AbiFailure::Flag {
+            return (&CoreAbiError::Flag {
                 actual: value.operation,
             })
                 .into();
         }
         if value.has_before != u32::from(expected_before) {
-            return (&AbiFailure::Flag {
+            return (&CoreAbiError::Flag {
                 actual: value.has_before,
             })
                 .into();
         }
         if value.has_after != u32::from(expected_after) {
-            return (&AbiFailure::Flag {
+            return (&CoreAbiError::Flag {
                 actual: value.has_after,
             })
                 .into();
@@ -233,7 +233,7 @@ unsafe extern "C" fn change_visit(
             (expected_after, value.after),
         ] {
             if !present && (bytes.len != 0 || !bytes.ptr.is_null()) {
-                return (&AbiFailure::InvalidHandle).into();
+                return (&CoreAbiError::InvalidHandle).into();
             }
         }
         // SAFETY: checked presence; the host loans only the declared views for

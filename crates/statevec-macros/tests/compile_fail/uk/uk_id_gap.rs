@@ -3,8 +3,8 @@ use statevec_macros::record;
 #[record(
     kind = 1,
     record_len = 64,
-    uk(id = 0, name = "by_a", fields = [a]),
-    uk(id = 2, name = "by_b", fields = [b])
+    unique_key(id = 0, name = "by_a", fields = [a]),
+    unique_key(id = 2, name = "by_b", fields = [b])
 )]
 pub struct UkIdGap {
     #[field(index = 1, immutable)]

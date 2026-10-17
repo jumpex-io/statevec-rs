@@ -9,7 +9,7 @@ use crate::{
     read_u64_le,
 };
 
-fn encode_uk(data: &[u8]) -> KeyBytes {
+fn encode_unique_key(data: &[u8]) -> KeyBytes {
     let mut uk = KeyBuilder::new();
     uk.push_u64(read_u64_le(data, 0).expect("test data should contain the u64 UK field"));
     uk.finish()
@@ -58,7 +58,7 @@ static REC_DEF: RecordDefinition = RecordDefinition {
     name: "TestRec",
     data_size: 64,
     version: 1,
-    unique_keys: &[crate::UniqueKeyDefinition { id: 0, name: "", encode: Some(encode_uk), fields: &["id"] }],
+    unique_keys: &[crate::UniqueKeyDefinition { id: 0, name: "", encode: Some(encode_unique_key), fields: &["id"] }],
     canonical_indexes: REC_INDEXES,
     fields: REC_FIELDS,
     reserved_fields: &[],
@@ -492,10 +492,10 @@ fn idl_json_round_trips_into_host_owned_registry() {
     assert_eq!(record.canonical_indexes[0].fields, &["name"]);
     assert_eq!(
         imported
-            .encode_uk(REC_DEF.kind, &record_bytes)
+            .encode_unique_key(REC_DEF.kind, &record_bytes)
             .expect("imported registry should provide generic UK encoding"),
         registry
-            .encode_uk(REC_DEF.kind, &record_bytes)
+            .encode_unique_key(REC_DEF.kind, &record_bytes)
             .expect("baseline registry should encode UK"),
     );
     assert_eq!(

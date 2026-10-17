@@ -3,7 +3,7 @@
 
 use statevec_macros::record;
 
-#[record(kind = 1, record_len = 64, uk(id = 0, fields = [missing_field]))]
+#[record(kind = 1, record_len = 64, unique_key(id = 0, fields = [missing_field]))]
 pub struct Bad {
     #[field(index = 1)]
     pub a: u64,

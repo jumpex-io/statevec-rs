@@ -1,33 +1,33 @@
 //! Closed Core call causes. These carry observations, not instance-recovery policy.
-use super::{AccessFailure, SchemaFailure, StatusDecodeFailure};
+use super::{CoreAccessError, CoreSchemaError, CoreStatusDecodeError};
 use crate::BusinessRejectCode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResourceFailure {
+pub enum ResourceError {
     Allocation { requested: usize },
     Os { code: i32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfigureFailure {
+pub enum ConfigureError {
     /// Application-defined configuration error code; never a business outcome.
     Invalid { code: u32 },
     UnsupportedCapabilities { required: u64 },
-    Resource(ResourceFailure),
+    Resource(ResourceError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CreateFailure {
-    Resource(ResourceFailure),
+pub enum CoreCreateError {
+    Resource(ResourceError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HostFailure {
-    Resource(ResourceFailure),
+pub enum HostError {
+    Resource(ResourceError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AbiFailure {
+pub enum CoreAbiError {
     NullPointer,
     Alignment { required: usize },
     Length { actual: u64, maximum: u64 },
@@ -43,32 +43,32 @@ pub enum AbiFailure {
     BorrowConflict,
     ReentrantCall,
     CallbackCount { expected: u64, actual: u64 },
-    Status(StatusDecodeFailure),
+    Status(CoreStatusDecodeError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExecutionFailure {
-    Schema(SchemaFailure),
-    Access(AccessFailure),
-    Host(HostFailure),
+pub enum CoreExecutionError {
+    Schema(CoreSchemaError),
+    Access(CoreAccessError),
+    Host(HostError),
     ReferenceTimeUnavailable,
     TxPositionUnavailable,
     PluginPanicked,
     HostPanicked,
-    AbiContract(AbiFailure),
+    AbiContract(CoreAbiError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TxFailure {
+pub enum CoreTxError {
     Rejected(BusinessRejectCode),
-    Execution(ExecutionFailure),
+    Execution(CoreExecutionError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CoreFailure {
-    Transaction(TxFailure),
-    Configuration(ConfigureFailure),
-    Construction(CreateFailure),
+pub enum CoreError {
+    Transaction(CoreTxError),
+    Configuration(ConfigureError),
+    Construction(CoreCreateError),
 }
 
 /// The accepted call determines legal result families. No returned tag can
@@ -128,26 +128,26 @@ impl CoreOperation {
     }
 }
 
-impl From<AccessFailure> for TxFailure {
-    fn from(source: AccessFailure) -> Self {
-        Self::Execution(ExecutionFailure::Access(source))
+impl From<CoreAccessError> for CoreTxError {
+    fn from(source: CoreAccessError) -> Self {
+        Self::Execution(CoreExecutionError::Access(source))
     }
 }
 
-impl From<ExecutionFailure> for TxFailure {
-    fn from(source: ExecutionFailure) -> Self {
+impl From<CoreExecutionError> for CoreTxError {
+    fn from(source: CoreExecutionError) -> Self {
         Self::Execution(source)
     }
 }
 
-impl From<crate::ReferenceTimeUnavailable> for TxFailure {
+impl From<crate::ReferenceTimeUnavailable> for CoreTxError {
     fn from(_: crate::ReferenceTimeUnavailable) -> Self {
-        Self::Execution(ExecutionFailure::ReferenceTimeUnavailable)
+        Self::Execution(CoreExecutionError::ReferenceTimeUnavailable)
     }
 }
 
-impl From<crate::TxPositionUnavailable> for TxFailure {
+impl From<crate::TxPositionUnavailable> for CoreTxError {
     fn from(_: crate::TxPositionUnavailable) -> Self {
-        Self::Execution(ExecutionFailure::TxPositionUnavailable)
+        Self::Execution(CoreExecutionError::TxPositionUnavailable)
     }
 }

@@ -1,13 +1,13 @@
 //! A stateful Core V3 example with double-entry deposits/transfers and a
 //! configured exposure rule. Build: cargo build -p statevec --example core_v3_bank.
 //! This has its own schema/revision; it is not an upgrade of another Bank demo.
-use statevec::api::plugin_v3::*;
+use statevec::api::v1::*;
 use statevec::prelude::*;
 
 #[schema_module(version = "1.0")]
 mod bank {
     use super::*;
-    #[record(kind = 1, record_len = 128, uk(id = 0, fields = [account_id]))]
+    #[record(kind = 1, record_len = 128, unique_key(id = 0, fields = [account_id]))]
     pub struct Account {
         #[field(index = 1, immutable = true)]
         pub account_id: u64,
@@ -68,11 +68,11 @@ struct Runtime(Policy);
 
 impl CoreModule for Module {
     type Configured = Configured;
-    fn configure(&self, config: CoreConfig<'_>) -> Result<Configured, ConfigureFailure> {
+    fn configure(&self, config: CoreConfig<'_>) -> Result<Configured, ConfigureError> {
         let policy: Policy =
-            serde_json::from_slice(config.bytes).map_err(|_| ConfigureFailure::Invalid { code: 1 })?;
+            serde_json::from_slice(config.bytes).map_err(|_| ConfigureError::Invalid { code: 1 })?;
         if policy.min_amount == 0 || policy.min_amount > policy.max_balance {
-            return Err(ConfigureFailure::Invalid { code: 2 });
+            return Err(ConfigureError::Invalid { code: 2 });
         }
         Ok(Configured {
             schema: registry(),
@@ -90,23 +90,23 @@ impl ConfiguredCore for Configured {
             schema: &self.schema,
         }
     }
-    fn create_instance(&self) -> Result<Runtime, CreateFailure> {
+    fn create_instance(&self) -> Result<Runtime, CoreCreateError> {
         Ok(Runtime(self.policy))
     }
 }
 
 // Business codes belong to this example's revision: 1 invalid amount/account,
 // 2 insufficient funds, 3 arithmetic overflow, 4 candidate exposure limit.
-fn reject(code: u16) -> TxFailure {
-    TxFailure::Rejected(BusinessRejectCode::new(code).expect("example rejection code"))
+fn reject(code: u16) -> CoreTxError {
+    CoreTxError::Rejected(BusinessRejectCode::new(code).expect("example rejection code"))
 }
 impl Runtime {
-    fn adjust(tx: &mut PluginTx<'_>, id: u64, credit: u64, debit: u64) -> Result<(), TxFailure> {
+    fn adjust(tx: &mut PluginTx<'_>, id: u64, credit: u64, debit: u64) -> Result<(), CoreTxError> {
         let time = tx.ref_tx_time_ns()?;
         let position = tx.tx_seq()?;
-        let balances = tx.update_or_create_typed_by_uk::<Account, _, _, _, _>(
-            Account::uk(id),
-            |row| -> Result<_, TxFailure> {
+        let balances = tx.update_or_create_typed_by_unique_key::<Account, _, _, _, _>(
+            Account::unique_key(id),
+            |row| -> Result<_, CoreTxError> {
                 let credit = row.credit().checked_add(credit).ok_or_else(|| reject(3))?;
                 let debit = row.debit().checked_add(debit).ok_or_else(|| reject(3))?;
                 if id != 0 && credit < debit {
@@ -118,7 +118,7 @@ impl Runtime {
                 row.set_position(position);
                 Ok((credit, debit))
             },
-            |row| -> Result<_, TxFailure> {
+            |row| -> Result<_, CoreTxError> {
                 if id != 0 && credit < debit {
                     return Err(reject(2));
                 }
@@ -142,7 +142,7 @@ impl Runtime {
         );
         Ok(())
     }
-    fn rules(&self, view: &dyn CandidateRead) -> Result<(), TxFailure> {
+    fn rules(&self, view: &dyn CandidateRead) -> Result<(), CoreTxError> {
         let mut violation = false;
         view.for_each_after_change(&mut |change| {
             let data = match change {
@@ -165,18 +165,18 @@ impl CoreRuntime for Runtime {
     fn preflight_command(
         &self,
         command: &RuntimeCommandRef<'_>,
-    ) -> Result<(), statevec::model::CommandSchemaFailure> {
+    ) -> Result<(), statevec::model::CommandSchemaError> {
         match command.command_kind() {
             Deposit::KIND => Deposit::validate_payload(command.payload()),
             Transfer::KIND => Transfer::validate_payload(command.payload()),
-            kind => Err(statevec::model::CommandSchemaFailure::UnsupportedKind { kind }),
+            kind => Err(statevec::model::CommandSchemaError::UnsupportedKind { kind }),
         }
     }
     fn run_tx(
         &self,
         tx: &mut PluginTx<'_>,
         command: &RuntimeCommandRef<'_>,
-    ) -> Result<(), TxFailure> {
+    ) -> Result<(), CoreTxError> {
         match command.command_kind() {
             Deposit::KIND => {
                 let input = Deposit::wrap(command.payload());
@@ -198,8 +198,8 @@ impl CoreRuntime for Runtime {
                 Self::adjust(tx, input.from(), 0, input.amount())?;
                 Self::adjust(tx, input.to(), input.amount(), 0)
             }
-            kind => Err(TxFailure::Execution(ExecutionFailure::Schema(
-                SchemaFailure::UnsupportedKind { kind },
+            kind => Err(CoreTxError::Execution(CoreExecutionError::Schema(
+                CoreSchemaError::UnsupportedKind { kind },
             ))),
         }
     }

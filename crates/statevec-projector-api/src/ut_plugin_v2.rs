@@ -121,12 +121,12 @@ fn structural_failures_precede_operation_legality_and_core_is_unchanged() {
     assert_eq!(decode_call(projector_status(99, 0), O::Start), Err(A::Status(D::UnknownCause { tag: 12, cause: 99 })));
     assert_eq!(decode_call(projector_status(2, 0), O::Start), Err(A::Flag { actual: 0 }));
     assert_eq!(decode_call(projector_status(2, 11), O::Start), Err(A::Flag { actual: 11 }));
-    assert_eq!(projector_status(1, 0).decode_for(statevec_api::plugin_v3::CoreOperation::RunTx),
-        Err(statevec_api::plugin_v3::StatusDecodeFailure::UnknownTag { tag: 12 }));
+    assert_eq!(projector_status(1, 0).decode_for(statevec_api::v1::CoreOperation::RunTx),
+        Err(statevec_api::v1::CoreStatusDecodeError::UnknownTag { tag: 12 }));
 }
 
 #[test_case(F::HostPanicked; "stop_host_panic")]
-#[test_case(F::Host(HostFailure::Resource(ResourceFailure::Os { code: 5 })); "stop_host_io")]
+#[test_case(F::Host(HostError::Resource(ResourceError::Os { code: 5 })); "stop_host_io")]
 fn explicit_stop_forwards_host_failure_and_rejects_a_false_illegal_return(failure: F) {
     let raw = SvStatus::from(&failure);
     assert_eq!(decode_call(raw, O::RequestStop), Ok(Some(ProjectorCallError::Operation(failure))));

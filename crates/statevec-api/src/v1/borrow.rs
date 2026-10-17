@@ -1,23 +1,23 @@
 //! Checked call-scoped foreign views. These checks do not validate arbitrary
 //! native addresses: allocation validity remains the trusted host obligation.
 use super::{
-    AbiFailure, CoreFailure, CoreOperation, ExecutionFailure, SvStatus, TxFailure, ffi::*,
+    CoreAbiError, CoreError, CoreOperation, CoreExecutionError, SvStatus, CoreTxError, ffi::*,
 };
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::mem::{align_of, size_of};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-pub(super) fn abi(source: AbiFailure) -> ExecutionFailure {
-    ExecutionFailure::AbiContract(source)
+pub(super) fn abi(source: CoreAbiError) -> CoreExecutionError {
+    CoreExecutionError::AbiContract(source)
 }
 
-pub(super) fn pointer<T>(pointer: *const T) -> Result<(), AbiFailure> {
+pub(super) fn pointer<T>(pointer: *const T) -> Result<(), CoreAbiError> {
     if pointer.is_null() {
-        return Err(AbiFailure::NullPointer);
+        return Err(CoreAbiError::NullPointer);
     }
     if !pointer.addr().is_multiple_of(align_of::<T>()) {
-        return Err(AbiFailure::Alignment {
+        return Err(CoreAbiError::Alignment {
             required: align_of::<T>(),
         });
     }
@@ -28,10 +28,10 @@ pub(super) unsafe fn slice<'a, T>(
     pointer: *const T,
     len: u64,
     maximum: u64,
-) -> Result<&'a [T], AbiFailure> {
+) -> Result<&'a [T], CoreAbiError> {
     let maximum = maximum.min((isize::MAX as usize / size_of::<T>().max(1)) as u64);
     if len > maximum {
-        return Err(AbiFailure::Length {
+        return Err(CoreAbiError::Length {
             actual: len,
             maximum,
         });
@@ -45,7 +45,7 @@ pub(super) unsafe fn slice<'a, T>(
         .checked_add(len as usize * size_of::<T>())
         .is_none()
     {
-        return Err(AbiFailure::Length {
+        return Err(CoreAbiError::Length {
             actual: len,
             maximum: ((usize::MAX - pointer.addr()) / size_of::<T>().max(1)) as u64,
         });
@@ -55,15 +55,15 @@ pub(super) unsafe fn slice<'a, T>(
     Ok(unsafe { std::slice::from_raw_parts(pointer, len as usize) })
 }
 
-pub(super) unsafe fn bytes<'a>(view: SvBytes) -> Result<&'a [u8], AbiFailure> {
+pub(super) unsafe fn bytes<'a>(view: SvBytes) -> Result<&'a [u8], CoreAbiError> {
     // SAFETY: forwarding the caller's scoped allocation/lifetime obligation.
     unsafe { slice(view.ptr, view.len, isize::MAX as u64) }
 }
 
-pub(super) fn key(key: SvKey) -> Result<statevec_model::RecordKey, AbiFailure> {
+pub(super) fn key(key: SvKey) -> Result<statevec_model::RecordKey, CoreAbiError> {
     let reserved = u64::from(key.reserved16) | u64::from(key.reserved32);
     if reserved != 0 {
-        return Err(AbiFailure::Reserved { actual: reserved });
+        return Err(CoreAbiError::Reserved { actual: reserved });
     }
     Ok(statevec_model::RecordKey {
         kind: key.kind,
@@ -79,11 +79,11 @@ pub(super) fn wire_key(key: statevec_model::RecordKey) -> SvKey {
     }
 }
 
-pub(super) fn flag(value: u32) -> Result<bool, ExecutionFailure> {
+pub(super) fn flag(value: u32) -> Result<bool, CoreExecutionError> {
     match value {
         0 => Ok(false),
         1 => Ok(true),
-        actual => Err(abi(AbiFailure::Flag { actual })),
+        actual => Err(abi(CoreAbiError::Flag { actual })),
     }
 }
 
@@ -93,7 +93,7 @@ pub(super) fn caught(f: impl FnOnce() -> SvStatus) -> SvStatus {
         Err(payload) => {
             // A user-supplied panic payload may itself panic in Drop.
             std::mem::forget(payload);
-            SvStatus::from(&ExecutionFailure::PluginPanicked)
+            SvStatus::from(&CoreExecutionError::PluginPanicked)
         }
     }
 }
@@ -103,15 +103,15 @@ pub(super) fn caught(f: impl FnOnce() -> SvStatus) -> SvStatus {
 #[derive(Default)]
 pub(super) struct CallFailure(Cell<Option<SvStatus>>);
 impl CallFailure {
-    pub(super) fn current(&self) -> Result<(), ExecutionFailure> {
+    pub(super) fn current(&self) -> Result<(), CoreExecutionError> {
         self.0.get().map_or(Ok(()), |status| decode(status))
     }
-    pub(super) fn check(&self, status: SvStatus) -> Result<(), ExecutionFailure> {
+    pub(super) fn check(&self, status: SvStatus) -> Result<(), CoreExecutionError> {
         let result = decode(status);
         if let Err(
-            source @ (ExecutionFailure::PluginPanicked
-            | ExecutionFailure::HostPanicked
-            | ExecutionFailure::AbiContract(_)),
+            source @ (CoreExecutionError::PluginPanicked
+            | CoreExecutionError::HostPanicked
+            | CoreExecutionError::AbiContract(_)),
         ) = &result
         {
             self.remember(source);
@@ -121,12 +121,12 @@ impl CallFailure {
         self.current()?;
         result
     }
-    pub(super) fn remember(&self, source: &ExecutionFailure) {
+    pub(super) fn remember(&self, source: &CoreExecutionError) {
         // Share final-return precedence: first unusability wins over ordinary
         // failures, and a later failure never replaces an earlier unusability.
         self.0.set(Some(self.finish_status(source.into())));
     }
-    pub(super) fn finish(&self, result: Result<(), TxFailure>) -> SvStatus {
+    pub(super) fn finish(&self, result: Result<(), CoreTxError>) -> SvStatus {
         self.finish_status(result.map_or_else(|source| (&source).into(), |()| SvStatus::SUCCESS))
     }
     pub(super) fn finish_status(&self, status: SvStatus) -> SvStatus {
@@ -138,17 +138,17 @@ impl CallFailure {
     }
 }
 
-pub(super) fn decode(status: SvStatus) -> Result<(), ExecutionFailure> {
+pub(super) fn decode(status: SvStatus) -> Result<(), CoreExecutionError> {
     match status.decode_for(CoreOperation::HostCallback) {
         Ok(None) => Ok(()),
-        Ok(Some(CoreFailure::Transaction(TxFailure::Execution(source)))) => Err(source),
-        Ok(Some(_)) => Err(abi(AbiFailure::Status(
-            super::StatusDecodeFailure::IllegalReturn {
+        Ok(Some(CoreError::Transaction(CoreTxError::Execution(source)))) => Err(source),
+        Ok(Some(_)) => Err(abi(CoreAbiError::Status(
+            super::CoreStatusDecodeError::IllegalReturn {
                 operation: CoreOperation::HostCallback,
                 tag: status.tag,
             },
         ))),
-        Err(source) => Err(abi(AbiFailure::Status(source))),
+        Err(source) => Err(abi(CoreAbiError::Status(source))),
     }
 }
 
@@ -156,24 +156,24 @@ pub(super) unsafe fn table<'a, T>(
     raw: *const T,
     kind: u32,
     mandatory: u64,
-) -> Result<&'a T, AbiFailure> {
+) -> Result<&'a T, CoreAbiError> {
     pointer(raw)?;
     // SAFETY: host promises a readable header even for an incompatible table.
     let header = unsafe { raw.cast::<SvHeader>().read() };
     if header.abi_major != CORE_ABI_MAJOR {
-        return Err(AbiFailure::Version {
+        return Err(CoreAbiError::Version {
             expected: CORE_ABI_MAJOR,
             actual: header.abi_major,
         });
     }
     if header.kind != kind {
-        return Err(AbiFailure::Kind {
+        return Err(CoreAbiError::Kind {
             expected: kind,
             actual: header.kind,
         });
     }
     if header.table_bytes != size_of::<T>() as u64 {
-        return Err(AbiFailure::TableSize {
+        return Err(CoreAbiError::TableSize {
             expected: size_of::<T>() as u64,
             actual: header.table_bytes,
         });
@@ -181,7 +181,7 @@ pub(super) unsafe fn table<'a, T>(
     let unsupported = (header.required_caps | header.provided_caps) & !CORE_CAPABILITIES;
     let missing = mandatory & !header.provided_caps;
     if unsupported | missing != 0 {
-        return Err(AbiFailure::UnsupportedCapabilities {
+        return Err(CoreAbiError::UnsupportedCapabilities {
             required: unsupported | missing,
         });
     }
@@ -216,12 +216,12 @@ impl<F, T> ReadCall<F, T> {
         status: SvStatus,
         found: u32,
         scope: &CallFailure,
-    ) -> Result<Option<T>, ExecutionFailure> {
+    ) -> Result<Option<T>, CoreExecutionError> {
         scope.check(self.failure.unwrap_or(status))?;
         scope.check(status)?;
         let found = flag(found).inspect_err(|source| scope.remember(source))?;
         if self.calls != u64::from(found) {
-            let source = abi(AbiFailure::CallbackCount {
+            let source = abi(CoreAbiError::CallbackCount {
                 expected: u64::from(found),
                 actual: self.calls,
             });
@@ -245,7 +245,7 @@ pub(super) unsafe extern "C" fn read_visit<F: FnOnce(&[u8]) -> T, T>(
     let status = caught(|| {
         call.calls = call.calls.saturating_add(1);
         let Some(visit) = call.visit.take() else {
-            return SvStatus::from(&AbiFailure::CallbackCount {
+            return SvStatus::from(&CoreAbiError::CallbackCount {
                 expected: 1,
                 actual: call.calls,
             });

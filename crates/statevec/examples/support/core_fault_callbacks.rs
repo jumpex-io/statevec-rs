@@ -1,5 +1,5 @@
 use super::*;
-use statevec::api::plugin_v3::{__export, ffi::*};
+use statevec::api::v1::{__export, ffi::*};
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
@@ -57,7 +57,7 @@ unsafe extern "C" fn conflicting_write(context: *mut c_void, _: SvBytes) -> SvSt
     // SAFETY: live context and independent writable flag. This is a checked
     // logical borrow conflict; no mutable alias is created by the fixture.
     let status = unsafe { (tx.delete_record.unwrap())(tx.context, key, &mut found) };
-    if status == (&ExecutionFailure::AbiContract(AbiFailure::BorrowConflict)).into() && found == 0 {
+    if status == (&CoreExecutionError::AbiContract(CoreAbiError::BorrowConflict)).into() && found == 0 {
         CALLS[5].fetch_add(1, Ordering::Relaxed);
     }
     SvStatus::SUCCESS // Deliberately try to hide the callback failure.
@@ -77,7 +77,7 @@ unsafe extern "C" fn run(instance: *const c_void, tx: *const SvTxV3, command: *c
     entries::returned(instance, CoreOperation::RunTx, status);
     if input.kind != 1 { return status; }
     let returned = match account {
-        77 if status == (&ExecutionFailure::HostPanicked).into() => {
+        77 if status == (&CoreExecutionError::HostPanicked).into() => {
             CALLS[6].fetch_add(1, Ordering::Relaxed);
             SvStatus::SUCCESS // The native host's first fault must still win.
         }

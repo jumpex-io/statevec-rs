@@ -1,6 +1,6 @@
 use statevec_macros::record;
 
-#[record(kind = 1, record_len = 64, uk(id = 0, fields = [a]), uk(id = 1, fields = [b]))]
+#[record(kind = 1, record_len = 64, unique_key(id = 0, fields = [a]), unique_key(id = 1, fields = [b]))]
 pub struct MultipleAnonymousUk {
     #[field(index = 1, immutable)]
     pub a: u64,

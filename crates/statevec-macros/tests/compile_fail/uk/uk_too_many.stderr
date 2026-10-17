@@ -4,9 +4,9 @@ error: record supports at most 3 UK definitions
  3 | / #[record(
  4 | |     kind = 1,
  5 | |     record_len = 64,
- 6 | |     uk(id = 0, name = "by_a", fields = [a]),
+ 6 | |     unique_key(id = 0, name = "by_a", fields = [a]),
 ...  |
- 9 | |     uk(id = 3, name = "by_d", fields = [d])
+ 9 | |     unique_key(id = 3, name = "by_d", fields = [d])
 10 | | )]
    | |__^
    |
