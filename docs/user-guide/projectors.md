@@ -5,26 +5,32 @@ can maintain query tables, aggregates or a historical event view. Depend on
 `statevec-projector-api` from the same release or Git revision as the other
 StateVec libraries.
 
-Use `plugin_v2`: implement `ProjectorModule::configure`,
+The [glossary](../glossary.md) defines the data and control terms used below.
+
+Use `v1`: implement `ProjectorModule::configure`,
 `ConfiguredProjector::prepare`, and `PreparedProjector::run`. Export with
 `export_projector_plugin_v2!`. Run receives a scoped `ProjectorIo` on the SDK
 worker, separate from the engine thread. Its source, control and scoped services
 remain borrowed until actual joins complete. Attachment, process startup and
 durable history recovery stay with the native host.
 
-The separate `native` namespace contains owned-frame/receiver/control traits for
+The separate `native` namespace contains owned-entry/receiver/control traits for
 runtime integration. It is not a second step of the plugin API. Raw C tables and
-host-side decoding live in `plugin_v2::{ffi, host}`.
+host-side decoding live in `v1::{ffi, host}`.
 
-## Consume complete frames
+`v1` is the first safe Rust API namespace in this naming scheme. It does not
+mean C ABI 1: `export_projector_plugin_v2!` exports Projector ABI 2, while
+`export_core_plugin_v3!` exports Core ABI 3. Neither C ABI changes in SDK 0.5.0.
 
-`ProjectorSource` returns a `FrameLoan`. Its `view()` exposes ordered transaction
+## Consume complete Raft entries
+
+`ProjectorSource` returns a `RaftEntryDelivery`. Its `view()` exposes ordered transaction
 views, each with its actual result, events and record changes.
 An output includes the schema identity, replicated transaction time, every event,
 and complete record data without allocator headers: Insert carries `after`,
 Update carries `before` and `after`, and Delete carries `before`. Event ordinals
 and transaction order matter. Images describe the individual transaction, not
-the whole frame. Repeated writes to a row expose one net change; the next
+the whole entry. Repeated writes to a row expose one net change; the next
 successful transaction sees that result as its before value. Rejected writes
 and a create-then-delete within one transaction expose no record change.
 
@@ -33,20 +39,20 @@ send only changed fields. You do not need a duplicate model merely to recover
 the old value. The application still owns subscription baselines, ordering and
 resynchronization after reconnect; before/after alone is not a reliable network
 delivery protocol. Latest-state rebuild enumerates current records only, then
-its incremental frames use the same before/after contract.
+its incremental Raft entries use the same before/after contract.
 
-Apply each complete frame atomically in your read model before coalescing rows.
-An empty frame still advances the source position. A rejected transaction has
+Apply each complete entry atomically in your read model before coalescing rows.
+An empty entry still advances the source position. A rejected transaction has
 empty output. Client replies can omit events and do not replace this stream.
 
 The live/replay context is diagnostic. Use your stored source position to avoid
-applying an already covered frame twice. Reference times may be zero or decrease.
+applying an already covered entry twice. Reference times may be zero or decrease.
 
 ```rust
-use statevec_projector_api::plugin_v2::{FrameView, ProjectorFailure};
+use statevec_projector_api::v1::{RaftEntryView, ProjectorError};
 
-fn event_count(frame: &FrameView<'_>) -> Result<usize, ProjectorFailure> {
-    (0..frame.transaction_count()).try_fold(0, |count, i| Ok(count + frame.transaction(i)?.event_count()))
+fn event_count(entry: &RaftEntryView<'_>) -> Result<usize, ProjectorError> {
+    (0..entry.tx_count()).try_fold(0, |count, i| Ok(count + entry.tx(i)?.event_count()))
 }
 ```
 
@@ -54,16 +60,15 @@ The bounded receiver reports empty and disconnected separately. A full channel
 holds up further apply on the attached source. Dequeuing frees capacity but does
 not acknowledge a durable projector checkpoint.
 
-## Keep the source cut with your durable model
+## Keep the entry token with your durable model
 
-`loan.source_cut()` returns a `SourceCut`. Keep it with the model version it
-describes. `loan.view().position()` exposes source metadata for inspection, but
+`entry.token()` returns a `RaftEntryToken`. Keep it with the model version it
+describes. `entry.view().position()` exposes source metadata for inspection, but
 those readable fields cannot reconstruct a token. For a
-continuous-history source, `cut.offset()` returns `Some(ConsumeOffset)` with
-these four fields; latest-state cuts return `None`. A continuous consumer
+continuous-history source, `token.offset()` returns `Some(ConsumeOffset)` with
+these four fields; latest-state tokens return `None`. A continuous consumer
 must handle `None` as a mode mismatch; never replace it with a zero offset or
-interpret it as a request to initialize history. This is a source-level change
-from the earlier local draft; SDK 0.4.0 now uses the paired V2 ABI.
+interpret it as a request to initialize history.
 
 The stored continuous offset is:
 
@@ -109,22 +114,22 @@ remains application-owned.
 
 Save your effects and offset together in a database transaction when possible.
 If you use separate stores, save effects first and make replay idempotent.
-After that durability boundary, call `cut.declare_durable()` and submit the
-`DurableOffsetReport` through `control.report_durable_offset`. None of receiving a frame,
+After that durability boundary, call `token.declare_durable()` and submit the
+`DurableOffsetReport` through `control.report_durable_offset`. None of receiving an entry,
 dropping it, encoding/saving its offset or obtaining a token automatically
 acknowledges it. The native owner validates the offer; it does not persist a
 second consumer offset. Latest-state declaration returns the local
 `NotContinuousHistory` error, without a host call or failure latch. The report
-is immutable Copy evidence of your declaration, not proof of persistence or
-exclusive custody. Only the reply establishes the owner's acceptance.
+is an immutable Copy value of your declaration, not proof of persistence or
+exclusive ownership. Only the reply establishes the owner's acceptance.
 
 `Offer::Queued` means queued, not accepted: poll for
 `ReplyPoll::Ready(ControlDecision::Accepted)` or an explicit Rejected cause.
 An unsuccessful queue offer preserves the caller's report. Losing a reply does
-not undo acceptance. Re-offer the exact cut if needed; do not
+not undo acceptance. Re-offer the exact token if needed; do not
 change identity to manufacture a new attempt.
 
-When reopening, use `plugin_v2::ProjectorRecovery::ContinuousHistory { offset }` with metadata
+When reopening, use `v1::StartRequest::Continuous { offset }` with metadata
 decoded from your actual durable store. Only confirmed absence means `None`;
 read/corruption errors must not become a fresh start. The runtime checks source
 IDs and joins the actual committed term/index through checkpoint restore or
@@ -136,19 +141,15 @@ a different cluster with exactly the same configuration can reuse that ID; an
 old store's term/index may coincidentally match. Do not reuse a disaster-recovery
 offset for unrelated history: the four fields deliberately omit a content hash.
 
-## SDK 0.4.0 paired cutover
+## SDK 0.5.0 Rust vocabulary
 
-Replace `plugin_v1` with `plugin_v2`, `CheckpointCut` with `SourceCut`, and
-`OffsetCheckpoint`/`checkpointed()` with `DurableOffsetReport`/`declare_durable()`.
-The deprecated `offer_checkpoint` alias is removed. Native traits and native-only
-ReplayOnly recovery move to `native`; configured recovery has only
-ContinuousHistory and LatestStateOnly. Host integration uses `plugin_v2::host`.
-Rebuild the SDK, native host and plugins together. Discovery rejects old major
-tables before configure/start; there is no mixed-version fallback. All nine SDK
-crates use 0.4.0. Core V3 and persisted business/native formats remain unchanged.
-The subsequent offset-storage simplification replaces the JSON codec and the
-SDK file envelope as described below; it does not change the four offset fields
-or the C ABI. Rebuild source users against the same Git revision.
+All nine SDK crates use 0.5.0. Build the SDK, native host and plugins together
+from one reviewed revision. The safe Rust API uses `v1`, `RaftEntryDelivery`,
+`RaftEntryToken` and `SnapshotReader`; the C symbols, layouts and numbers stay
+unchanged. No old-name aliases are supplied. Configured `HistoryMode` selects
+`Continuous` or `LatestState`; `SupportedHistoryModes::Both` advertises both
+capabilities but does not run both modes together. Native-only `ReplayOnly`
+remains separate in `native::AttachmentRecovery`.
 
 `EngineCheckpointPolicy::min_capture_residence_ms` is the engine's delay after
 adopting a selected checkpoint before successor capture, not an application
@@ -163,20 +164,20 @@ Rejected, Closed and call failures remain explicit terminal outcomes and retain
 it. Same-index/same-term retry is native-idempotent within the live attachment;
 later progress or another term may still reject. The helper does no persistence,
 status polling or scheduling. The application decides whether OwnerNotRunning
-during its own stop is expected. `PendingRebuildConfirmation` uses the same
+during its own stop is expected. `PendingSnapshotConfirmation` uses the same
 private mechanics for a different fact: EOF plus installed baseline, not durable P.
 
-## Borrowed V2 delivery
+## Borrowed entry and Snapshot delivery
 
-The `plugin_v2` module also provides a scoped borrower for a native V2 host
+The `v1` module also provides a scoped borrower for a native V2 host
 table. `ProjectorIo::split()` separates `source`, `control`, `services` and
-`stop`. `source.try_next()` / `next_timeout()` return a `FrameLoan`, `StateLoan`,
-Empty, TimedOut, Stop or Disconnected. `loan.view()` exposes ordered transactions,
+`stop`. `source.try_next()` / `next_timeout()` return a `RaftEntryDelivery`, `SnapshotReader`,
+Empty, TimedOut, Stop or Disconnected. `entry.view()` exposes ordered transactions,
 borrowed events and record changes without copying their payloads. Views cannot
-outlive the loan; releasing the loan does not save or acknowledge an offset.
+outlive the entry; releasing the entry does not save or acknowledge an offset.
 
 For continuous history, obtain the `Some(offset)` from
-`loan.source_cut().offset()`. After saving your effects and that offset, offer the cut's
+`entry.token().offset()`. After saving your effects and that offset, offer the token's
 `declare_durable()` value with `control.report_durable_offset()`. Queue Full, Closed and
 the four-live-reply capacity limit are distinct from a queued owner's refusal.
 A `ReplyHandle` polls without blocking; dropping a pending reply does not cancel
@@ -184,26 +185,26 @@ the submitted operation. Control and reply handles may move to scoped services
 created with `services.spawn()`, not to unscoped threads or static storage. All
 those services are joined before the enclosing host borrow ends.
 
-The unsafe `plugin_v2::host::with_host` entry is for an integration that already owns a validated
+The unsafe `v1::host::with_host` entry is for an integration that already owns a validated
 host table, startup binding and callback resources that remain alive through all
 actual joins. Application authors normally use the generated exporter instead.
 
-For latest-state initialization, the first source delivery is a `StateLoan`.
+For latest-state initialization, the first source delivery is a `SnapshotReader`.
 `info()` gives the exact frozen baseline and live-record count. `next_record()`
 lends one record, returns `Progress` for a bounded scan quantum, or returns `End`
 only after the real complete scan. Neither an error nor `Stop` is EOF. Borrowed
-bytes must end before another read; the source loan cannot move between threads.
-After `End`, `finish()` consumes the native loan and yields a `RebuildCut`.
-Install the complete in-memory model before `control.offer_rebuild(&cut)`;
+bytes must end before another read; the source entry cannot move between threads.
+After `End`, `finish()` consumes the native entry and yields a `SnapshotToken`.
+Install the complete in-memory model before `control.offer_snapshot_confirmation(&token)`;
 Accepted permits ordered delivery from S+1. No offset file or database is read
-or written by this path. Dropping an unfinished loan cannot grant readiness;
+or written by this path. Dropping an unfinished entry cannot grant readiness;
 an explicit model/read/service failure retains precedence over abandonment.
 
 ## Export a configured continuous-history worker
 
 Implement `ProjectorModule` to check configuration, `ConfiguredProjector` to
 prepare application resources, and `PreparedProjector` to report the actual
-recovery offset and consume frames in `run`. Export the module with
+recovery offset and consume Raft entries in `run`. Export the module with
 `statevec_projector_api::export_projector_plugin_v2!`. The generated V2 table
 owns configure/prepare/start, failure observation, explicit stop, actual worker
 and scoped-service joins, and explicit destruction. A failed thread spawn leaves
@@ -229,9 +230,9 @@ under an existing parent and syncs both. `FileOffsetStore::open(path, cluster_id
 projector_id)` opens that directory, acquires a nonblocking exclusive writer lock
 on the stable `<filename>.lock` sidecar, and validates any existing offset. Before
 returning an existing selection, it syncs that same file and its opened directory;
-either failure refuses open, releases writer custody and preserves the bytes.
+either failure refuses open, releases writer ownership and preserves the bytes.
 This confirmation must precede handing an offset to native recovery: native may
-accept the restored prefix without waiting for a new frame or report. Leave
+accept the restored prefix without waiting for a new entry or report. Leave
 the lock file in place. Its lifetime is independent of atomic offset replacement.
 The helper refuses competing writers, symlinks/non-regular selected files,
 corruption and namespace mismatch; only positive absence returns `None`.
@@ -248,7 +249,7 @@ from Drop.
 The envelope is ASCII `SVPOFF02`, a little-endian u32 payload length, at most
 1024 bytes from `encode_properties()`, and SHA-256 of the header plus payload.
 There are no trailing bytes. Old `SVPOFF01` JSON files are explicitly rejected
-with `OffsetStoreError::Format(OffsetFileFailure::Header)` and left unchanged;
+with `OffsetStoreError::Format(OffsetFileError::Header)` and left unchanged;
 there is no automatic conversion or fresh fallback. Preserve old stores and
 use the matching old SDK until an explicit application migration is arranged;
 deleting the offset is not a safe migration. Database users persisting the four
@@ -262,7 +263,7 @@ confirmed leftovers only while all writers using that directory are stopped;
 leave selected offset files and stable `.lock` sidecars intact.
 
 Persist business effects first, then call `persist_offset`, then submit the real
-frame's `declare_durable()` value with `report_durable_offset`. Reporting only queues
+entry's `declare_durable()` value with `report_durable_offset`. Reporting only queues
 host validation and requires its reply; it does not write your offset. DB users
 may store the four fields directly in the transaction containing their effects.
 The file helper stores no business model and makes no cross-store atomicity claim.
@@ -304,7 +305,7 @@ Its strict configuration object is `{"report_path":"updates.jsonl"}`. Relative
 paths resolve against the configuration directory. This latest-only consumer
 starts with an empty private model on every invocation, enumerates the actual
 state source through EOF, emits a complete `reset`, then confirms the source's
-rebuild cut. Only after confirmation does it consume and emit ordered `delta`
+rebuild token. Only after confirmation does it consume and emit ordered `delta`
 rows, checking each Update/Delete against the model's `before` image. Record
 IDs, revisions and Raft indices are decimal strings to preserve all u64 values.
 
@@ -330,4 +331,4 @@ paths. Build host and SDK from the paired revisions.
 This SDK contains no projector database, network
 subscription protocol, or Raft implementation. Local substitutes may implement
 the interfaces for business tests; they cannot manufacture the production
-runtime's cut or publication types.
+runtime's token or publication types.

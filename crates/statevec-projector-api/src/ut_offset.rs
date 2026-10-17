@@ -1,5 +1,5 @@
 use super::*;
-use crate::plugin_v2::{ffi::{SvConsumeOffset, SvProjectorId}, ProjectorAbiFailure};
+use crate::v1::{ffi::{SvConsumeOffset, SvProjectorId}, ProjectorAbiError};
 use test_case::test_case;
 
 fn offset(projector_id: &str) -> ConsumeOffset {
@@ -36,9 +36,9 @@ fn invalid_ids_never_encode(id: &str, expected: ConsumeOffsetError) {
     wire.bytes[..id.len()].copy_from_slice(id.as_bytes());
     let actual = wire.decode().unwrap_err();
     match expected {
-        ConsumeOffsetError::EmbeddedNul => assert_eq!(actual, ProjectorAbiFailure::EmbeddedNul),
-        ConsumeOffsetError::ControlCharacter { scalar } => assert_eq!(actual, ProjectorAbiFailure::ControlCharacter { scalar }),
-        ConsumeOffsetError::ProjectorIdLength { actual: n } => assert_eq!(actual, ProjectorAbiFailure::Length { actual: n as u64, maximum: 128 }),
+        ConsumeOffsetError::EmbeddedNul => assert_eq!(actual, ProjectorAbiError::EmbeddedNul),
+        ConsumeOffsetError::ControlCharacter { scalar } => assert_eq!(actual, ProjectorAbiError::ControlCharacter { scalar }),
+        ConsumeOffsetError::ProjectorIdLength { actual: n } => assert_eq!(actual, ProjectorAbiError::Length { actual: n as u64, maximum: 128 }),
         _ => unreachable!(),
     }
 }
@@ -51,10 +51,10 @@ fn limits_are_checked_before_decoding_or_allocation() {
         actual: oversized, maximum: MAX_OFFSET_PROPERTIES_BYTES,
     }));
     let wire = SvProjectorId { len: u64::MAX, bytes: [255; 128] };
-    assert_eq!(wire.decode(), Err(ProjectorAbiFailure::Length { actual: u64::MAX, maximum: 128 }));
+    assert_eq!(wire.decode(), Err(ProjectorAbiError::Length { actual: u64::MAX, maximum: 128 }));
     let mut wire = SvProjectorId::encode("a").unwrap();
     wire.bytes[127] = 1;
-    assert_eq!(wire.decode(), Err(ProjectorAbiFailure::Reserved { actual: 1 }));
+    assert_eq!(wire.decode(), Err(ProjectorAbiError::Reserved { actual: 1 }));
 }
 
 #[test]

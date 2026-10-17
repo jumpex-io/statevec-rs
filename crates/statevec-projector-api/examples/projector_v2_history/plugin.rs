@@ -1,7 +1,7 @@
 //! Durable public-SDK reference plugin. SQLite mode commits effects and the
 //! four offset fields together; file mode uses idempotent DB effects then the
 //! default offset file. All control work progresses during idle waits.
-use statevec_projector_api::{ProjectorCheckpointStatus, plugin_v2::ProjectorRecovery, plugin_v2::*};
+use statevec_projector_api::{ProjectorStatus, v1::StartRequest, v1::*};
 use std::{io::Write, num::NonZeroUsize, path::PathBuf, time::Duration};
 #[path = "store.rs"]
 pub(crate) mod store;
@@ -22,7 +22,7 @@ pub struct Prepared {
     status: Option<std::fs::File>,
 }
 impl ProjectorModule for History {
-    const RECOVERY_SUPPORT: ProjectorRecoverySupport = ProjectorRecoverySupport::ContinuousHistory;
+    const SUPPORTED_HISTORY_MODES: SupportedHistoryModes = SupportedHistoryModes::Continuous;
     type Configured = Config;
     fn configure(&self, input: ProjectorConfig<'_>) -> Result<Config, ConfigureFailure> {
         struct Object;
@@ -57,7 +57,7 @@ impl ProjectorModule for History {
 }
 impl ConfiguredProjector for Config {
     type Prepared = Prepared;
-    fn prepare(&self, context: ProjectorPrepare<'_>) -> Result<Prepared, ProjectorFailure> {
+    fn prepare(&self, context: ProjectorPrepare<'_>) -> Result<Prepared, ProjectorError> {
         let mut store = store::HistoryStore::open(
             &self.database_path,
             self.offset_path.as_deref(),
@@ -86,22 +86,22 @@ fn progress_report<'io>(
     control: &ProjectorControlPort<'io>,
     report: &mut Option<PendingDurableOffset<'io>>,
     stop: &ProjectorStop<'io>,
-) -> Result<(), ProjectorFailure> {
+) -> Result<(), ProjectorError> {
     let Some(pending) = report else { return Ok(()); };
     match pending.progress(control)? {
         ControlProgress::Pending => (),
         ControlProgress::Accepted => *report = None,
-        ControlProgress::Rejected(statevec_projector_api::ProjectorCheckpointRejection::OwnerNotRunning)
+        ControlProgress::Rejected(statevec_projector_api::ProjectorControlRejection::OwnerNotRunning)
             if stop.is_stopping()? => *report = None,
-        ControlProgress::Rejected(_) => return Err(ProjectorFailure::Application { code: 1101 }),
+        ControlProgress::Rejected(_) => return Err(ProjectorError::Application { code: 1101 }),
         ControlProgress::Closed if stop.is_stopping()? => (),
-        ControlProgress::Closed => return Err(ProjectorFailure::Application { code: 1102 }),
+        ControlProgress::Closed => return Err(ProjectorError::Application { code: 1102 }),
     }
     Ok(())
 }
 impl PreparedProjector for Prepared {
-    fn recovery(&self) -> ProjectorRecovery {
-        ProjectorRecovery::ContinuousHistory {
+    fn start_request(&self) -> StartRequest {
+        StartRequest::Continuous {
             offset: self.restored.clone(),
         }
     }
@@ -111,7 +111,7 @@ impl PreparedProjector for Prepared {
             maximum_accounted_bytes: NonZeroUsize::new(1024 * 1024).unwrap(),
         }
     }
-    fn run(mut self, io: ProjectorIo<'_>) -> Result<(), ProjectorFailure> {
+    fn run(mut self, io: ProjectorIo<'_>) -> Result<(), ProjectorError> {
         let ProjectorIoParts {
             mut source,
             control,
@@ -119,14 +119,14 @@ impl PreparedProjector for Prepared {
             ..
         } = io.split();
         let mut report = None;
-        let mut status_reply: Option<ReplyHandle<'_, ProjectorCheckpointStatus>> = None;
+        let mut status_reply: Option<ReplyHandle<'_, ProjectorStatus>> = None;
         let mut observed = None;
         loop {
             if stop.is_stopping()? {
                 return Ok(());
             }
             progress_report(&control, &mut report, &stop)?;
-            // Poll status even without a frame, and during hot delivery.
+            // Poll status even without a entry, and during hot delivery.
             if let Some(reply) = &mut status_reply {
                 match reply.poll()? {
                     ReplyPoll::Ready(value) => {
@@ -134,7 +134,7 @@ impl PreparedProjector for Prepared {
                             .store
                             .model_index()
                             .map_err(|e| e.failure(ProjectorIoStage::StoreRead))?;
-                        if let ProjectorCheckpointStatus::Active {
+                        if let ProjectorStatus::Active {
                             durable_raft_index, ..
                         } = value
                         {
@@ -163,7 +163,7 @@ impl PreparedProjector for Prepared {
                     Offer::Queued(reply) => status_reply = Some(reply),
                     Offer::OwnerQueueFull | Offer::ReplyCapacityExhausted => (),
                     Offer::Closed if stop.is_stopping()? => return Ok(()),
-                    Offer::Closed => return Err(ProjectorFailure::Application { code: 1102 }),
+                    Offer::Closed => return Err(ProjectorError::Application { code: 1102 }),
                 }
             }
             if report.is_some() {
@@ -171,26 +171,26 @@ impl PreparedProjector for Prepared {
                 continue;
             }
             match source.next_timeout(Duration::from_millis(10))? {
-                Delivery::Frame(loan) => {
-                    let cut = loan.source_cut();
-                    let entry = store::Entry::read(loan.view(), cut.offset().ok_or(ProjectorFailure::Application { code: 1103 })?)?;
+                Delivery::RaftEntry(loan) => {
+                    let cut = loan.token();
+                    let entry = store::Entry::read(loan.view(), cut.offset().ok_or(ProjectorError::Application { code: 1103 })?)?;
                     self.store
                         .commit_entry(&entry)
                         .map_err(|e| e.failure(ProjectorIoStage::StoreWrite))?;
                     // No automatic ACK: this assertion follows confirmed save.
                     let restored = self.restored.as_ref().map_or(0, |p| p.raft_index);
                     if entry.offset.raft_index >= restored {
-                        report = Some(PendingDurableOffset::new(cut.declare_durable().map_err(|_| ProjectorFailure::Application { code: 1103 })?));
+                        report = Some(PendingDurableOffset::new(cut.declare_durable().map_err(|_| ProjectorError::Application { code: 1103 })?));
                     }
                 }
                 Delivery::Empty | Delivery::TimedOut => (),
-                Delivery::State(_) => return Err(ProjectorFailure::AbiContract(ProjectorAbiFailure::InvalidHandle)),
+                Delivery::Snapshot(_) => return Err(ProjectorError::AbiContract(ProjectorAbiError::InvalidHandle)),
                 Delivery::Stop => return Ok(()),
                 Delivery::Disconnected => {
                     if stop.is_stopping()? {
                         return Ok(());
                     }
-                    return Err(ProjectorFailure::Application { code: 1103 });
+                    return Err(ProjectorError::Application { code: 1103 });
                 }
             }
         }

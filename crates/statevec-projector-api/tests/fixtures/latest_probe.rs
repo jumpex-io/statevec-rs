@@ -4,7 +4,7 @@
 #![cfg(target_os = "linux")]
 #[path = "../../examples/projector_v2_latest/plugin.rs"]
 mod plugin;
-use statevec_projector_api::{ProjectorCheckpointStatus, plugin_v2::{__export, host::ControlReply, ProjectorFailure, ffi::*}};
+use statevec_projector_api::{ProjectorStatus, v1::{__export, host::ControlReply, ProjectorError, ffi::*}};
 use std::{ffi::c_void, io::{Read, Write}, mem::{ManuallyDrop, size_of}, os::unix::net::UnixStream,
     path::PathBuf, ptr, sync::{Mutex, OnceLock, atomic::{AtomicBool, AtomicUsize, Ordering}}, time::{Duration, Instant}};
 
@@ -13,7 +13,7 @@ static SETTINGS: OnceLock<Settings> = OnceLock::new();
 fn caught(f: impl FnOnce() -> SvStatus) -> SvStatus {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(result) => result,
-        Err(payload) => { std::mem::forget(payload); (&ProjectorFailure::PluginPanicked).into() }
+        Err(payload) => { std::mem::forget(payload); (&ProjectorError::PluginPanicked).into() }
     }
 }
 unsafe extern "C" fn configure(config: SvBytes, base_dir: SvBytes, out: *mut *mut c_void) -> SvStatus {
@@ -84,7 +84,7 @@ impl Proxy {
             assert_eq!(unsafe { self.original.poll_reply.unwrap()(self.original.context, reply, &mut out) }, SvStatus::SUCCESS);
             match out.decode().unwrap() {
                 ControlReply::Pending => { assert!(Instant::now() < deadline); std::thread::yield_now(); }
-                ControlReply::Status(ProjectorCheckpointStatus::Rebuilding { target_raft_index }) => {
+                ControlReply::Status(ProjectorStatus::Rebuilding { target_raft_index }) => {
                     assert_eq!(target_raft_index, self.target);
                     break;
                 }

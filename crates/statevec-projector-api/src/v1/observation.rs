@@ -1,5 +1,5 @@
 //! Read-only, one-shot projection of the worker's first published failure.
-//! The terminal result and resource custody remain with the actual join handle.
+//! The terminal result and resource ownership remain with the actual join handle.
 use super::ffi::SvProjectorFailureObservation;
 use std::{cell::UnsafeCell, sync::atomic::{AtomicBool, AtomicU8, Ordering}};
 
@@ -12,7 +12,7 @@ pub(super) struct WorkerObservation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin_v2::{ProjectorFailure, SvStatus};
+    use crate::v1::{ProjectorError, SvStatus};
     #[test]
     fn incomplete_publication_never_spins_or_reports_a_partial_failure() {
         let observation = WorkerObservation::new();
@@ -28,7 +28,7 @@ mod tests {
             for code in 1..=8 {
                 let observation = &observation;
                 scope.spawn(move || observation.publish(SvProjectorFailureObservation {
-                    slot: 1, reserved: 0, cause: SvStatus::from(&ProjectorFailure::Application { code }),
+                    slot: 1, reserved: 0, cause: SvStatus::from(&ProjectorError::Application { code }),
                 }));
             }
         });
@@ -36,7 +36,7 @@ mod tests {
         assert_eq!((first.slot, first.reserved, first.cause.tag, first.cause.cause), (1, 0, 12, 1));
         assert!((1..=8).contains(&first.cause.detail[0]));
         assert_eq!(&first.cause.detail[1..], &[0, 0]);
-        observation.publish(SvProjectorFailureObservation { slot: 1, reserved: 0, cause: (&ProjectorFailure::PluginPanicked).into() });
+        observation.publish(SvProjectorFailureObservation { slot: 1, reserved: 0, cause: (&ProjectorError::PluginPanicked).into() });
         observation.finish();
         assert_eq!(observation.read(), (true, first));
     }

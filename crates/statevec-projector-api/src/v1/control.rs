@@ -1,35 +1,35 @@
 use super::io::ScopeFailureSlot;
-use super::{borrow::call, ffi::*, io::{ReleaseDisposition, Held, ReplySlot, ScopeData}, ProjectorAbiFailure as A, ProjectorFailure as F, ProjectorOperation as Op, ControlReply};
-use crate::{ConsumeOffset, ProjectorCheckpointRejection as Rejection, ProjectorCheckpointStatus as Status};
+use super::{borrow::call, ffi::*, io::{ReleaseDisposition, Held, ReplySlot, ScopeData}, ProjectorAbiError as A, ProjectorError as F, ProjectorOperation as Op, ControlReply};
+use crate::{ConsumeOffset, ProjectorControlRejection as Rejection, ProjectorStatus as Status};
 use std::{cell::Cell, marker::PhantomData};
 
 #[derive(Debug, Clone, Copy)]
-pub struct SourceCut { pub(super) raw: SvCut, pub(super) position: SvPosition, pub(super) projector_id: crate::ProjectorId, pub(super) mode: crate::ProjectorRecoveryMode }
+pub struct RaftEntryToken { pub(super) raw: SvCut, pub(super) position: SvPosition, pub(super) projector_id: crate::ProjectorId, pub(super) mode: crate::HistoryMode }
 #[derive(Debug, Clone, Copy)]
 pub struct DurableOffsetReport { pub(super) raw: SvDurableOffsetReport }
 #[derive(Debug, Clone, Copy)]
-pub struct RebuildCut { pub(super) raw: SvRebuildCut }
-/// Local refusal to declare a durable history offset from a latest-state cut.
+pub struct SnapshotToken { pub(super) raw: SvRebuildCut }
+/// Local refusal to declare a durable history offset from a latest-state token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotContinuousHistory;
 impl std::fmt::Display for NotContinuousHistory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("latest-state source cuts do not define durable history offsets")
+        f.write_str("latest-state entry tokens do not define durable history offsets")
     }
 }
 impl std::error::Error for NotContinuousHistory {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlDecision { Accepted, Rejected(Rejection) }
-impl SourceCut {
-    /// Latest-state frames never define a durable consume offset.
+impl RaftEntryToken {
+    /// Latest-state Raft entries never define a durable consume offset.
     pub fn offset(&self) -> Option<ConsumeOffset> {
-        if self.mode != crate::ProjectorRecoveryMode::ContinuousHistory { return None; }
+        if self.mode != crate::HistoryMode::Continuous { return None; }
         let cluster_id = super::inputs::cluster_id(self.position.cluster);
         Some(ConsumeOffset { cluster_id, projector_id: self.projector_id.as_str().to_owned(), raft_term: self.position.raft_term, raft_index: self.position.raft_index })
     }
     /// Assertion after the application durably saved effects and this offset.
     pub fn declare_durable(self) -> Result<DurableOffsetReport, NotContinuousHistory> {
-        if self.mode != crate::ProjectorRecoveryMode::ContinuousHistory { return Err(NotContinuousHistory); }
+        if self.mode != crate::HistoryMode::Continuous { return Err(NotContinuousHistory); }
         Ok(DurableOffsetReport { raw: SvDurableOffsetReport { cut: self.raw } })
     }
     /// Compares the four offset fields only, not model/frontier equality.
@@ -43,7 +43,7 @@ pub enum ReplyPoll<T> { Pending, Ready(T), Disconnected }
 mod sealed {
     pub trait Sealed {}
     impl Sealed for super::ControlDecision {}
-    impl Sealed for crate::ProjectorCheckpointStatus {}
+    impl Sealed for crate::ProjectorStatus {}
 }
 #[doc(hidden)]
 pub trait ReplyValue: sealed::Sealed + Copy {
@@ -70,11 +70,11 @@ impl ReplyValue for Status {
 /// Move-only, invariant scoped borrow; Send but not Sync. A reply cannot be
 /// moved into an unscoped thread or survive the enclosing with_host invocation.
 /// Ready caches its answer but retains a reply slot until Drop. Drop releases
-/// custody, not the queued request. Disconnected is an unknown outcome: retry
+/// ownership, not the queued request. Disconnected is an unknown outcome: retry
 /// the identical durability declaration, or discard a status observation.
 ///
 /// ```compile_fail,E0521
-/// use statevec_projector_api::plugin_v2::{ProjectorIo, Offer};
+/// use statevec_projector_api::v1::{ProjectorIo, Offer};
 /// fn escape(io: ProjectorIo<'_>) {
 ///     let control = io.split().control;
 ///     if let Offer::Queued(mut reply) = control.offer_status().unwrap() {
@@ -122,7 +122,7 @@ impl<'io> super::ProjectorControlPort<'io> {
         slots[index] = ReplySlot::Free;
         if let Err(cause) = result {
             if cookie != 0 {
-                // Invalid transfer: retain unknown custody, never guess that a
+                // Invalid transfer: retain unknown ownership, never guess that a
                 // returned cookie is a live resource safe to destroy.
                 slots[index] = ReplySlot::Held(Held { cookie, release: ReleaseDisposition::UntrustedTransfer });
                 drop(slots);
@@ -155,8 +155,8 @@ impl<'io> super::ProjectorControlPort<'io> {
         self.host.acquisition_allowed()?;
         self.host.latch_contract_failure(self.offer(Op::OfferStatus, |tag, handle| unsafe { self.host.table.offer_status.unwrap()(self.host.table.context, tag, handle) }))
     }
-    pub fn offer_rebuild(&self, value: &RebuildCut) -> Result<Offer<'io, ControlDecision>, F> {
+    pub fn offer_snapshot_confirmation(&self, value: &SnapshotToken) -> Result<Offer<'io, ControlDecision>, F> {
         self.host.acquisition_allowed()?;
-        self.host.latch_contract_failure(self.offer(Op::OfferRebuild, |tag, handle| unsafe { self.host.table.offer_rebuild.unwrap()(self.host.table.context, &value.raw, tag, handle) }))
+        self.host.latch_contract_failure(self.offer(Op::OfferSnapshotConfirmation, |tag, handle| unsafe { self.host.table.offer_rebuild.unwrap()(self.host.table.context, &value.raw, tag, handle) }))
     }
 }

@@ -1,6 +1,6 @@
 //! Test-only physical callback cuts around the unchanged public history plugin.
-//! No frame, publication, persisted offset or native acceptance is manufactured.
-use statevec_projector_api::{ProjectorCheckpointStatus, plugin_v2::{host::ControlReply, ffi::*}};
+//! No entry, publication, persisted offset or native acceptance is manufactured.
+use statevec_projector_api::{ProjectorStatus, v1::{host::ControlReply, ffi::*}};
 use std::{io::{Read, Write}, os::unix::net::UnixStream, path::{Path, PathBuf},
     sync::{Mutex, OnceLock, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
 
@@ -106,7 +106,7 @@ pub(super) fn durable_index(host: &SvProjectorHostV2) -> u64 {
         assert_eq!(unsafe { host.poll_reply.unwrap()(host.context, reply, &mut out) }, SvStatus::SUCCESS);
         match out.decode().unwrap() {
             ControlReply::Pending => { assert!(Instant::now() < deadline); std::thread::yield_now(); }
-            ControlReply::Status(ProjectorCheckpointStatus::Active { durable_raft_index, .. }) => break durable_raft_index,
+            ControlReply::Status(ProjectorStatus::Active { durable_raft_index, .. }) => break durable_raft_index,
             other => panic!("continuous attachment must be active: {other:?}"),
         }
     };

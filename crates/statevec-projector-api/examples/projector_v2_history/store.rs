@@ -2,7 +2,7 @@
 //! together. File mode commits idempotent DB effects before persisting the file.
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use statevec_projector_api::{
-    ConsumeOffset, ConsumeOffsetError, FileOffsetStore, OffsetStoreError, plugin_v2::*,
+    ConsumeOffset, ConsumeOffsetError, FileOffsetStore, OffsetStoreError, v1::*,
 };
 use std::{
     fs::{File, TryLockError},
@@ -44,24 +44,24 @@ impl From<std::io::Error> for Error {
     }
 }
 impl Error {
-    pub fn failure(self, stage: ProjectorIoStage) -> ProjectorFailure {
+    pub fn failure(self, stage: ProjectorIoStage) -> ProjectorError {
         match self {
             Self::Io(e) | Self::File(OffsetStoreError::Io { source: e, .. }) => {
-                ProjectorFailure::Io {
+                ProjectorError::Io {
                     stage,
                     kind: ProjectorIoKind::from_io(e.kind()),
                     os_code: e.raw_os_error(),
                 }
             }
-            Self::Database(rusqlite::Error::SqliteFailure(e, _)) => ProjectorFailure::Application {
+            Self::Database(rusqlite::Error::SqliteFailure(e, _)) => ProjectorError::Application {
                 code: u32::try_from(e.extended_code)
                     .ok()
                     .and_then(|n| 0x10000u32.checked_add(n))
                     .unwrap_or(1000),
             },
-            Self::Database(_) => ProjectorFailure::Application { code: 1000 },
-            Self::File(_) => ProjectorFailure::Application { code: 1001 },
-            Self::Metadata(source) => ProjectorFailure::Application {
+            Self::Database(_) => ProjectorError::Application { code: 1000 },
+            Self::File(_) => ProjectorError::Application { code: 1001 },
+            Self::Metadata(source) => ProjectorError::Application {
                 code: match source {
                     ConsumeOffsetError::ClusterMismatch | ConsumeOffsetError::ProjectorMismatch => {
                         1004
@@ -69,12 +69,12 @@ impl Error {
                     _ => 1002,
                 },
             },
-            Self::WriterInUse => ProjectorFailure::Application { code: 1003 },
-            Self::Namespace => ProjectorFailure::Application { code: 1004 },
-            Self::Format => ProjectorFailure::Application { code: 1005 },
-            Self::MissingEffects => ProjectorFailure::Application { code: 1006 },
-            Self::Conflict => ProjectorFailure::Application { code: 1007 },
-            Self::ModelMismatch => ProjectorFailure::Application { code: 1008 },
+            Self::WriterInUse => ProjectorError::Application { code: 1003 },
+            Self::Namespace => ProjectorError::Application { code: 1004 },
+            Self::Format => ProjectorError::Application { code: 1005 },
+            Self::MissingEffects => ProjectorError::Application { code: 1006 },
+            Self::Conflict => ProjectorError::Application { code: 1007 },
+            Self::ModelMismatch => ProjectorError::Application { code: 1008 },
         }
     }
 }
@@ -120,11 +120,11 @@ impl Entry {
             raft_index: p.raft_index,
         }
     }
-    pub fn read(frame: FrameView<'_>, offset: ConsumeOffset) -> Result<Self, ProjectorFailure> {
+    pub fn read(frame: RaftEntryView<'_>, offset: ConsumeOffset) -> Result<Self, ProjectorError> {
         let mut events = Vec::new();
         let mut changes = Vec::new();
-        for ordinal in 0..frame.transaction_count() {
-            let tx = frame.transaction(ordinal)?;
+        for ordinal in 0..frame.tx_count() {
+            let tx = frame.tx(ordinal)?;
             for event_ordinal in 0..tx.event_count() {
                 let event = tx.event(event_ordinal)?;
                 events.push(Event {
@@ -137,20 +137,20 @@ impl Entry {
                     payload: event.payload.to_vec(),
                 });
             }
-            for index in 0..tx.change_count() {
-                let (key, revision, before, after) = match tx.change(index)? {
-                    RecordChangeView::Insert {
+            for index in 0..tx.record_delta_count() {
+                let (key, revision, before, after) = match tx.record_delta(index)? {
+                    RecordDeltaView::Insert {
                         key,
                         revision,
                         after,
                     } => (key, revision, None, Some(after.to_vec())),
-                    RecordChangeView::Update {
+                    RecordDeltaView::Update {
                         key,
                         revision,
                         before,
                         after,
                     } => (key, revision, Some(before.to_vec()), Some(after.to_vec())),
-                    RecordChangeView::Delete {
+                    RecordDeltaView::Delete {
                         key,
                         revision,
                         before,

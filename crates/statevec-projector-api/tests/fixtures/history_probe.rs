@@ -5,7 +5,7 @@
 #[path = "../../examples/projector_v2_history/plugin.rs"]
 mod plugin;
 mod history_crash;
-use statevec_projector_api::plugin_v2::{__export, host::ControlReply, ProjectorFailure, ffi::*};
+use statevec_projector_api::v1::{__export, host::ControlReply, ProjectorError, ffi::*};
 use std::{
     ffi::c_void,
     mem::{ManuallyDrop, size_of},
@@ -45,7 +45,7 @@ fn caught(f: impl FnOnce() -> SvStatus) -> SvStatus {
         Ok(value) => value,
         Err(payload) => {
             std::mem::forget(payload);
-            (&ProjectorFailure::PluginPanicked).into()
+            (&ProjectorError::PluginPanicked).into()
         }
     }
 }
@@ -60,7 +60,7 @@ struct Proxy {
 }
 fn with_proxy(raw: *const c_void, f: impl FnOnce(&Proxy) -> SvStatus) -> SvStatus {
     if raw.is_null() {
-        return (&ProjectorFailure::HostPanicked).into();
+        return (&ProjectorError::HostPanicked).into();
     }
     caught(|| f(unsafe { &*raw.cast::<Proxy>() }))
 }
@@ -109,7 +109,7 @@ unsafe extern "C" fn report_durable_offset(
 ) -> SvStatus {
     with_proxy(raw, |p| {
         if value.is_null() || tag.is_null() || reply.is_null() {
-            return (&ProjectorFailure::HostPanicked).into();
+            return (&ProjectorError::HostPanicked).into();
         }
         if let Some(cut) = &p.crash {
             cut.before_offer(&p.original, unsafe { *value });
@@ -128,7 +128,7 @@ unsafe extern "C" fn report_durable_offset(
             let attempt = p.attempts.fetch_add(1, Ordering::Relaxed) + 1;
             eprintln!("history-probe report attempt={attempt} exact={exact}");
             if !exact {
-                return (&ProjectorFailure::HostPanicked).into();
+                return (&ProjectorError::HostPanicked).into();
             }
             if attempt <= 2 {
                 unsafe {

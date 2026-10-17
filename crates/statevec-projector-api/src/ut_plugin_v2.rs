@@ -3,9 +3,9 @@ use ffi::*;
 use test_case::test_case;
 use std::mem::{offset_of, size_of};
 use ProjectorOperation as O;
-use ProjectorAbiFailure as A;
-use ProjectorFailure as F;
-use ProjectorStatusDecodeFailure as D;
+use ProjectorAbiError as A;
+use ProjectorError as F;
+use ProjectorStatusDecodeError as D;
 
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 #[test]
@@ -74,35 +74,35 @@ fn projector_status(cause: u32, subcategory: u64) -> SvStatus { SvStatus { tag: 
 #[test_case(O::Prepare, 1, 42; "prepare_application")]
 #[test_case(O::Prepare, 2, 2; "prepare_store_read")]
 #[test_case(O::Start, 2, 8; "start_worker_spawn")]
-#[test_case(O::StateInfo, 5, 1; "info_unavailable")]
-#[test_case(O::StateNext, 5, 2; "next_invalid_record")]
-#[test_case(O::FinishState, 5, 3; "finish_incomplete")]
-#[test_case(O::ReleaseState, 5, 5; "release_abandoned")]
+#[test_case(O::SnapshotInfo, 5, 1; "info_unavailable")]
+#[test_case(O::NextSnapshotRecord, 5, 2; "next_invalid_record")]
+#[test_case(O::FinishSnapshot, 5, 3; "finish_incomplete")]
+#[test_case(O::ReleaseSnapshot, 5, 5; "release_abandoned")]
 fn allowed_returns_cannot_be_disguised_as_illegal(operation: O, cause: u32, subcategory: u64) {
     let status = projector_status(cause, subcategory);
     assert!(decode_call(status, operation).unwrap().is_some());
     let stage = if cause == 2 { ProjectorIoStage::from_code(subcategory as u32) } else { None };
-    let rebuild_reason = if cause == 5 { RebuildSourceFailure::from_code(subcategory as u32) } else { None };
+    let rebuild_reason = if cause == 5 { ProjectorSnapshotReadError::from_code(subcategory as u32) } else { None };
     let raw = SvStatus { tag: 9, cause: 102, detail: [operation.code().into(), 12 | (u64::from(cause) << 32),
-        u64::from(stage.map_or(0, ProjectorIoStage::code)) | u64::from(rebuild_reason.map_or(0, RebuildSourceFailure::code))] };
-    assert_eq!(decode_call(raw, O::Join), Err(A::Status(D::NoncanonicalNestedFailure { cause: 102 })));
+        u64::from(stage.map_or(0, ProjectorIoStage::code)) | u64::from(rebuild_reason.map_or(0, ProjectorSnapshotReadError::code))] };
+    assert_eq!(decode_call(raw, O::Join), Err(A::Status(D::NoncanonicalNestedError { cause: 102 })));
 }
 
 #[test_case(O::Prepare, 3, 0; "prepare_worker_join")]
-#[test_case(O::StateInfo, 2, 2; "info_store_read")]
+#[test_case(O::SnapshotInfo, 2, 2; "info_store_read")]
 #[test_case(O::Start, 2, 1; "start_store_open")]
 #[test_case(O::ReportDurableOffset, 1, 17; "checkpoint_application")]
-#[test_case(O::OfferRebuild, 1, 17; "rebuild_application")]
-#[test_case(O::StateInfo, 5, 5; "info_abandoned")]
-#[test_case(O::StateNext, 5, 3; "next_incomplete")]
+#[test_case(O::OfferSnapshotConfirmation, 1, 17; "rebuild_application")]
+#[test_case(O::SnapshotInfo, 5, 5; "info_abandoned")]
+#[test_case(O::NextSnapshotRecord, 5, 3; "next_incomplete")]
 fn illegal_returns_preserve_operation_cause_and_subcategory(operation: O, cause: u32, subcategory: u64) {
     let expected = A::Status(D::IllegalReturn {
         operation, tag: 12, cause,
         stage: if cause == 2 { ProjectorIoStage::from_code(subcategory as u32) } else { None },
-        rebuild_reason: if cause == 5 { RebuildSourceFailure::from_code(subcategory as u32) } else { None },
+        rebuild_reason: if cause == 5 { ProjectorSnapshotReadError::from_code(subcategory as u32) } else { None },
     });
     assert_eq!(decode_call(projector_status(cause, subcategory), operation), Err(expected));
-    assert_eq!(decode_call((&expected).into(), O::Join), Ok(Some(ProjectorCallFailure::Operation(F::AbiContract(expected)))));
+    assert_eq!(decode_call((&expected).into(), O::Join), Ok(Some(ProjectorCallError::Operation(F::AbiContract(expected)))));
 }
 
 #[test_case(1; "business")]
@@ -129,10 +129,10 @@ fn structural_failures_precede_operation_legality_and_core_is_unchanged() {
 #[test_case(F::Host(HostFailure::Resource(ResourceFailure::Os { code: 5 })); "stop_host_io")]
 fn explicit_stop_forwards_host_failure_and_rejects_a_false_illegal_return(failure: F) {
     let raw = SvStatus::from(&failure);
-    assert_eq!(decode_call(raw, O::RequestStop), Ok(Some(ProjectorCallFailure::Operation(failure))));
+    assert_eq!(decode_call(raw, O::RequestStop), Ok(Some(ProjectorCallError::Operation(failure))));
     let falsely_illegal = SvStatus { tag: 9, cause: 102,
         detail: [O::RequestStop.code().into(), u64::from(raw.tag) | (u64::from(raw.cause) << 32), 0] };
-    assert_eq!(decode_failure(falsely_illegal), Err(A::Status(D::NoncanonicalNestedFailure { cause: 102 })));
+    assert_eq!(decode_failure(falsely_illegal), Err(A::Status(D::NoncanonicalNestedError { cause: 102 })));
     assert!(matches!(decode_call(raw, O::PollWorker), Err(A::Status(D::IllegalReturn { .. }))));
 }
 
@@ -151,7 +151,7 @@ fn invalid_control_character_diagnostics_refuse(scalar: u32) {
 #[test_case(111; "above_status_range")]
 fn nested_noncanonical_diagnostic_has_one_closed_level(cause: u32) {
     let raw = SvStatus { tag: 9, cause: 110, detail: [cause.into(), 0, 0] };
-    assert_eq!(decode_call(raw, O::Prepare), Err(A::Status(D::NoncanonicalNestedFailure { cause: 110 })));
+    assert_eq!(decode_call(raw, O::Prepare), Err(A::Status(D::NoncanonicalNestedError { cause: 110 })));
 }
 
 #[test_case(104, [11, 1, 0]; "unexpected_expected_tag")]
@@ -159,17 +159,17 @@ fn nested_noncanonical_diagnostic_has_one_closed_level(cause: u32) {
 #[test_case(108, [0, 8, 7]; "invented_scalar_bound")]
 #[test_case(108, [1, 256, 255]; "bound_on_wrong_slot")]
 fn nested_diagnostics_must_describe_a_real_projector_decode_check(cause: u32, detail: [u64; 3]) {
-    assert_eq!(decode_failure(SvStatus { tag: 9, cause, detail }), Err(A::Status(D::NoncanonicalNestedFailure { cause })));
+    assert_eq!(decode_failure(SvStatus { tag: 9, cause, detail }), Err(A::Status(D::NoncanonicalNestedError { cause })));
 }
 
 #[test_case(A::Status(D::IllegalReturn { operation: O::Prepare, tag: 12, cause: 3, stage: Some(ProjectorIoStage::StoreRead), rebuild_reason: None }); "inactive_stage")]
-#[test_case(A::Status(D::IllegalReturn { operation: O::StateInfo, tag: 12, cause: 2, stage: Some(ProjectorIoStage::StoreRead), rebuild_reason: Some(RebuildSourceFailure::Unavailable) }); "both_subcategories")]
+#[test_case(A::Status(D::IllegalReturn { operation: O::SnapshotInfo, tag: 12, cause: 2, stage: Some(ProjectorIoStage::StoreRead), rebuild_reason: Some(ProjectorSnapshotReadError::Unavailable) }); "both_subcategories")]
 #[test_case(A::Status(D::IllegalReturn { operation: O::Prepare, tag: 12, cause: 1, stage: None, rebuild_reason: None }); "allowed_tuple")]
-#[test_case(A::Status(D::NoncanonicalNestedFailure { cause: 999 }); "invalid_inner_cause")]
+#[test_case(A::Status(D::NoncanonicalNestedError { cause: 999 }); "invalid_inner_cause")]
 #[test_case(A::ControlCharacter { scalar: 32 }; "invalid_control_scalar")]
 fn unencodable_author_diagnostics_produce_a_canonical_failure(source: A) {
     let status = SvStatus::from(&source);
-    assert!(matches!(decode_failure(status), Ok(Some(ProjectorCallFailure::Operation(F::AbiContract(_))))), "{source:?} encoded as noncanonical {status:?}");
+    assert!(matches!(decode_failure(status), Ok(Some(ProjectorCallError::Operation(F::AbiContract(_))))), "{source:?} encoded as noncanonical {status:?}");
     assert!(status.cause != 102 && status.cause != 16, "do not reinterpret malformed author fields as a different legitimate claim");
 }
 
@@ -187,7 +187,7 @@ fn inactive_recovery_offset_uses_reserved_cause(tag: u32) {
 #[test_case(SvStatus { tag: 9, cause: 102, detail: [1, 12 | (2u64 << 32), u64::MAX] }; "nested_stage_word_overflow")]
 fn real_structural_decode_failures_round_trip_as_canonical_diagnostics(raw: SvStatus) {
     let failure = decode_failure(raw).expect_err("actual malformed wire value");
-    assert_eq!(decode_failure((&failure).into()), Ok(Some(ProjectorCallFailure::Operation(F::AbiContract(failure)))));
+    assert_eq!(decode_failure((&failure).into()), Ok(Some(ProjectorCallError::Operation(F::AbiContract(failure)))));
 }
 
 #[test_case(None; "no_os_code")]
@@ -197,7 +197,7 @@ fn real_structural_decode_failures_round_trip_as_canonical_diagnostics(raw: SvSt
 #[test_case(Some(i32::MAX); "os_maximum")]
 fn os_code_preserves_option_and_signed_bits(os_code: Option<i32>) {
     let failure = F::Io { stage: ProjectorIoStage::StoreRead, kind: ProjectorIoKind::StorageFull, os_code };
-    assert_eq!(decode_call((&failure).into(), O::Prepare), Ok(Some(ProjectorCallFailure::Operation(failure))));
+    assert_eq!(decode_call((&failure).into(), O::Prepare), Ok(Some(ProjectorCallError::Operation(failure))));
 }
 
 #[test]
@@ -209,13 +209,13 @@ fn independent_cleanup_slots_preserve_late_run_failure_and_earlier_observation()
         frame_release_failure: (&release).into(), state_release_failure: (&release).into(),
         reply_release_failure: (&release).into(), ..SvProjectorCompletion::EMPTY
     };
-    let decoded = report.decode(Some(ProjectorWorkerFailure::StateRelease(release))).unwrap();
+    let decoded = report.decode(Some(ProjectorWorkerError::SnapshotRelease(release))).unwrap();
     assert_eq!(decoded.run_failure, Some(failure));
     assert_eq!(decoded.frame_release_failure, Some(release));
     assert_eq!(decoded.state_release_failure, Some(release));
     assert_eq!(decoded.reply_release_failure, Some(release));
     assert!(decoded.joined);
-    assert_eq!(report.decode(Some(ProjectorWorkerFailure::Run(release))), Err(A::InvalidHandle));
+    assert_eq!(report.decode(Some(ProjectorWorkerError::Run(release))), Err(A::InvalidHandle));
 }
 #[test]
 fn unconfirmed_retirement_preserves_every_cause_without_becoming_success() {
@@ -229,13 +229,13 @@ fn unconfirmed_retirement_preserves_every_cause_without_becoming_success() {
 }
 #[test]
 fn completion_checks_slot_families_and_service_join_count() {
-    let service: SvStatus = (&ProjectorCallFailure::ServiceJoinPanicked).into();
+    let service: SvStatus = (&ProjectorCallError::ServiceJoinPanicked).into();
     let report = SvProjectorCompletion { joined: 1, service_join_failure: service, failed_service_joins: 2, ..SvProjectorCompletion::EMPTY };
     assert_eq!(report.decode(None).unwrap().failed_service_joins, 2);
     assert!(SvProjectorCompletion { failed_service_joins: 0, ..report }.decode(None).is_err());
     assert!(SvProjectorCompletion { service_join_failure: SvStatus::SUCCESS, ..report }.decode(None).is_err());
-    let abandonment: SvStatus = (&F::RebuildSource(RebuildSourceFailure::RebuildAbandoned)).into();
+    let abandonment: SvStatus = (&F::SnapshotRead(ProjectorSnapshotReadError::RebuildAbandoned)).into();
     assert!(decode_observation(SvProjectorFailureObservation { slot: 3, reserved: 0, cause: abandonment }).is_err());
-    assert_eq!(decode_observation(SvProjectorFailureObservation { slot: 1, reserved: 0, cause: abandonment }), Ok(Some(ProjectorWorkerFailure::Run(F::RebuildSource(RebuildSourceFailure::RebuildAbandoned)))));
+    assert_eq!(decode_observation(SvProjectorFailureObservation { slot: 1, reserved: 0, cause: abandonment }), Ok(Some(ProjectorWorkerError::Run(F::SnapshotRead(ProjectorSnapshotReadError::RebuildAbandoned)))));
     assert!(decode_observation(SvProjectorFailureObservation { slot: 1, reserved: 0, cause: service }).is_err());
 }

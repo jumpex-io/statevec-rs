@@ -1,4 +1,4 @@
-//! Per-worker physical callback interposer. All cookies, frames and replies
+//! Per-worker physical callback interposer. All cookies, Raft entries and replies
 //! still come from the actual bridge. No registry or shared ambient fault state.
 use super::*;
 pub(super) struct Callbacks { pub original: SvProjectorHostV2, pub harness: Arc<Harness> }
@@ -36,11 +36,11 @@ forward!(finish_state(cookie: *mut u64, out: *mut SvRebuildCut));
 unsafe extern "C" fn release_state(raw: *mut c_void, cookie: *mut u64) -> SvStatus {
     let c = unsafe { &*raw.cast::<Callbacks>() };
     c.harness.releases.fetch_add(1, Ordering::Relaxed);
-    if c.harness.config.case == Case::StateRetained { return (&ProjectorFailure::HostPanicked).into(); }
+    if c.harness.config.case == Case::StateRetained { return (&ProjectorError::HostPanicked).into(); }
     let result = unsafe { c.original.release_state.unwrap()(c.original.context, cookie) };
     if c.harness.config.case == Case::StateError && unsafe { *cookie == 0 }
-        && result == SvStatus::from(&ProjectorFailure::RebuildSource(RebuildSourceFailure::RebuildAbandoned)) {
-        (&ProjectorFailure::HostPanicked).into()
+        && result == SvStatus::from(&ProjectorError::SnapshotRead(ProjectorSnapshotReadError::RebuildAbandoned)) {
+        (&ProjectorError::HostPanicked).into()
     } else { result }
 }
 forward!(offer_rebuild(cut: *const SvRebuildCut, tag: *mut u32, reply: *mut u64));
@@ -57,18 +57,18 @@ unsafe extern "C" fn release_frame(raw: *mut c_void, cookie: *mut u64) -> SvStat
         return unsafe { c.original.release_frame.unwrap()(c.original.context, cookie) };
     }
     c.harness.releases.fetch_add(1, Ordering::Relaxed);
-    if c.harness.config.case == Case::FrameRetained { return (&ProjectorFailure::HostPanicked).into(); }
+    if c.harness.config.case == Case::FrameRetained { return (&ProjectorError::HostPanicked).into(); }
     let result = unsafe { c.original.release_frame.unwrap()(c.original.context, cookie) };
-    if result.is_success() && c.harness.config.case == Case::FrameError { (&ProjectorFailure::HostPanicked).into() } else { result }
+    if result.is_success() && c.harness.config.case == Case::FrameError { (&ProjectorError::HostPanicked).into() } else { result }
 }
 unsafe extern "C" fn release_reply(raw: *mut c_void, cookie: *mut u64) -> SvStatus {
     let c = unsafe { &*raw.cast::<Callbacks>() };
     let index = c.harness.releases.fetch_add(1, Ordering::Relaxed);
-    if index == 0 && c.harness.config.case == Case::ReplyRetained { return (&ProjectorFailure::HostPanicked).into(); }
+    if index == 0 && c.harness.config.case == Case::ReplyRetained { return (&ProjectorError::HostPanicked).into(); }
     let result = unsafe { c.original.release_reply.unwrap()(c.original.context, cookie) };
     if !result.is_success() { return result; }
-    if index == 0 { (&ProjectorFailure::HostPanicked).into() }
-    else { (&ProjectorAbiFailure::InvalidHandle).into() } // must not overwrite first B
+    if index == 0 { (&ProjectorError::HostPanicked).into() }
+    else { (&ProjectorAbiError::InvalidHandle).into() } // must not overwrite first B
 }
 unsafe extern "C" fn notify(raw: *mut c_void, kind: u32, out: *const SvProjectorFailureObservation) -> SvStatus {
     let c = unsafe { &*raw.cast::<Callbacks>() };
@@ -81,7 +81,7 @@ unsafe extern "C" fn notify(raw: *mut c_void, kind: u32, out: *const SvProjector
         // run can return A. An actual Node poll must first observe release B.
         let deadline = Instant::now() + Duration::from_secs(5);
         while !c.harness.release_observed.load(Ordering::Acquire) {
-            if Instant::now() >= deadline { return (&ProjectorFailure::HostPanicked).into(); }
+            if Instant::now() >= deadline { return (&ProjectorError::HostPanicked).into(); }
             std::thread::yield_now();
         }
     }

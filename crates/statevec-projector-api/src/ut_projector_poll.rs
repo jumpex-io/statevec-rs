@@ -33,20 +33,20 @@ struct Held {
 struct Module(Arc<Held>);
 struct Value(Arc<Held>);
 impl ProjectorModule for Module {
-    const RECOVERY_SUPPORT: ProjectorRecoverySupport = ProjectorRecoverySupport::ContinuousHistory;
+    const SUPPORTED_HISTORY_MODES: SupportedHistoryModes = SupportedHistoryModes::Continuous;
     type Configured = Value;
     fn configure(&self, _: ProjectorConfig<'_>) -> Result<Value, ConfigureFailure> { Ok(Value(self.0.clone())) }
 }
 impl ConfiguredProjector for Value {
     type Prepared = Value;
-    fn prepare(&self, _: ProjectorPrepare<'_>) -> Result<Value, ProjectorFailure> { Ok(Value(self.0.clone())) }
+    fn prepare(&self, _: ProjectorPrepare<'_>) -> Result<Value, ProjectorError> { Ok(Value(self.0.clone())) }
 }
 impl PreparedProjector for Value {
-    fn recovery(&self) -> crate::plugin_v2::ProjectorRecovery { crate::plugin_v2::ProjectorRecovery::ContinuousHistory { offset: None } }
+    fn start_request(&self) -> crate::v1::StartRequest { crate::v1::StartRequest::Continuous { offset: None } }
     fn delivery_limits(&self) -> DeliveryLimits { DeliveryLimits {
         frame_capacity: NonZeroUsize::new(1).unwrap(), maximum_accounted_bytes: NonZeroUsize::new(4096).unwrap(),
     } }
-    fn run(self, io: ProjectorIo<'_>) -> Result<(), ProjectorFailure> {
+    fn run(self, io: ProjectorIo<'_>) -> Result<(), ProjectorError> {
         self.0.author_calls.fetch_add(1, Ordering::Relaxed);
         io.split().services.spawn(move |_| {
             self.0.author_calls.fetch_add(1, Ordering::Relaxed);

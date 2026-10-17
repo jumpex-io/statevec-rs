@@ -1,5 +1,5 @@
 //! Generated module boundary. No user-written C handoff or destructor is needed.
-use super::{plugin::*, borrow::pointer, ffi::*, inputs, ProjectorAbiFailure as A, ProjectorFailure as F, ProjectorOperation as Op};
+use super::{plugin::*, borrow::pointer, ffi::*, inputs, ProjectorAbiError as A, ProjectorError as F, ProjectorOperation as Op};
 use std::{ffi::c_void, mem::size_of, sync::{Arc, Mutex}};
 
 #[path = "worker.rs"]
@@ -20,7 +20,7 @@ impl ProjectorExportTable {
     pub const fn new<M: ProjectorModule>(configure: unsafe extern "C" fn(SvBytes, SvBytes, *mut *mut c_void) -> SvStatus) -> Self {
         Self(SvProjectorV2 {
             h: SvHeader { abi_major: PROJECTOR_ABI_MAJOR, kind: PROJECTOR_KIND, table_bytes: size_of::<SvProjectorV2>() as u64,
-                provided_caps: PROJECTOR_BASE_CAPABILITIES | inputs::support(M::RECOVERY_SUPPORT), required_caps: PROJECTOR_BASE_CAPABILITIES },
+                provided_caps: PROJECTOR_BASE_CAPABILITIES | inputs::support(M::SUPPORTED_HISTORY_MODES), required_caps: PROJECTOR_BASE_CAPABILITIES },
             build_target: SvBytes { ptr: TARGET.as_ptr(), len: TARGET.len() as u64 },
             configure: Some(configure), prepare: Some(prepare::<M>), start: Some(worker::start::<<M::Configured as ConfiguredProjector>::Prepared>),
             request_stop: Some(worker::request_stop), poll_worker: Some(worker::poll), join: Some(worker::join),
@@ -83,7 +83,7 @@ unsafe extern "C" fn prepare<M: ProjectorModule>(raw: *const c_void, context: *c
         let config = unsafe { &*raw.cast::<Configured<M::Configured>>() };
         let context = unsafe { &*context };
         let cluster = inputs::cluster_id(context.identity.cluster);
-        let input = match unsafe { inputs::prepare(context, &cluster, inputs::support(M::RECOVERY_SUPPORT)) } {
+        let input = match unsafe { inputs::prepare(context, &cluster, inputs::support(M::SUPPORTED_HISTORY_MODES)) } {
             Ok(value) => value, Err(cause) => return (&cause).into(),
         };
         let value = match config.value.prepare(input) {
@@ -92,7 +92,7 @@ unsafe extern "C" fn prepare<M: ProjectorModule>(raw: *const c_void, context: *c
         // Catch metadata panic before explicitly dropping this owned Prepared;
         // never unwind its potentially panicking destructor during another unwind.
         let metadata = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let result = SvRecovery::encode(&value.recovery())?;
+            let result = SvRecovery::encode(&value.start_request())?;
             let valid_mode = matches!((context.recovery_mode, result.tag),
                 (recovery_mode::CONTINUOUS_HISTORY, recovery_tag::HISTORY_FROM_GENESIS | recovery_tag::HISTORY_FROM_OFFSET)
                 | (recovery_mode::LATEST_STATE_ONLY, recovery_tag::LATEST_STATE));
@@ -133,19 +133,19 @@ unsafe extern "C" fn destroy<T>(out: *mut *mut c_void) -> SvStatus {
     })
 }
 
-/// Export one unit-struct module. The SDK owns the C lifecycle and scoped loans.
+/// Export one unit-struct module. The SDK owns the C lifecycle and scoped borrows.
 #[macro_export]
 macro_rules! export_projector_plugin_v2 {
     ($module:ident) => {
         #[cfg(panic = "abort")]
         compile_error!("StateVec Projector plugins require panic = \"unwind\"");
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn statevec_projector_plugin_entry_v2(out_bytes: u64, out: *mut $crate::plugin_v2::ffi::SvDiscovery) -> u32 {
+        pub unsafe extern "C" fn statevec_projector_plugin_entry_v2(out_bytes: u64, out: *mut $crate::v1::ffi::SvDiscovery) -> u32 {
             static MODULE: $module = $module;
-            unsafe extern "C" fn configure(config: $crate::plugin_v2::ffi::SvBytes, base: $crate::plugin_v2::ffi::SvBytes, out: *mut *mut ::std::ffi::c_void) -> $crate::plugin_v2::SvStatus {
-                unsafe { $crate::plugin_v2::__export::configure(&MODULE, config, base, out) }
+            unsafe extern "C" fn configure(config: $crate::v1::ffi::SvBytes, base: $crate::v1::ffi::SvBytes, out: *mut *mut ::std::ffi::c_void) -> $crate::v1::SvStatus {
+                unsafe { $crate::v1::__export::configure(&MODULE, config, base, out) }
             }
-            static TABLE: $crate::plugin_v2::__export::ProjectorExportTable = $crate::plugin_v2::__export::ProjectorExportTable::new::<$module>(configure);
+            static TABLE: $crate::v1::__export::ProjectorExportTable = $crate::v1::__export::ProjectorExportTable::new::<$module>(configure);
             unsafe { TABLE.discover(out_bytes, out) }
         }
     };

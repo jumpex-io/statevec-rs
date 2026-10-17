@@ -13,7 +13,7 @@ fn note(log: &Log, event: &'static str) { log.lock().unwrap().push((event, std::
 struct PanicPayload;
 impl Drop for PanicPayload { fn drop(&mut self) { panic!("payload must be retained"); } }
 impl ProjectorModule for Module {
-    const RECOVERY_SUPPORT: ProjectorRecoverySupport = ProjectorRecoverySupport::ContinuousHistory;
+    const SUPPORTED_HISTORY_MODES: SupportedHistoryModes = SupportedHistoryModes::Continuous;
     type Configured = Config;
     fn configure(&self, input: ProjectorConfig<'_>) -> Result<Config, ConfigureFailure> {
         assert_eq!(input.bytes, b"{}");
@@ -24,13 +24,13 @@ impl ProjectorModule for Module {
 }
 impl ConfiguredProjector for Config {
     type Prepared = Prepared;
-    fn prepare(&self, input: ProjectorPrepare<'_>) -> Result<Prepared, ProjectorFailure> {
+    fn prepare(&self, input: ProjectorPrepare<'_>) -> Result<Prepared, ProjectorError> {
         assert_eq!(input.projector_id, "history");
         assert_eq!(input.cluster_id, "00".repeat(32));
         assert_eq!(input.schema_idl, b"{}");
         assert!(input.checkpoint_policy.is_some());
         note(&self.log, "prepare");
-        if matches!(self.case, Case::PrepareHostError) { return Err(ProjectorFailure::HostPanicked); }
+        if matches!(self.case, Case::PrepareHostError) { return Err(ProjectorError::HostPanicked); }
         Ok(Prepared { log: self.log.clone(), case: self.case })
     }
 }
@@ -42,23 +42,23 @@ impl Drop for Prepared {
     }
 }
 impl PreparedProjector for Prepared {
-    fn recovery(&self) -> crate::plugin_v2::ProjectorRecovery {
+    fn start_request(&self) -> crate::v1::StartRequest {
         match self.case {
             Case::RecoveryPanic => std::panic::panic_any(PanicPayload),
-            Case::InvalidRecovery | Case::DropPanic => crate::plugin_v2::ProjectorRecovery::LatestStateOnly,
-            _ => crate::plugin_v2::ProjectorRecovery::ContinuousHistory { offset: None },
+            Case::InvalidRecovery | Case::DropPanic => crate::v1::StartRequest::LatestState,
+            _ => crate::v1::StartRequest::Continuous { offset: None },
         }
     }
     fn delivery_limits(&self) -> DeliveryLimits {
         DeliveryLimits { frame_capacity: NonZeroUsize::new(1).unwrap(), maximum_accounted_bytes: NonZeroUsize::new(4096).unwrap() }
     }
-    fn run(self, io: ProjectorIo<'_>) -> Result<(), ProjectorFailure> {
-        assert_eq!(io.startup_base().peer_id, 1);
-        assert_eq!(io.initialization(), crate::ProjectorInitialization::Frames);
+    fn run(self, io: ProjectorIo<'_>) -> Result<(), ProjectorError> {
+        assert_eq!(io.startup_position().peer_id, 1);
+        assert_eq!(io.start_instruction(), crate::StartInstruction::DeliverEntries);
         note(&self.log, "run");
         let parts = io.split();
         match self.case {
-            Case::RunError => Err(ProjectorFailure::Application { code: 42 }),
+            Case::RunError => Err(ProjectorError::Application { code: 42 }),
             Case::RunPanic => std::panic::panic_any(PanicPayload),
             Case::ServicePanic => {
                 parts.services.spawn(|_| std::panic::panic_any(PanicPayload))?;
@@ -130,7 +130,7 @@ fn prepared(config: *mut c_void) -> *mut c_void {
     let (mut output, mut recovery, mut limits) = (std::ptr::null_mut(), SvRecovery::default(), SvDeliveryLimits::default());
     assert_eq!(unsafe { table().prepare.unwrap()(config, &input(), &mut output, &mut recovery, &mut limits) }, SvStatus::SUCCESS);
     assert!(!output.is_null());
-    assert_eq!(recovery.decode().unwrap(), crate::plugin_v2::ProjectorRecovery::ContinuousHistory { offset: None });
+    assert_eq!(recovery.decode().unwrap(), crate::v1::StartRequest::Continuous { offset: None });
     assert_eq!(limits.decode().unwrap().frame_capacity.get(), 1);
     output
 }
@@ -149,7 +149,7 @@ impl Drop for Running<'_> {
 
 #[test]
 fn explicit_stop_failure_remains_separate_from_an_existing_run_error() {
-    unsafe extern "C" fn fail_stop(_: *mut c_void) -> SvStatus { (&ProjectorFailure::HostPanicked).into() }
+    unsafe extern "C" fn fail_stop(_: *mut c_void) -> SvStatus { (&ProjectorError::HostPanicked).into() }
     let fixture = io_tests::Fixture::new();
     let host = SvProjectorHostV2 { stop_receive: Some(fail_stop), ..fixture.table() };
     let (mut config, _) = configured(Case::RunError);
@@ -168,16 +168,16 @@ fn explicit_stop_failure_remains_separate_from_an_existing_run_error() {
     let mut report = SvProjectorCompletion::EMPTY;
     assert_eq!(unsafe { table().join.unwrap()(&mut running.worker, &mut report) }, SvStatus::SUCCESS);
     assert_eq!(unsafe { table().destroy_configured.unwrap()(&mut config) }, SvStatus::SUCCESS);
-    assert_eq!(report.run_failure, (&ProjectorFailure::Application { code: 42 }).into());
+    assert_eq!(report.run_failure, (&ProjectorError::Application { code: 42 }).into());
     assert_eq!(report.joined, 1);
-    assert_eq!(stopped, (&ProjectorFailure::HostPanicked).into(), "explicit stop is a separate returned cause, not a second run error");
-    assert_eq!(decode_call(stopped, ProjectorOperation::RequestStop), Ok(Some(ProjectorCallFailure::Operation(ProjectorFailure::HostPanicked))));
+    assert_eq!(stopped, (&ProjectorError::HostPanicked).into(), "explicit stop is a separate returned cause, not a second run error");
+    assert_eq!(decode_call(stopped, ProjectorOperation::RequestStop), Ok(Some(ProjectorCallError::Operation(ProjectorError::HostPanicked))));
     assert!(report.decode(decode_observation(observed).unwrap()).is_ok());
 }
 
 #[test_case::test_case(None; "delivered")]
-#[test_case::test_case(Some(ProjectorFailure::HostPanicked); "notification_failure_survives_join")]
-fn finished_notification_observes_ready_before_the_physical_join(failure: Option<ProjectorFailure>) {
+#[test_case::test_case(Some(ProjectorError::HostPanicked); "notification_failure_survives_join")]
+fn finished_notification_observes_ready_before_the_physical_join(failure: Option<ProjectorError>) {
     use std::sync::mpsc;
     struct Notification {
         entered: mpsc::Sender<()>,
@@ -250,8 +250,8 @@ fn configured_table_transfers_once_and_returns_physical_completion(case: Case) {
     assert_eq!(report.joined, 1);
     let decoded = report.decode(decode_observation(observed).unwrap()).unwrap();
     match case {
-        Case::RunError => assert_eq!(decoded.run_failure, Some(ProjectorFailure::Application { code: 42 })),
-        Case::RunPanic => assert_eq!(decoded.run_failure, Some(ProjectorFailure::PluginPanicked)),
+        Case::RunError => assert_eq!(decoded.run_failure, Some(ProjectorError::Application { code: 42 })),
+        Case::RunPanic => assert_eq!(decoded.run_failure, Some(ProjectorError::PluginPanicked)),
         Case::ServicePanic => assert_eq!(decoded.failed_service_joins, 1),
         Case::WaitForStop => assert!(log.lock().unwrap().iter().any(|(event, _)| *event == "service_return")),
         _ => assert_eq!(decoded.run_failure, None),
@@ -367,7 +367,7 @@ fn physical_worker_spawn_refusal_returns_prepared_to_the_bootstrap_thread() {
     let mut worker = std::ptr::null_mut();
     let result = unsafe { table().start.unwrap()(&mut prepared, &fixture.table(), &startup(), &mut worker) };
     assert!(matches!(decode_call(result, ProjectorOperation::Start).unwrap(),
-        Some(ProjectorCallFailure::Operation(ProjectorFailure::Io { stage: ProjectorIoStage::WorkerSpawn, os_code: Some(libc::EPERM), .. }))));
+        Some(ProjectorCallError::Operation(ProjectorError::Io { stage: ProjectorIoStage::WorkerSpawn, os_code: Some(libc::EPERM), .. }))));
     assert_eq!(prepared, original);
     assert!(worker.is_null());
     assert_eq!(unsafe { table().destroy_prepared.unwrap()(&mut prepared) }, SvStatus::SUCCESS);

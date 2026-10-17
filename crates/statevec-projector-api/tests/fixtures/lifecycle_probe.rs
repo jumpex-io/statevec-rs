@@ -1,9 +1,9 @@
 //! Linux qualification only. The real generated exporter owns every worker,
-//! loan and service. This physical interposer forwards the actual native host
+//! borrow and service. This physical interposer forwards the actual native host
 //! and substitutes only declared release/notification outcomes. It neither
-//! constructs frames/cuts nor fabricates completion reports.
+//! constructs Raft entries/cuts nor fabricates completion reports.
 #![cfg(target_os = "linux")]
-use statevec_projector_api::{plugin_v2::{ffi::*, *}, plugin_v2::ProjectorRecovery};
+use statevec_projector_api::{v1::{ffi::*, *}, v1::StartRequest};
 use std::{ffi::c_void, io::{Read, Write}, num::NonZeroUsize,
     os::unix::net::UnixStream, path::PathBuf, sync::{Arc, Mutex, atomic::{AtomicBool, AtomicUsize, Ordering}}, time::{Duration, Instant}};
 
@@ -30,44 +30,44 @@ struct Module(Arc<Harness>);
 struct Configured(Arc<Harness>);
 struct Prepared { harness: Arc<Harness>, control: UnixStream }
 impl ProjectorModule for Module {
-    const RECOVERY_SUPPORT: ProjectorRecoverySupport = ProjectorRecoverySupport::Both;
+    const SUPPORTED_HISTORY_MODES: SupportedHistoryModes = SupportedHistoryModes::Both;
     type Configured = Configured;
     fn configure(&self, _: ProjectorConfig<'_>) -> Result<Configured, ConfigureFailure> { Ok(Configured(self.0.clone())) }
 }
 impl ConfiguredProjector for Configured {
     type Prepared = Prepared;
-    fn prepare(&self, _: ProjectorPrepare<'_>) -> Result<Prepared, ProjectorFailure> {
+    fn prepare(&self, _: ProjectorPrepare<'_>) -> Result<Prepared, ProjectorError> {
         let control = UnixStream::connect(&self.0.config.control).unwrap();
         control.set_read_timeout(Some(Duration::from_secs(8))).unwrap(); // harness safety bound
         Ok(Prepared { harness: self.0.clone(), control })
     }
 }
 impl PreparedProjector for Prepared {
-    fn recovery(&self) -> ProjectorRecovery {
-        if matches!(self.harness.config.case, Case::StateError | Case::StateRetained) { ProjectorRecovery::LatestStateOnly }
-        else { ProjectorRecovery::ContinuousHistory { offset: None } }
+    fn start_request(&self) -> StartRequest {
+        if matches!(self.harness.config.case, Case::StateError | Case::StateRetained) { StartRequest::LatestState }
+        else { StartRequest::Continuous { offset: None } }
     }
     fn delivery_limits(&self) -> DeliveryLimits { DeliveryLimits {
         frame_capacity: NonZeroUsize::new(2).unwrap(), maximum_accounted_bytes: NonZeroUsize::new(1024 * 1024).unwrap(),
     } }
-    fn run(self, io: ProjectorIo<'_>) -> Result<(), ProjectorFailure> {
+    fn run(self, io: ProjectorIo<'_>) -> Result<(), ProjectorError> {
         let Self { harness, control: mut channel } = self;
         harness.author_calls.fetch_add(1, Ordering::Relaxed);
         let ProjectorIoParts { mut source, control, services, stop } = io.split();
         match harness.config.case {
             Case::StateError | Case::StateRetained => {
-                let Delivery::State(mut loan) = source.next_timeout(Duration::from_secs(5))? else { panic!("actual source required"); };
+                let Delivery::Snapshot(mut loan) = source.next_timeout(Duration::from_secs(5))? else { panic!("actual source required"); };
                 // Read the real source (including EOF for genesis), then let a
-                // model-installation error unwind the SDK's actual StateLoan.
+                // model-installation error unwind the SDK's actual SnapshotReader.
                 loop {
                     match loan.next_record()? {
-                        StateRead::Progress => (),
-                        StateRead::Record(_) | StateRead::End => break,
-                        StateRead::Stop => panic!("source stopped before the model failure cut"),
+                        SnapshotRead::Progress => (),
+                        SnapshotRead::Record(_) | SnapshotRead::End => break,
+                        SnapshotRead::Stop => panic!("source stopped before the model failure cut"),
                     }
                 }
                 harness.event("state-held-and-read");
-                Err(ProjectorFailure::Application { code: 301 })
+                Err(ProjectorError::Application { code: 301 })
             }
             Case::HeldService => {
                 let held = harness.clone();
@@ -76,7 +76,7 @@ impl PreparedProjector for Prepared {
                     held.event("service-held");
                     let mut command = [0];
                     channel.read_exact(&mut command).unwrap();
-                    match command[0] { b'F' => Err(ProjectorFailure::Application { code: 301 }), b'Q' => Ok(()), _ => panic!("held service failure") }
+                    match command[0] { b'F' => Err(ProjectorError::Application { code: 301 }), b'Q' => Ok(()), _ => panic!("held service failure") }
                 })?;
                 Ok(()) // SDK now really joins the still-held service.
             }
@@ -96,13 +96,13 @@ impl PreparedProjector for Prepared {
                 // attempt the other three, whose facades have been forgotten.
                 for reply in held { std::mem::forget(reply); }
                 let _last = last;
-                Err(ProjectorFailure::Application { code: 301 })
+                Err(ProjectorError::Application { code: 301 })
             }
             Case::FrameError | Case::FrameRetained | Case::ServiceFrame => {
                 let loan = loop {
                     match source.next_timeout(Duration::from_secs(5))? {
-                        Delivery::Frame(loan) if loan.view().transaction_count() != 0 => break loan,
-                        Delivery::Frame(_) => continue, // real Raft-only prefix, no business output
+                        Delivery::RaftEntry(loan) if loan.view().tx_count() != 0 => break loan,
+                        Delivery::RaftEntry(_) => continue, // real Raft-only prefix, no business output
                         _ => panic!("test must deliver one actual committed frame"),
                     }
                 };
@@ -126,7 +126,7 @@ impl PreparedProjector for Prepared {
                     Ok(())
                 } else {
                     let _held_until_return = loan;
-                    Err(ProjectorFailure::Application { code: 301 })
+                    Err(ProjectorError::Application { code: 301 })
                 }
             }
         }

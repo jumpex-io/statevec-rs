@@ -38,7 +38,7 @@ pub enum OffsetStoreOperation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum OffsetFileFailure {
+pub enum OffsetFileError {
     Header,
     Length,
     Checksum,
@@ -55,7 +55,7 @@ pub enum OffsetStoreError {
     NeedsReopen,
     TemporaryNamesExhausted,
     Offset(ConsumeOffsetError),
-    Format(OffsetFileFailure),
+    Format(OffsetFileError),
     Regression {
         stored: u64,
         proposed: u64,
@@ -138,7 +138,7 @@ impl FileOffsetStore {
             .map_err(|e| io_failure(OffsetStoreOperation::SyncDirectory, e))
     }
 
-    /// Open an existing directory and acquire nonblocking writer custody.
+    /// Open an existing directory and acquire nonblocking writer ownership.
     /// Does not create directories or replace/create the selected offset.
     /// Positive absence is returned by load; invalid existing files refuse.
     /// Before exposing an existing offset for restore, validate and sync the
@@ -335,18 +335,18 @@ fn read_offset(file: &File) -> Result<ConsumeOffset, OffsetStoreError> {
         .read_to_end(&mut bytes)
         .map_err(|e| io_failure(OffsetStoreOperation::ReadOffset, e))?;
     if bytes.len() > MAX_FILE {
-        return Err(OffsetStoreError::Format(OffsetFileFailure::TooLarge));
+        return Err(OffsetStoreError::Format(OffsetFileError::TooLarge));
     }
     if bytes.len() < HEADER + HASH || &bytes[..8] != MAGIC {
-        return Err(OffsetStoreError::Format(OffsetFileFailure::Header));
+        return Err(OffsetStoreError::Format(OffsetFileError::Header));
     }
     let length = u32::from_le_bytes(bytes[8..12].try_into().expect("checked header")) as usize;
     if length > MAX_OFFSET_PROPERTIES_BYTES || bytes.len() != HEADER + length + HASH {
-        return Err(OffsetStoreError::Format(OffsetFileFailure::Length));
+        return Err(OffsetStoreError::Format(OffsetFileError::Length));
     }
     let digest = Sha256::digest(&bytes[..HEADER + length]);
     if digest.as_slice() != &bytes[HEADER + length..] {
-        return Err(OffsetStoreError::Format(OffsetFileFailure::Checksum));
+        return Err(OffsetStoreError::Format(OffsetFileError::Checksum));
     }
     ConsumeOffset::decode_properties(&bytes[HEADER..HEADER + length]).map_err(OffsetStoreError::Offset)
 }

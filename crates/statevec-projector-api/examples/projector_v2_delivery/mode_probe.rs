@@ -1,20 +1,20 @@
 //! Loaded conformance only: unsupported readers are ABI refusals, whereas a
 //! wrong-mode rebuild must reach the native owner's queued ordinary refusal.
-use statevec_projector_api::plugin_v2::host::*;
-use statevec_projector_api::{ProjectorCheckpointRejection, plugin_v2::{ffi::*, *}};
+use statevec_projector_api::v1::host::*;
+use statevec_projector_api::{ProjectorControlRejection, v1::{ffi::*, *}};
 use std::time::{Duration, Instant};
 
-fn failure(code: u32) -> ProjectorFailure { ProjectorFailure::Application { code } }
+fn failure(code: u32) -> ProjectorError { ProjectorError::Application { code } }
 
 /// The caller lends a complete live host table through all calls and reply release.
-pub(super) unsafe fn check_continuous_refusals(table: &SvProjectorHostV2) -> Result<u64, ProjectorFailure> {
+pub(super) unsafe fn check_continuous_refusals(table: &SvProjectorHostV2) -> Result<u64, ProjectorError> {
     let (Some(info_fn), Some(next), Some(finish), Some(release_state), Some(offer), Some(poll), Some(release_reply)) =
         (table.state_info, table.state_next, table.finish_state, table.release_state,
          table.offer_rebuild, table.poll_reply, table.release_reply)
     else { return Err(failure(910)); };
-    let unsupported = SvStatus::from(&ProjectorAbiFailure::UnsupportedCapabilities { required: 0x40 });
+    let unsupported = SvStatus::from(&ProjectorAbiError::UnsupportedCapabilities { required: 0x40 });
     let mut info = SvStateInfo { record_count: 1, ..SvStateInfo::default() };
-    // 123 is deliberately not a state loan. Continuous-only mode refuses before
+    // 123 is deliberately not a state borrow. Continuous-only mode refuses before
     // interpreting it, and must not consume it or leave stale output behind.
     let mut state_handle = 123;
     if unsafe { info_fn(table.context, state_handle, &mut info) } != unsupported || info != SvStateInfo::default() {
@@ -57,7 +57,7 @@ pub(super) unsafe fn check_continuous_refusals(table: &SvProjectorHostV2) -> Res
         let mut reply = SvControlReply::default();
         if unsafe { poll(table.context, handle, &mut reply) } != SvStatus::SUCCESS { break Err(failure(917)); }
         match reply.decode() {
-            Ok(ControlReply::Rejected(ProjectorCheckpointRejection::WrongRecoveryMode)) => break Ok(()),
+            Ok(ControlReply::Rejected(ProjectorControlRejection::WrongHistoryMode)) => break Ok(()),
             Ok(ControlReply::Pending) if Instant::now() < deadline => std::thread::yield_now(),
             _ => break Err(failure(918)),
         }

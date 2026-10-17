@@ -9,10 +9,11 @@ guide, examples and a small in-memory engine for local business tests.
 
 ## Development compatibility
 
-The `dev` branch contains unreleased **0.4.0** work. It includes source-breaking
-changes from 0.3.0 and earlier, notably the
-[Projector semantic API and ABI 2](docs/user-guide/projectors.md#sdk-040-paired-cutover).
-Following `dev` is not a compatible update to an existing 0.3.0 consumer.
+The local naming cutover prepares **0.5.0**, with source-breaking public Rust
+names defined in the [glossary](docs/glossary.md). The
+[Projector API](docs/user-guide/projectors.md#sdk-050-rust-vocabulary) uses the
+`v1` Rust namespace while retaining C ABI 2. Following `dev` is not a compatible
+update to an existing 0.4.0 or earlier consumer.
 Update the application explicitly and rebuild its plugins against the matched
 host/SDK revision. Keep all StateVec crates at that same reviewed Git revision;
 use an exact `rev` and retain the lockfile for reproducible deployments, not a
@@ -46,7 +47,7 @@ The flight-booking example covers inventory and reservations.
 | `statevec-ingress-client` | Bounded cluster client with manual, background and async driving |
 | `ingress-api` | Request/reply codecs and incremental frame readers |
 | `statevec-frame` | Client inputs, intent identity and application-result bindings |
-| `statevec-projector-api` | Complete committed events, record changes and projector checkpoint interfaces |
+| `statevec-projector-api` | Applied Raft entries, Tx outputs, consistent Snapshots and durable offset reports |
 
 Application crates usually depend on `statevec`, with `statevec-test` as a
 development dependency. Use the same StateVec release or Git revision for all

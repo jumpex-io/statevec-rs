@@ -1,7 +1,7 @@
 //! Public configured exporter and a separate loaded transport conformance probe.
 //! The business consumer uses safe lending/control facades; the raw probe also
 //! checks mode refusals through the caller's explicitly borrowed C table.
-use statevec_projector_api::plugin_v2::{self as p, ffi::*, *};
+use statevec_projector_api::v1::{self as p, ffi::*, *};
 use sha2::{Digest, Sha256};
 #[path = "projector_v2_delivery/mode_probe.rs"]
 mod mode_probe;
@@ -20,7 +20,7 @@ pub struct Report {
 pub unsafe extern "C" fn statevec_projector_delivery_probe_v2(
     table: *const SvProjectorHostV2, startup: *const SvProjectorStart, count: u64, report: *mut Report, completion: *mut SvProjectorCompletion,
 ) -> SvStatus {
-    if table.is_null() || startup.is_null() || report.is_null() || completion.is_null() { return (&ProjectorAbiFailure::NullPointer).into(); }
+    if table.is_null() || startup.is_null() || report.is_null() || completion.is_null() { return (&ProjectorAbiError::NullPointer).into(); }
     // SAFETY: test caller lends these complete disjoint outputs and live table
     // through synchronous completion; no pointer survives this entry.
     let mut result = Report::default();
@@ -40,7 +40,7 @@ pub unsafe extern "C" fn statevec_projector_delivery_probe_v2(
     }
 }
 
-fn consume(parts: ProjectorIoParts<'_>, count: u64, result: &mut Report) -> Result<SourceCut, ProjectorFailure> {
+fn consume(parts: ProjectorIoParts<'_>, count: u64, result: &mut Report) -> Result<RaftEntryToken, ProjectorError> {
         let ProjectorIoParts { mut source, control: _, services, stop: _ } = parts;
         // An actual scoped borrower is joined before its context can retire.
         services.spawn(|stop| {
@@ -51,18 +51,18 @@ fn consume(parts: ProjectorIoParts<'_>, count: u64, result: &mut Report) -> Resu
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut latest = None;
         while result.frames < count {
-            if std::time::Instant::now() >= deadline { return Err(ProjectorFailure::Application { code: 900 }); }
+            if std::time::Instant::now() >= deadline { return Err(ProjectorError::Application { code: 900 }); }
             match source.next_timeout(std::time::Duration::from_millis(2))? {
-                Delivery::Frame(loan) => {
+                Delivery::RaftEntry(loan) => {
                     let view = loan.view();
                     result.frames += 1;
-                    result.empty += u64::from(view.transaction_count() == 0);
+                    result.empty += u64::from(view.tx_count() == 0);
                     result.replay += u64::from(view.context() == statevec_projector_api::ProjectionContext::Replay);
                     let position = view.position();
                     result.last_index = position.raft_index; result.last_term = position.raft_term;
                     result.last_tx_seq = position.frontier.applied_tx_seq; result.chain = position.frontier.tx_chain_hash;
-                    for index in 0..view.transaction_count() {
-                        let tx = view.transaction(index)?;
+                    for index in 0..view.tx_count() {
+                        let tx = view.tx(index)?;
                         let r = tx.result();
                         result.transactions += 1;
                         hash.update(r.tx_seq.to_le_bytes()); hash.update(r.ordinal.to_le_bytes());
@@ -79,12 +79,12 @@ fn consume(parts: ProjectorIoParts<'_>, count: u64, result: &mut Report) -> Resu
                             hash.update(event.event_seq.to_le_bytes()); hash.update(event.event_kind.to_le_bytes());
                             hash.update((event.payload.len() as u64).to_le_bytes()); hash.update(event.payload);
                         }
-                        for index in 0..tx.change_count() {
+                        for index in 0..tx.record_delta_count() {
                             result.changes += 1;
-                            let (tag, key, revision, before, after) = match tx.change(index)? {
-                                RecordChangeView::Insert { key, revision, after } => (0u8, key, revision, &[][..], after),
-                                RecordChangeView::Update { key, revision, before, after } => (1, key, revision, before, after),
-                                RecordChangeView::Delete { key, revision, before } => (2, key, revision, before, &[][..]),
+                            let (tag, key, revision, before, after) = match tx.record_delta(index)? {
+                                RecordDeltaView::Insert { key, revision, after } => (0u8, key, revision, &[][..], after),
+                                RecordDeltaView::Update { key, revision, before, after } => (1, key, revision, before, after),
+                                RecordDeltaView::Delete { key, revision, before } => (2, key, revision, before, &[][..]),
                             };
                             hash.update([tag]); hash.update(key.kind.to_le_bytes()); hash.update(key.sys_id.to_le_bytes());
                             hash.update(revision.to_le_bytes());
@@ -92,37 +92,37 @@ fn consume(parts: ProjectorIoParts<'_>, count: u64, result: &mut Report) -> Resu
                             hash.update((after.len() as u64).to_le_bytes()); hash.update(after);
                         }
                     }
-                    latest = Some(loan.source_cut());
+                    latest = Some(loan.token());
                 }
                 Delivery::Empty | Delivery::TimedOut => {},
-                Delivery::Stop | Delivery::Disconnected | Delivery::State(_) => return Err(ProjectorFailure::Application { code: 901 }),
+                Delivery::Stop | Delivery::Disconnected | Delivery::Snapshot(_) => return Err(ProjectorError::Application { code: 901 }),
             }
         }
         result.digest = hash.finalize().into();
-        latest.ok_or(ProjectorFailure::Application { code: 902 })
+        latest.ok_or(ProjectorError::Application { code: 902 })
 }
 
-fn offer_fixture_checkpoint(control: ProjectorControlPort<'_>, cut: SourceCut) -> Result<(), ProjectorFailure> {
+fn offer_fixture_checkpoint(control: ProjectorControlPort<'_>, cut: RaftEntryToken) -> Result<(), ProjectorError> {
         // Only the raw transport probe calls this synthetic acknowledgement. It
         // tests the control channel, not durable storage or crash recovery.
         // A real author must save effects AND this offset durably before offering
-        // it, then return that saved offset from recovery() on the next startup.
+        // it, then return that saved offset from start_request() on the next startup.
         // The report-only configured example below deliberately does neither.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        cut.offset().ok_or(ProjectorFailure::Application { code: 903 })?.encode_properties().map_err(|_| ProjectorFailure::Application { code: 903 })?;
-        let publication = cut.declare_durable().map_err(|_| ProjectorFailure::Application { code: 903 })?;
+        cut.offset().ok_or(ProjectorError::Application { code: 903 })?.encode_properties().map_err(|_| ProjectorError::Application { code: 903 })?;
+        let publication = cut.declare_durable().map_err(|_| ProjectorError::Application { code: 903 })?;
         let mut reply = loop {
             match control.report_durable_offset(&publication)? {
                 Offer::Queued(reply) => break reply,
-                Offer::OwnerQueueFull => { if std::time::Instant::now() >= deadline { return Err(ProjectorFailure::Application { code: 904 }); } std::thread::yield_now(); },
-                _ => return Err(ProjectorFailure::Application { code: 905 }),
+                Offer::OwnerQueueFull => { if std::time::Instant::now() >= deadline { return Err(ProjectorError::Application { code: 904 }); } std::thread::yield_now(); },
+                _ => return Err(ProjectorError::Application { code: 905 }),
             }
         };
         loop {
             match reply.poll()? {
                 ReplyPoll::Ready(ControlDecision::Accepted) => break,
                 ReplyPoll::Pending if std::time::Instant::now() < deadline => std::thread::yield_now(),
-                _ => return Err(ProjectorFailure::Application { code: 906 }),
+                _ => return Err(ProjectorError::Application { code: 906 }),
             }
         }
         Ok(())
@@ -137,7 +137,7 @@ struct DeliveryModule;
 struct DeliveryConfig { report_path: std::path::PathBuf, frames: u64 }
 struct PreparedDelivery { file: std::fs::File, frames: u64 }
 impl ProjectorModule for DeliveryModule {
-    const RECOVERY_SUPPORT: ProjectorRecoverySupport = ProjectorRecoverySupport::ContinuousHistory;
+    const SUPPORTED_HISTORY_MODES: SupportedHistoryModes = SupportedHistoryModes::Continuous;
     type Configured = DeliveryConfig;
     fn configure(&self, input: ProjectorConfig<'_>) -> Result<DeliveryConfig, ConfigureFailure> {
         let mut parsed: DeliveryConfig = serde_json::from_slice(input.bytes).map_err(|_| ConfigureFailure::Invalid { code: 1 })?;
@@ -148,30 +148,30 @@ impl ProjectorModule for DeliveryModule {
 }
 impl ConfiguredProjector for DeliveryConfig {
     type Prepared = PreparedDelivery;
-    fn prepare(&self, context: ProjectorPrepare<'_>) -> Result<PreparedDelivery, ProjectorFailure> {
-        if context.recovery_mode != statevec_projector_api::plugin_v2::ProjectorRecoveryMode::ContinuousHistory {
-            return Err(ProjectorFailure::Application { code: 1 });
+    fn prepare(&self, context: ProjectorPrepare<'_>) -> Result<PreparedDelivery, ProjectorError> {
+        if context.history_mode != statevec_projector_api::v1::HistoryMode::Continuous {
+            return Err(ProjectorError::Application { code: 1 });
         }
         let file = std::fs::File::create(&self.report_path).map_err(|e| io_failure(e, ProjectorIoStage::StoreOpen))?;
         Ok(PreparedDelivery { file, frames: self.frames })
     }
 }
 impl PreparedProjector for PreparedDelivery {
-    fn recovery(&self) -> statevec_projector_api::plugin_v2::ProjectorRecovery { statevec_projector_api::plugin_v2::ProjectorRecovery::ContinuousHistory { offset: None } }
+    fn start_request(&self) -> statevec_projector_api::v1::StartRequest { statevec_projector_api::v1::StartRequest::Continuous { offset: None } }
     fn delivery_limits(&self) -> DeliveryLimits {
         DeliveryLimits { frame_capacity: std::num::NonZeroUsize::new(1).unwrap(), maximum_accounted_bytes: std::num::NonZeroUsize::new(1024 * 1024).unwrap() }
     }
-    fn run(mut self, io: ProjectorIo<'_>) -> Result<(), ProjectorFailure> {
+    fn run(mut self, io: ProjectorIo<'_>) -> Result<(), ProjectorError> {
         use std::io::Write;
         let mut report = Report::default();
         let _cut = consume(io.split(), self.frames, &mut report)?;
         // Writing a report does not establish durable effects plus an offset.
-        // Do not call report_durable_offset: recovery() truthfully reports None.
-        let bytes = serde_json::to_vec(&report).map_err(|_| ProjectorFailure::Application { code: 7 })?;
+        // Do not call report_durable_offset: start_request() truthfully reports None.
+        let bytes = serde_json::to_vec(&report).map_err(|_| ProjectorError::Application { code: 7 })?;
         self.file.write_all(&bytes).map_err(|e| io_failure(e, ProjectorIoStage::StoreWrite))
     }
 }
-fn io_failure(e: std::io::Error, stage: ProjectorIoStage) -> ProjectorFailure {
-    ProjectorFailure::Io { stage, kind: ProjectorIoKind::from_io(e.kind()), os_code: e.raw_os_error() }
+fn io_failure(e: std::io::Error, stage: ProjectorIoStage) -> ProjectorError {
+    ProjectorError::Io { stage, kind: ProjectorIoKind::from_io(e.kind()), os_code: e.raw_os_error() }
 }
 statevec_projector_api::export_projector_plugin_v2!(DeliveryModule);

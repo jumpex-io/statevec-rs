@@ -1,6 +1,6 @@
 use super::{
-    decode_failure, ProjectorAbiFailure as A, ProjectorCallFailure as C,
-    ProjectorFailure as F, ProjectorWorkerFailure as W, SvStatus,
+    decode_failure, ProjectorAbiError as A, ProjectorCallError as C,
+    ProjectorError as F, ProjectorWorkerError as W, SvStatus,
     ffi::{SvProjectorCompletion, SvProjectorFailureObservation},
 };
 
@@ -22,7 +22,7 @@ impl FailureSlot {
 }
 
 /// Validated observations only. `joined` is a report from the exporter, not a
-/// replacement for the host's actual invocation/custody checks.
+/// replacement for the host's actual invocation/ownership checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProjectorCompletion {
     pub joined: bool,
@@ -45,8 +45,8 @@ pub fn decode_observation(raw: SvProjectorFailureObservation) -> Result<Option<W
     let release = matches!(failure, C::Operation(F::Host(_) | F::HostPanicked | F::AbiContract(_)));
     match (FailureSlot::decode(raw.slot)?, failure) {
         (FailureSlot::Run, C::Operation(source)) => Ok(Some(W::Run(source))),
-        (FailureSlot::FrameRelease, C::Operation(source)) if release => Ok(Some(W::FrameRelease(source))),
-        (FailureSlot::StateRelease, C::Operation(source)) if release => Ok(Some(W::StateRelease(source))),
+        (FailureSlot::FrameRelease, C::Operation(source)) if release => Ok(Some(W::EntryRelease(source))),
+        (FailureSlot::StateRelease, C::Operation(source)) if release => Ok(Some(W::SnapshotRelease(source))),
         (FailureSlot::ReplyRelease, C::Operation(source)) if release => Ok(Some(W::ReplyRelease(source))),
         (FailureSlot::ServiceJoin, C::ServiceJoinPanicked) => Ok(Some(W::ServiceJoinPanicked)),
         (FailureSlot::Notification, C::Operation(source)) if release => Ok(Some(W::Notification(source))),
@@ -81,8 +81,8 @@ impl SvProjectorCompletion {
         Ok(ProjectorCompletion {
             joined: self.joined == 1,
             run_failure: match decoded[FailureSlot::Run.index()] { Some(W::Run(f)) => Some(f), _ => None },
-            frame_release_failure: match decoded[FailureSlot::FrameRelease.index()] { Some(W::FrameRelease(f)) => Some(f), _ => None },
-            state_release_failure: match decoded[FailureSlot::StateRelease.index()] { Some(W::StateRelease(f)) => Some(f), _ => None },
+            frame_release_failure: match decoded[FailureSlot::FrameRelease.index()] { Some(W::EntryRelease(f)) => Some(f), _ => None },
+            state_release_failure: match decoded[FailureSlot::StateRelease.index()] { Some(W::SnapshotRelease(f)) => Some(f), _ => None },
             reply_release_failure: match decoded[FailureSlot::ReplyRelease.index()] { Some(W::ReplyRelease(f)) => Some(f), _ => None },
             notification_failure: match decoded[FailureSlot::Notification.index()] { Some(W::Notification(f)) => Some(f), _ => None },
             worker_join_panicked: decoded[FailureSlot::WorkerJoin.index()].is_some(), failed_service_joins: self.failed_service_joins,
@@ -93,8 +93,8 @@ impl SvProjectorCompletion {
 impl From<&W> for SvProjectorFailureObservation {
     fn from(source: &W) -> Self {
         let (slot, cause) = match source {
-            W::Run(f) => (FailureSlot::Run, f.into()), W::FrameRelease(f) => (FailureSlot::FrameRelease, f.into()),
-            W::StateRelease(f) => (FailureSlot::StateRelease, f.into()), W::ReplyRelease(f) => (FailureSlot::ReplyRelease, f.into()),
+            W::Run(f) => (FailureSlot::Run, f.into()), W::EntryRelease(f) => (FailureSlot::FrameRelease, f.into()),
+            W::SnapshotRelease(f) => (FailureSlot::StateRelease, f.into()), W::ReplyRelease(f) => (FailureSlot::ReplyRelease, f.into()),
             W::ServiceJoinPanicked => (FailureSlot::ServiceJoin, SvStatus::from(&C::ServiceJoinPanicked)),
             W::Notification(f) => (FailureSlot::Notification, f.into()),
             W::WorkerJoinPanicked => (FailureSlot::WorkerJoin, SvStatus::from(&C::WorkerJoinPanicked)),

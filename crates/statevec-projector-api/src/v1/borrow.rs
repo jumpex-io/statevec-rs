@@ -1,4 +1,4 @@
-use super::{ffi::*, ProjectorAbiFailure as A, ProjectorFailure as F, ProjectorOperation as Op, ProjectorCallFailure, decode_call};
+use super::{ffi::*, ProjectorAbiError as A, ProjectorError as F, ProjectorOperation as Op, ProjectorCallError, decode_call};
 
 pub(super) fn pointer<T>(raw: *const T) -> Result<(), A> {
     if raw.is_null() { return Err(A::NullPointer); }
@@ -21,14 +21,14 @@ pub(super) unsafe fn bytes<'a>(raw: SvBytes) -> Result<&'a [u8], A> {
     }
     if raw.len == 0 { return Ok(&[]); }
     pointer(raw.ptr)?;
-    // SAFETY: the checked host supplies readable spans until the owning frame
-    // is released; callers tie this borrow to that loan, never to the table.
+    // SAFETY: the checked host supplies readable spans until the owning entry
+    // is released; callers tie this borrow to that borrow, never to the table.
     Ok(unsafe { std::slice::from_raw_parts(raw.ptr, raw.len as usize) })
 }
 
 pub(super) fn call(status: SvStatus, op: Op) -> Result<(), F> {
     match decode_call(status, op)? {
-        None => Ok(()), Some(ProjectorCallFailure::Operation(cause)) => Err(cause),
+        None => Ok(()), Some(ProjectorCallError::Operation(cause)) => Err(cause),
         Some(_) => Err(A::InvalidHandle.into()),
     }
 }
@@ -54,21 +54,21 @@ pub(super) fn validate_host(table: &SvProjectorHostV2) -> Result<(), A> {
     Ok(())
 }
 
-pub(super) fn frame_position(value: SvPosition) -> Result<crate::ProjectionPosition, A> {
+pub(super) fn frame_position(value: SvPosition) -> Result<crate::SourcePosition, A> {
     if value.raft_index == 0 { return Err(A::InvalidPosition); }
     position_allowing_genesis(value)
 }
-pub(super) fn position_allowing_genesis(value: SvPosition) -> Result<crate::ProjectionPosition, A> {
+pub(super) fn position_allowing_genesis(value: SvPosition) -> Result<crate::SourcePosition, A> {
     if value.reserved != 0 { return Err(A::Reserved { actual: value.reserved.into() }); }
     if value.manifest != 1 { return Err(A::Flag { actual: value.manifest }); }
     if (value.raft_index == 0) != (value.raft_term == 0)
         || value.raft_index == 0 && (value.applied_batch_identity != [0; 32] || value.applied_tx_seq != 0) {
         return Err(A::InvalidPosition);
     }
-    Ok(crate::ProjectionPosition {
+    Ok(crate::SourcePosition {
         cluster_identity: crate::Digest32::new(value.cluster), genesis_identity: crate::Digest32::new(value.genesis),
         execution_profile_identity: crate::Digest32::new(value.profile), manifest: crate::ProjectionManifest::AllRegisteredSchemaV1,
-        raft_index: value.raft_index, raft_term: value.raft_term, applied_batch_identity: crate::ProjectionAppliedIdentity(value.applied_batch_identity),
-        frontier: crate::ProjectionFrontier { applied_tx_seq: value.applied_tx_seq, tx_chain_hash: value.tx_chain_hash },
+        raft_index: value.raft_index, raft_term: value.raft_term, applied_batch_identity: crate::AppliedBatchIdentity(value.applied_batch_identity),
+        frontier: crate::AppliedTxProgress { applied_tx_seq: value.applied_tx_seq, tx_chain_hash: value.tx_chain_hash },
     })
 }

@@ -1,26 +1,26 @@
 //! Call-borrowed DTO validation. Native attachment still decides recovery.
-use super::{plugin::*, borrow, ffi::*, ProjectorAbiFailure as A};
-use crate::{Digest32, ProjectionFrontier, ProjectionManifest, ProjectorInitialization, ProjectorRecoveryMode as Mode, ProjectorRecoverySupport};
+use super::{plugin::*, borrow, ffi::*, ProjectorAbiError as A};
+use crate::{Digest32, AppliedTxProgress, ProjectionManifest, StartInstruction, HistoryMode as Mode, SupportedHistoryModes};
 use std::num::NonZeroU64;
 
 pub(super) const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 pub(super) const MAX_IDL_BYTES: u64 = 16 * 1024 * 1024;
 pub(super) const MAX_PATH_BYTES: u64 = 4096;
 
-pub(super) const fn support(value: ProjectorRecoverySupport) -> u64 {
+pub(super) const fn support(value: SupportedHistoryModes) -> u64 {
     match value {
-        ProjectorRecoverySupport::ContinuousHistory => CONTINUOUS_HISTORY_CAPABILITY,
-        ProjectorRecoverySupport::LatestStateOnly => LATEST_STATE_CAPABILITY,
-        ProjectorRecoverySupport::Both => CONTINUOUS_HISTORY_CAPABILITY | LATEST_STATE_CAPABILITY,
+        SupportedHistoryModes::Continuous => CONTINUOUS_HISTORY_CAPABILITY,
+        SupportedHistoryModes::LatestState => LATEST_STATE_CAPABILITY,
+        SupportedHistoryModes::Both => CONTINUOUS_HISTORY_CAPABILITY | LATEST_STATE_CAPABILITY,
     }
 }
 pub(super) fn mode(raw: u32) -> Result<Mode, A> {
-    match raw { recovery_mode::CONTINUOUS_HISTORY => Ok(Mode::ContinuousHistory), recovery_mode::LATEST_STATE_ONLY => Ok(Mode::LatestStateOnly), actual => Err(A::Flag { actual }) }
+    match raw { recovery_mode::CONTINUOUS_HISTORY => Ok(Mode::Continuous), recovery_mode::LATEST_STATE_ONLY => Ok(Mode::LatestState), actual => Err(A::Flag { actual }) }
 }
-pub(super) fn identity(raw: SvProjectionIdentity) -> Result<ProjectionIdentity, A> {
+pub(super) fn identity(raw: SvProjectionIdentity) -> Result<SourceIdentity, A> {
     if raw.reserved != 0 { return Err(A::Reserved { actual: raw.reserved.into() }); }
     if raw.manifest != 1 { return Err(A::Flag { actual: raw.manifest }); }
-    Ok(ProjectionIdentity {
+    Ok(SourceIdentity {
         cluster_identity: Digest32::new(raw.cluster), genesis_identity: Digest32::new(raw.genesis),
         execution_profile_identity: Digest32::new(raw.profile), manifest: ProjectionManifest::AllRegisteredSchemaV1,
     })
@@ -56,7 +56,7 @@ pub(super) fn cluster_id(bytes: [u8; 32]) -> String {
 pub(super) unsafe fn prepare<'a>(raw: &'a SvProjectorPrepare, cluster_id: &'a str, caps: u64) -> Result<ProjectorPrepare<'a>, A> {
     if raw.reserved != 0 { return Err(A::Reserved { actual: raw.reserved.into() }); }
     let mode = mode(raw.recovery_mode)?;
-    let required = match mode { Mode::ContinuousHistory => CONTINUOUS_HISTORY_CAPABILITY, Mode::LatestStateOnly => LATEST_STATE_CAPABILITY };
+    let required = match mode { Mode::Continuous => CONTINUOUS_HISTORY_CAPABILITY, Mode::LatestState => LATEST_STATE_CAPABILITY };
     if caps & required == 0 { return Err(A::UnsupportedCapabilities { required }); }
     for actual in [raw.learner_only, raw.external_retention] {
         if actual != 1 { return Err(A::Flag { actual }); }
@@ -71,20 +71,20 @@ pub(super) unsafe fn prepare<'a>(raw: &'a SvProjectorPrepare, cluster_id: &'a st
         identity: identity(raw.identity)?, peer_id: raw.peer_id, cluster_id,
         projector_id: raw.projector_id.decode()?,
         schema_idl: unsafe { text(raw.schema_idl, MAX_IDL_BYTES)? }.as_bytes(),
-        checkpoint_policy, recovery_mode: mode,
+        checkpoint_policy, history_mode: mode,
     })
 }
-pub(super) fn startup(raw: &SvProjectorStart) -> Result<(ProjectorStartupBase, ProjectorInitialization), A> {
+pub(super) fn startup(raw: &SvProjectorStart) -> Result<(StartupPosition, StartInstruction), A> {
     raw.projector_id.decode()?;
     if raw.peer_id == 0 { return Err(A::ZeroPeer); }
     if (raw.raft_index == 0) != (raw.raft_term == 0) { return Err(A::InvalidPosition); }
     let initialization = match (mode(raw.recovery_mode)?, raw.initialization, raw.rebuild_target) {
-        (Mode::ContinuousHistory, 0, 0) => ProjectorInitialization::Frames,
-        (Mode::LatestStateOnly, 1, target) if target >= raw.raft_index => ProjectorInitialization::Rebuild { target },
+        (Mode::Continuous, 0, 0) => StartInstruction::DeliverEntries,
+        (Mode::LatestState, 1, target) if target >= raw.raft_index => StartInstruction::Rebuild { target },
         _ => return Err(A::BindingMismatch),
     };
-    Ok((ProjectorStartupBase {
+    Ok((StartupPosition {
         identity: identity(raw.identity)?, peer_id: raw.peer_id, raft_index: raw.raft_index, raft_term: raw.raft_term,
-        frontier: ProjectionFrontier { applied_tx_seq: raw.applied_tx_seq, tx_chain_hash: raw.tx_chain_hash },
+        frontier: AppliedTxProgress { applied_tx_seq: raw.applied_tx_seq, tx_chain_hash: raw.tx_chain_hash },
     }, initialization))
 }

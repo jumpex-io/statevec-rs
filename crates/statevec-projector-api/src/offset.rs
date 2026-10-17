@@ -1,9 +1,9 @@
-//! Portable consumer metadata. Decoding this value never constructs a live cut.
+//! Portable consumer metadata. Decoding this value never constructs a live token.
 pub const MAX_PROJECTOR_ID_BYTES: usize = 128;
 pub const MAX_OFFSET_PROPERTIES_BYTES: usize = 1024;
 
 /// An application's durable whole-entry prefix, not a host acknowledgement.
-/// Save alongside business effects before offering the corresponding live cut.
+/// Save alongside business effects before offering the corresponding live token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsumeOffset {
     pub cluster_id: String,
@@ -13,7 +13,7 @@ pub struct ConsumeOffset {
 }
 
 /// Checked logical namespace, copied into native source certificates. This is
-/// an identity value, not frame custody or proof of an acknowledged offset.
+/// an identity value, not entry ownership or proof of an acknowledged offset.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ProjectorId {
     length: u8,

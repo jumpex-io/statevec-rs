@@ -1,5 +1,8 @@
 //! Configured Projector contracts: implement configure -> prepare -> run.
-//! Source evidence, durability declaration and owner acceptance are distinct.
+//! Source tokens, durability declarations and owner acceptance are distinct.
+//! `v1` names the safe Rust API. `export_projector_plugin_v2!` still exports
+//! Projector C ABI 2; `export_core_plugin_v3!` still exports Core C ABI 3.
+//! These C ABI versions are independent of the Rust module name.
 //! Core V3 shares scalar representations only; its operation decoder is unchanged.
 pub mod ffi;
 mod failure;
@@ -18,19 +21,18 @@ mod inputs;
 mod observation;
 mod wire;
 #[doc(hidden)]
-#[path = "plugin_v2/export.rs"]
+#[path = "v1/export.rs"]
 pub mod __export;
 
 pub use plugin::*;
-pub use crate::{ProjectorInitialization, ProjectorRecoveryMode, ProjectorRecoverySupport};
+pub use crate::{StartInstruction, HistoryMode, SupportedHistoryModes};
 
 pub use transport::DeliveryLimits;
-pub use io::{Delivery, FrameLoan, ProjectorControlPort, ProjectorIo, ProjectorIoParts, ProjectorServices, ProjectorSource, ProjectorStop};
-pub use views::{FrameView, TransactionView, EventView, RecordChangeView};
-pub use state::{StateLoan, StateRead, ProjectionStateInfo, ProjectionStateRecord};
-pub use views::{EventView as ProjectedEventRef, RecordChangeView as ProjectedRecordChangeRef};
-pub use control::{SourceCut, DurableOffsetReport, NotContinuousHistory, ControlDecision, RebuildCut, Offer, ReplyHandle, ReplyPoll};
-pub use pending::{ControlProgress, PendingDurableOffset, PendingRebuildConfirmation};
+pub use io::{Delivery, RaftEntryDelivery, ProjectorControlPort, ProjectorIo, ProjectorIoParts, ProjectorServices, ProjectorSource, ProjectorStop};
+pub use views::{RaftEntryView, TxView, EventView, RecordDeltaView};
+pub use state::{SnapshotReader, SnapshotRead, SnapshotInfo, SnapshotRecordView};
+pub use control::{RaftEntryToken, DurableOffsetReport, NotContinuousHistory, ControlDecision, SnapshotToken, Offer, ReplyHandle, ReplyPoll};
+pub use pending::{ControlProgress, PendingDurableOffset, PendingSnapshotConfirmation};
 
 pub use statevec_api::plugin_v3::{ConfigureFailure, HostFailure, ResourceFailure, SvStatus};
 pub use failure::*;

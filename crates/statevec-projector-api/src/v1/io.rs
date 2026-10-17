@@ -1,5 +1,5 @@
 use super::completion::FailureSlot;
-use super::{borrow::*, ffi::*, ProjectorAbiFailure as A, ProjectorFailure as F, ProjectorOperation as Op};
+use super::{borrow::*, ffi::*, ProjectorAbiError as A, ProjectorError as F, ProjectorOperation as Op};
 use std::{cell::Cell, marker::PhantomData, rc::Rc, sync::Mutex};
 
 /// Only operation failures can be recorded here. Service/worker joins have
@@ -44,11 +44,11 @@ pub(super) struct ScopeData {
     pub replies: Mutex<[ReplySlot; 4]>,
     completion: Mutex<SvProjectorCompletion>,
     observation: super::observation::WorkerObservation,
-    pub startup: super::ProjectorStartupBase,
-    pub initialization: crate::ProjectorInitialization,
+    pub startup: super::StartupPosition,
+    pub initialization: crate::StartInstruction,
 }
 // SAFETY: a validated host promises concurrent control/stop/notify calls.
-// Source facades/loans are !Send + !Sync; all remaining shared state is locked.
+// Source facades/borrows are !Send + !Sync; all remaining shared state is locked.
 unsafe impl Send for ScopeData {}
 unsafe impl Sync for ScopeData {}
 
@@ -65,7 +65,7 @@ impl ScopeData {
         let completion = *self.completion.lock().unwrap_or_else(|e| e.into_inner());
         for status in [completion.run_failure, completion.frame_release_failure,
             completion.state_release_failure, completion.reply_release_failure] {
-            if let Some(super::ProjectorCallFailure::Operation(cause)) = super::decode_failure(status)? {
+            if let Some(super::ProjectorCallError::Operation(cause)) = super::decode_failure(status)? {
                 return Err(cause);
             }
         }
@@ -101,9 +101,9 @@ impl ScopeData {
             held.release = ReleaseDisposition::Attempted; held.cookie
         };
         let mut returned = cookie;
-        // SAFETY: this scope retains the exact source loan; only its worker
+        // SAFETY: this scope retains the exact source borrow; only its worker
         // may release it and the local in/out cookie is disjoint writable data.
-        let result = call(unsafe { self.table.release_frame.unwrap()(self.table.context, &mut returned) }, Op::ReleaseFrame);
+        let result = call(unsafe { self.table.release_frame.unwrap()(self.table.context, &mut returned) }, Op::ReleaseEntry);
         if returned == 0 { *self.frame.lock().unwrap_or_else(|e| e.into_inner()) = Held::default(); }
         if let Err(failure) = result { self.record(ScopeFailureSlot::FrameRelease, failure); }
         else if returned != 0 { self.record(ScopeFailureSlot::FrameRelease, A::InvalidHandle.into()); }
@@ -132,7 +132,7 @@ trait SpawnServices<'io>: Sync {
 }
 impl<'scope, 'env> SpawnServices<'scope> for std::thread::Scope<'scope, 'env> {
     fn spawn(&'scope self, task: Box<dyn FnOnce() + Send + 'scope>) -> std::io::Result<()> {
-        // Scope retains actual join custody even if the facade/handle is forgotten.
+        // Scope retains actual join ownership even if the facade/handle is forgotten.
         std::thread::Builder::new().name("projector-service".into()).spawn_scoped(self, task).map(drop)
     }
 }
@@ -145,7 +145,7 @@ pub struct ProjectorIoParts<'io> {
 pub struct ProjectorSource<'io> { pub(super) host: &'io ScopeData, _local: PhantomData<Rc<()>> }
 #[derive(Clone)]
 /// ```compile_fail,E0521
-/// use statevec_projector_api::plugin_v2::ProjectorIo;
+/// use statevec_projector_api::v1::ProjectorIo;
 /// fn escape(io: ProjectorIo<'_>) {
 ///     let control = io.split().control;
 ///     std::thread::spawn(move || { let _ = control.offer_status(); });
@@ -157,8 +157,8 @@ pub struct ProjectorStop<'io> { host: &'io ScopeData, _borrow: PhantomData<&'io 
 pub struct ProjectorServices<'io> { host: &'io ScopeData, services: &'io dyn SpawnServices<'io> }
 
 impl<'io> ProjectorIo<'io> {
-    pub fn startup_base(&self) -> super::ProjectorStartupBase { self.host.startup }
-    pub fn initialization(&self) -> crate::ProjectorInitialization { self.host.initialization }
+    pub fn startup_position(&self) -> super::StartupPosition { self.host.startup }
+    pub fn start_instruction(&self) -> crate::StartInstruction { self.host.initialization }
     pub fn split(self) -> ProjectorIoParts<'io> {
         ProjectorIoParts {
             source: ProjectorSource { host: self.host, _local: PhantomData },
@@ -193,7 +193,7 @@ impl<'io> ProjectorServices<'io> {
                     let mut completion = host.completion.lock().unwrap_or_else(|e| e.into_inner());
                     let first = completion.failed_service_joins == 0;
                     completion.failed_service_joins += 1;
-                    completion.service_join_failure = SvStatus::from(&super::ProjectorCallFailure::ServiceJoinPanicked);
+                    completion.service_join_failure = SvStatus::from(&super::ProjectorCallError::ServiceJoinPanicked);
                     let observation = SvProjectorFailureObservation { slot: FailureSlot::ServiceJoin.code(), reserved: 0, cause: completion.service_join_failure };
                     drop(completion);
                     if first { host.observation.publish(observation); }
@@ -210,7 +210,7 @@ impl<'io> ProjectorServices<'io> {
 
 /// Synchronous entry shared by the generated worker exporter and loaded delivery
 /// fixtures. It owns all host borrows outside author code and joins every scoped
-/// service before releasing forgotten loans/replies. It does not configure or
+/// service before releasing forgotten borrows/replies. It does not configure or
 /// start a product node. Native ownership alone selects and admits recovery.
 ///
 /// # Safety
@@ -230,8 +230,8 @@ pub(super) fn new(table: &SvProjectorHostV2, raw: &SvProjectorStart) -> Result<S
     validate_host(table)?;
     let (startup, initialization) = super::inputs::startup(raw)?;
     let required = PROJECTOR_BASE_CAPABILITIES | match initialization {
-        crate::ProjectorInitialization::Frames => CONTINUOUS_HISTORY_CAPABILITY,
-        crate::ProjectorInitialization::Rebuild { .. } => LATEST_STATE_CAPABILITY,
+        crate::StartInstruction::DeliverEntries => CONTINUOUS_HISTORY_CAPABILITY,
+        crate::StartInstruction::Rebuild { .. } => LATEST_STATE_CAPABILITY,
     };
     if table.h.required_caps != required || table.h.provided_caps & required != required {
         return Err(A::UnsupportedCapabilities { required });
@@ -248,7 +248,7 @@ pub(super) fn run(&self, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(
             Ok(Ok(())) => {}, Ok(Err(failure)) => host.record(ScopeFailureSlot::Run, failure),
             Err(payload) => { std::mem::forget(payload); host.record(ScopeFailureSlot::Run, F::PluginPanicked); }
         }
-        // Release a forgotten state loan before our internal stop can mask
+        // Release a forgotten state borrow before our internal stop can mask
         // abandonment. It cannot have a safe borrower after run returns.
         host.release_state();
         if let Err(failure) = host.stop() { host.record(ScopeFailureSlot::Run, failure); }
@@ -263,7 +263,7 @@ pub(super) fn run(&self, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(
         if [result.run_failure, result.frame_release_failure, result.state_release_failure,
             result.reply_release_failure, result.service_join_failure, result.notification_failure,
             result.worker_join_failure].iter().all(|cause| *cause == SvStatus::SUCCESS) {
-            host.record(ScopeFailureSlot::Run, F::RebuildSource(super::RebuildSourceFailure::RebuildAbandoned));
+            host.record(ScopeFailureSlot::Run, F::SnapshotRead(super::ProjectorSnapshotReadError::RebuildAbandoned));
         }
     }
     // Publish the readiness hint before waking its observer. Actual join still
@@ -284,7 +284,7 @@ pub(super) fn run(&self, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(
 
 #[must_use]
 pub enum Delivery<'a> {
-    Frame(FrameLoan<'a>), State(super::StateLoan<'a>),
+    RaftEntry(RaftEntryDelivery<'a>), Snapshot(super::SnapshotReader<'a>),
     /// Nonblocking receive found no item (try_next or a zero-duration wait).
     Empty,
     /// A positive bounded wait expired; neither Stop nor source disconnection.
@@ -293,15 +293,15 @@ pub enum Delivery<'a> {
 }
 #[must_use]
 /// ```compile_fail,E0505
-/// use statevec_projector_api::plugin_v2::FrameLoan;
-/// fn escape(loan: FrameLoan<'_>) {
-///     let view = loan.view();
-///     drop(loan);
-///     let _ = view.transaction_count();
+/// use statevec_projector_api::v1::RaftEntryDelivery;
+/// fn escape(borrow: RaftEntryDelivery<'_>) {
+///     let view = borrow.view();
+///     drop(borrow);
+///     let _ = view.tx_count();
 /// }
 /// ```
-pub struct FrameLoan<'a> { pub(super) host: &'a ScopeData, pub(super) cookie: u64, pub(super) info: SvFrameInfo, _local: PhantomData<Rc<Cell<()>>> }
-impl Drop for FrameLoan<'_> { fn drop(&mut self) { self.host.release_frame(); } }
+pub struct RaftEntryDelivery<'a> { pub(super) host: &'a ScopeData, pub(super) cookie: u64, pub(super) info: SvFrameInfo, _local: PhantomData<Rc<Cell<()>>> }
+impl Drop for RaftEntryDelivery<'_> { fn drop(&mut self) { self.host.release_frame(); } }
 
 impl ProjectorSource<'_> {
     pub fn try_next(&mut self) -> Result<Delivery<'_>, F> { self.next_timeout(std::time::Duration::ZERO) }
@@ -319,7 +319,7 @@ impl ProjectorSource<'_> {
     fn receive(&mut self, nanos: u64) -> Result<Delivery<'_>, F> {
         let (mut tag, mut cookie) = (0, 0);
         // SAFETY: the sole !Send source facade calls the live table; outputs are
-        // disjoint and all returned bytes stay borrowed under the resulting loan.
+        // disjoint and all returned bytes stay borrowed under the resulting borrow.
         let result = call(unsafe { self.host.table.receive.unwrap()(self.host.table.context, nanos, &mut tag, &mut cookie) }, Op::Receive);
         if (result.is_err() || !matches!(tag, receive_tag::FRAME | receive_tag::STATE)) && cookie != 0 {
             let (held, slot) = if tag == receive_tag::STATE { (&self.host.state, ScopeFailureSlot::StateRelease) } else { (&self.host.frame, ScopeFailureSlot::FrameRelease) };
@@ -333,17 +333,17 @@ impl ProjectorSource<'_> {
                 if cookie == 0 { return Err(A::InvalidHandle.into()); }
                 *self.host.frame.lock().unwrap_or_else(|e| e.into_inner()) = Held { cookie, release: ReleaseDisposition::Available };
                 let mut info = SvFrameInfo::default();
-                let result = call(unsafe { self.host.table.frame_info.unwrap()(self.host.table.context, cookie, &mut info) }, Op::FrameInfo)
+                let result = call(unsafe { self.host.table.frame_info.unwrap()(self.host.table.context, cookie, &mut info) }, Op::RaftEntryInfo)
                     .and_then(|()| super::views::validate_frame(&info).map_err(Into::into));
                 if let Err(cause) = result { self.host.release_frame(); return Err(cause); }
-                Ok(Delivery::Frame(FrameLoan { host: self.host, cookie, info, _local: PhantomData }))
+                Ok(Delivery::RaftEntry(RaftEntryDelivery { host: self.host, cookie, info, _local: PhantomData }))
             }
             receive_tag::EMPTY => Ok(Delivery::Empty), receive_tag::DISCONNECTED => Ok(Delivery::Disconnected), receive_tag::STOP => Ok(Delivery::Stop),
             receive_tag::STATE => {
                 if cookie == 0 { return Err(A::InvalidHandle.into()); }
                 *self.host.state.lock().unwrap_or_else(|e| e.into_inner()) = Held { cookie, release: ReleaseDisposition::Available };
-                match super::state::StateLoan::acquire(self.host, cookie) {
-                    Ok(loan) => Ok(Delivery::State(loan)),
+                match super::state::SnapshotReader::acquire(self.host, cookie) {
+                    Ok(loan) => Ok(Delivery::Snapshot(loan)),
                     Err(cause) => { self.host.record(ScopeFailureSlot::Run, cause); self.host.release_state(); Err(cause) }
                 }
             }

@@ -93,7 +93,7 @@ fn restored_consumer_replays_idempotently_and_applies_the_next_update(file: bool
 
 #[test]
 fn reopening_an_older_business_backup_refuses_the_newer_file_offset() {
-    use statevec_projector_api::plugin_v2::{ProjectorFailure, ProjectorIoStage};
+    use statevec_projector_api::v1::{ProjectorError, ProjectorIoStage};
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("history.sqlite");
     let backup = root.path().join("stopped-backup.sqlite");
@@ -121,7 +121,7 @@ fn reopening_an_older_business_backup_refuses_the_newer_file_offset() {
     assert!(matches!(error, store::Error::MissingEffects));
     assert!(matches!(
         error.failure(ProjectorIoStage::StoreOpen),
-        ProjectorFailure::Application { code: 1006 }
+        ProjectorError::Application { code: 1006 }
     ));
     assert_eq!(
         std::fs::read(path.with_extension("offset")).unwrap(), offset_bytes

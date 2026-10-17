@@ -113,23 +113,23 @@ fn corrupt_selection_refuses_without_replacing_its_bytes(damage: Damage) {
     let expected = match damage {
         Damage::Empty => {
             bytes.clear();
-            OffsetFileFailure::Header
+            OffsetFileError::Header
         }
         Damage::Header => {
             bytes[7] = b'9';
-            OffsetFileFailure::Header
+            OffsetFileError::Header
         }
         Damage::Length => {
             bytes.push(0);
-            OffsetFileFailure::Length
+            OffsetFileError::Length
         }
         Damage::Checksum => {
             bytes[12] ^= 1;
-            OffsetFileFailure::Checksum
+            OffsetFileError::Checksum
         }
         Damage::Oversized => {
             bytes.resize(MAX_FILE + 1, 0);
-            OffsetFileFailure::TooLarge
+            OffsetFileError::TooLarge
         }
     };
     fs::write(&path, &bytes).unwrap();
@@ -176,7 +176,7 @@ fn version_one_json_selection_is_refused_without_rewrite_or_fresh_fallback() {
     for _ in 0..2 {
         assert!(matches!(
             FileOffsetStore::open(&path, &offset(1).cluster_id, "trade-history"),
-            Err(OffsetStoreError::Format(OffsetFileFailure::Header))
+            Err(OffsetStoreError::Format(OffsetFileError::Header))
         ));
         assert_eq!(fs::read(&path).unwrap(), bytes);
     }

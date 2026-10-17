@@ -1,5 +1,5 @@
-use super::{ffi::*, ProjectorAbiFailure as A};
-use crate::{ProjectorCheckpointRejection as R, ProjectorCheckpointStatus as S, plugin_v2::ProjectorRecovery};
+use super::{ffi::*, ProjectorAbiError as A};
+use crate::{ProjectorControlRejection as R, ProjectorStatus as S, v1::StartRequest};
 use std::num::NonZeroUsize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,7 +19,7 @@ impl From<DeliveryLimits> for SvDeliveryLimits {
     fn from(value: DeliveryLimits) -> Self { Self { frame_capacity: value.frame_capacity.get() as u64, maximum_accounted_bytes: value.maximum_accounted_bytes.get() as u64 } }
 }
 impl SvRecovery {
-    pub fn decode(self) -> Result<ProjectorRecovery, A> {
+    pub fn decode(self) -> Result<StartRequest, A> {
         if self.reserved != 0 { return Err(A::Reserved { actual: self.reserved.into() }); }
         if self.tag != recovery_tag::HISTORY_FROM_OFFSET && self.offset != SvConsumeOffset::default() {
             let bytes = self.offset.cluster.iter().chain(&self.offset.projector_id.bytes)
@@ -27,17 +27,17 @@ impl SvRecovery {
             return Err(A::Reserved { actual: bytes | self.offset.projector_id.len | self.offset.raft_term | self.offset.raft_index });
         }
         match self.tag {
-            recovery_tag::HISTORY_FROM_GENESIS => Ok(ProjectorRecovery::ContinuousHistory { offset: None }),
-            recovery_tag::HISTORY_FROM_OFFSET => Ok(ProjectorRecovery::ContinuousHistory { offset: Some(self.offset.decode()?) }),
-            recovery_tag::LATEST_STATE => Ok(ProjectorRecovery::LatestStateOnly),
+            recovery_tag::HISTORY_FROM_GENESIS => Ok(StartRequest::Continuous { offset: None }),
+            recovery_tag::HISTORY_FROM_OFFSET => Ok(StartRequest::Continuous { offset: Some(self.offset.decode()?) }),
+            recovery_tag::LATEST_STATE => Ok(StartRequest::LatestState),
             actual => Err(A::Flag { actual }),
         }
     }
-    pub fn encode(value: &ProjectorRecovery) -> Result<Self, A> {
+    pub fn encode(value: &StartRequest) -> Result<Self, A> {
         match value {
-            ProjectorRecovery::ContinuousHistory { offset: None } => Ok(Self { tag: recovery_tag::HISTORY_FROM_GENESIS, ..Self::default() }),
-            ProjectorRecovery::ContinuousHistory { offset: Some(offset) } => Ok(Self { tag: recovery_tag::HISTORY_FROM_OFFSET, reserved: 0, offset: SvConsumeOffset::encode(offset).map_err(|_| A::InvalidHandle)? }),
-            ProjectorRecovery::LatestStateOnly => Ok(Self { tag: recovery_tag::LATEST_STATE, ..Self::default() }),
+            StartRequest::Continuous { offset: None } => Ok(Self { tag: recovery_tag::HISTORY_FROM_GENESIS, ..Self::default() }),
+            StartRequest::Continuous { offset: Some(offset) } => Ok(Self { tag: recovery_tag::HISTORY_FROM_OFFSET, reserved: 0, offset: SvConsumeOffset::encode(offset).map_err(|_| A::InvalidHandle)? }),
+            StartRequest::LatestState => Ok(Self { tag: recovery_tag::LATEST_STATE, ..Self::default() }),
         }
     }
 }
@@ -57,7 +57,7 @@ impl SvControlReply {
             reply_tag::REJECTED => ControlReply::Rejected(match cause {
                 rejection_reason::NOT_ATTACHED => R::NotAttached, rejection_reason::CHECKPOINTS_DISABLED => R::CheckpointsDisabled, rejection_reason::RESTORE_NOT_VERIFIED => R::RestoreNotVerified, rejection_reason::OWNER_NOT_RUNNING => R::OwnerNotRunning,
                 rejection_reason::IDENTITY_MISMATCH => R::IdentityMismatch, rejection_reason::BEYOND_APPLIED => R::BeyondApplied { applied: a, projector: b }, rejection_reason::OFFSET_REGRESSED => R::OffsetRegressed,
-                rejection_reason::OFFSET_CONFLICT => R::OffsetConflict, rejection_reason::WRONG_RECOVERY_MODE => R::WrongRecoveryMode, rejection_reason::PROJECTOR_IDENTITY_MISMATCH => R::ProjectorIdentityMismatch,
+                rejection_reason::OFFSET_CONFLICT => R::OffsetConflict, rejection_reason::WRONG_RECOVERY_MODE => R::WrongHistoryMode, rejection_reason::PROJECTOR_IDENTITY_MISMATCH => R::ProjectorIdentityMismatch,
                 rejection_reason::NOT_REBUILDING => R::NotRebuilding, rejection_reason::REBUILD_NOT_COMPLETE => R::RebuildNotComplete, rejection_reason::REBUILD_MISMATCH => R::RebuildMismatch,
                 actual => return Err(A::Flag { actual }),
             }),
@@ -83,7 +83,7 @@ impl From<ControlReply> for SvControlReply {
                 out.cause = match value {
                     R::NotAttached => rejection_reason::NOT_ATTACHED, R::CheckpointsDisabled => rejection_reason::CHECKPOINTS_DISABLED, R::RestoreNotVerified => rejection_reason::RESTORE_NOT_VERIFIED, R::OwnerNotRunning => rejection_reason::OWNER_NOT_RUNNING, R::IdentityMismatch => rejection_reason::IDENTITY_MISMATCH,
                     R::BeyondApplied { applied, projector } => { out.value0 = applied; out.value1 = projector; rejection_reason::BEYOND_APPLIED }
-                    R::OffsetRegressed => rejection_reason::OFFSET_REGRESSED, R::OffsetConflict => rejection_reason::OFFSET_CONFLICT, R::WrongRecoveryMode => rejection_reason::WRONG_RECOVERY_MODE, R::ProjectorIdentityMismatch => rejection_reason::PROJECTOR_IDENTITY_MISMATCH,
+                    R::OffsetRegressed => rejection_reason::OFFSET_REGRESSED, R::OffsetConflict => rejection_reason::OFFSET_CONFLICT, R::WrongHistoryMode => rejection_reason::WRONG_RECOVERY_MODE, R::ProjectorIdentityMismatch => rejection_reason::PROJECTOR_IDENTITY_MISMATCH,
                     R::NotRebuilding => rejection_reason::NOT_REBUILDING, R::RebuildNotComplete => rejection_reason::REBUILD_NOT_COMPLETE, R::RebuildMismatch => rejection_reason::REBUILD_MISMATCH,
                 };
             }

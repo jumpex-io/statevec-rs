@@ -1,7 +1,7 @@
 use super::{
-    ConfigureFailure, HostFailure, ResourceFailure, SvStatus, ProjectorAbiFailure as A,
-    ProjectorCallFailure as C, ProjectorFailure as F, ProjectorOperation as O,
-    ProjectorIoStage, ProjectorIoKind, RebuildSourceFailure, ProjectorStatusDecodeFailure as D,
+    ConfigureFailure, HostFailure, ResourceFailure, SvStatus, ProjectorAbiError as A,
+    ProjectorCallError as C, ProjectorError as F, ProjectorOperation as O,
+    ProjectorIoStage, ProjectorIoKind, ProjectorSnapshotReadError, ProjectorStatusDecodeError as D,
 };
 
 /// Decode representation before interpreting the return for this Projector call.
@@ -33,7 +33,7 @@ fn illegal(operation: O, s: SvStatus) -> D {
     D::IllegalReturn {
         operation, tag: s.tag, cause: s.cause,
         stage: if s.tag == 12 && s.cause == 2 { ProjectorIoStage::from_code(subcategory(s)) } else { None },
-        rebuild_reason: if s.tag == 12 && s.cause == 5 { RebuildSourceFailure::from_code(subcategory(s)) } else { None },
+        rebuild_reason: if s.tag == 12 && s.cause == 5 { ProjectorSnapshotReadError::from_code(subcategory(s)) } else { None },
     }
 }
 
@@ -108,7 +108,7 @@ fn fields(r: Raw) -> Result<Option<C>, A> {
             5 => {
                 r.zeros(1)?;
                 let raw = r.u32(0)?;
-                C::Operation(F::RebuildSource(RebuildSourceFailure::from_code(raw).ok_or(A::Flag { actual: raw })?))
+                C::Operation(F::SnapshotRead(ProjectorSnapshotReadError::from_code(raw).ok_or(A::Flag { actual: raw })?))
             }
             _ => return Err(r.unknown()),
         },
@@ -172,7 +172,7 @@ fn abi(r: Raw) -> Result<A, A> {
                 }
                 (12, 5) => {
                     let raw = r.u32(2)?;
-                    (None, Some(RebuildSourceFailure::from_code(raw).ok_or(A::Flag { actual: raw })?))
+                    (None, Some(ProjectorSnapshotReadError::from_code(raw).ok_or(A::Flag { actual: raw })?))
                 }
                 _ => { r.zeros(2)?; (None, None) }
             };
@@ -183,7 +183,7 @@ fn abi(r: Raw) -> Result<A, A> {
         105 => A::Status(D::UnknownCause { tag: r.u32(0)?, cause: r.u32(1)? }),
         108 => A::Status(D::DetailOutOfRange { slot: r.bounded(0, u8::MAX.into())? as u8, value: s.detail[1], maximum: s.detail[2] }),
         109 => A::Status(D::NonzeroUnusedDetail { slot: r.bounded(0, u8::MAX.into())? as u8, value: s.detail[1] }),
-        110 => A::Status(D::NoncanonicalNestedFailure { cause: r.u32(0)? }),
+        110 => A::Status(D::NoncanonicalNestedError { cause: r.u32(0)? }),
         _ => unreachable!("closed cause match"),
     })
 }
@@ -197,7 +197,7 @@ fn check_nested(outer: u32, nested: D) -> Result<(), A> {
                 (12, 5) => stage.is_none() && rebuild_reason.is_some(),
                 _ => stage.is_none() && rebuild_reason.is_none(),
             };
-            let subcategory = stage.map_or(0, ProjectorIoStage::code) | rebuild_reason.map_or(0, RebuildSourceFailure::code);
+            let subcategory = stage.map_or(0, ProjectorIoStage::code) | rebuild_reason.map_or(0, ProjectorSnapshotReadError::code);
             let raw = SvStatus { tag, cause, detail: [subcategory.into(), 0, 0] };
             // Core-only payloads are not interpreted. Every other cause is checked
             // through the direct decoder, not a duplicate known-cause range.
@@ -216,9 +216,9 @@ fn check_nested(outer: u32, nested: D) -> Result<(), A> {
             _ => false,
         },
         D::NonzeroUnusedDetail { slot, value } => slot < 3 && value != 0,
-        D::NoncanonicalNestedFailure { cause } => matches!(cause, 100..=105 | 108..=110),
+        D::NoncanonicalNestedError { cause } => matches!(cause, 100..=105 | 108..=110),
     };
-    if canonical { Ok(()) } else { Err(A::Status(D::NoncanonicalNestedFailure { cause: outer })) }
+    if canonical { Ok(()) } else { Err(A::Status(D::NoncanonicalNestedError { cause: outer })) }
 }
 
 fn resource(tag: u32, source: ResourceFailure) -> SvStatus {
@@ -228,8 +228,8 @@ fn resource(tag: u32, source: ResourceFailure) -> SvStatus {
     };
     SvStatus { tag, cause, detail: [value, 0, 0] }
 }
-impl From<&ProjectorCallFailure> for SvStatus {
-    fn from(source: &ProjectorCallFailure) -> Self {
+impl From<&ProjectorCallError> for SvStatus {
+    fn from(source: &ProjectorCallError) -> Self {
         match source {
             C::Configuration(cause) => cause.into(),
             C::Operation(cause) => cause.into(),
@@ -238,7 +238,7 @@ impl From<&ProjectorCallFailure> for SvStatus {
         }
     }
 }
-use super::ProjectorCallFailure;
+use super::ProjectorCallError;
 impl From<&F> for SvStatus {
     fn from(source: &F) -> Self {
         match *source {
@@ -249,7 +249,7 @@ impl From<&F> for SvStatus {
             F::PluginPanicked => Self { tag: 7, cause: 0, detail: [0; 3] },
             F::HostPanicked => Self { tag: 8, cause: 0, detail: [0; 3] },
             F::AbiContract(cause) => (&cause).into(),
-            F::RebuildSource(reason) => Self { tag: 12, cause: 5, detail: [reason.code().into(), 0, 0] },
+            F::SnapshotRead(reason) => Self { tag: 12, cause: 5, detail: [reason.code().into(), 0, 0] },
         }
     }
 }
@@ -283,13 +283,13 @@ impl From<&A> for SvStatus {
                 D::NonzeroSuccessCause { cause } => (101, [cause.into(), 0, 0]),
                 D::IllegalReturn { operation, tag, cause, stage, rebuild_reason } => (
                     102, [operation.code().into(), u64::from(tag) | (u64::from(cause) << 32),
-                    u64::from(stage.map_or(0, ProjectorIoStage::code)) | u64::from(rebuild_reason.map_or(0, RebuildSourceFailure::code))]),
+                    u64::from(stage.map_or(0, ProjectorIoStage::code)) | u64::from(rebuild_reason.map_or(0, ProjectorSnapshotReadError::code))]),
                 D::UnknownOperation { raw } => (103, [raw.into(), 0, 0]),
                 D::UnexpectedTag { expected, actual } => (104, [expected.into(), actual.into(), 0]),
                 D::UnknownCause { tag, cause } => (105, [tag.into(), cause.into(), 0]),
                 D::DetailOutOfRange { slot, value, maximum } => (108, [slot.into(), value, maximum]),
                 D::NonzeroUnusedDetail { slot, value } => (109, [slot.into(), value, 0]),
-                D::NoncanonicalNestedFailure { cause } => (110, [cause.into(), 0, 0]),
+                D::NoncanonicalNestedError { cause } => (110, [cause.into(), 0, 0]),
             },
         };
         // Public Rust diagnostic enums can be constructed inconsistently. Do

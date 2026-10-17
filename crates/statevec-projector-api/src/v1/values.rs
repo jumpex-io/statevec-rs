@@ -1,4 +1,4 @@
-use super::{ProjectorAbiFailure as A, ffi::{SvConsumeOffset, SvProjectorId}};
+use super::{ProjectorAbiError as A, ffi::{SvConsumeOffset, SvProjectorId}};
 use crate::{ConsumeOffset, ConsumeOffsetError, offset::validate_projector_id};
 
 impl SvProjectorId {

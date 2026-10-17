@@ -1,5 +1,5 @@
 //! Mechanical ABI borrower/cleanup tests only. These tables never attest a
-//! native cut; real committed-frame provenance is tested by the host assembly.
+//! native cut; real committed-entry provenance is tested by the host assembly.
 use super::*;
 use ffi::*;
 use std::{ffi::c_void, sync::atomic::{AtomicBool, AtomicU64, Ordering}};
@@ -7,7 +7,7 @@ use std::{ffi::c_void, sync::atomic::{AtomicBool, AtomicU64, Ordering}};
 mod state_tests;
 #[path = "ut_projector_semantics.rs"]
 mod semantics_tests;
-unsafe fn with_host(table: &SvProjectorHostV2, id: &str, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(), ProjectorFailure>) -> Result<SvProjectorCompletion, ProjectorAbiFailure> {
+unsafe fn with_host(table: &SvProjectorHostV2, id: &str, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(), ProjectorError>) -> Result<SvProjectorCompletion, ProjectorAbiError> {
     // Mechanical table input, never a native source/cut attestation.
     let start = SvProjectorStart { identity: SvProjectionIdentity { manifest: 1, ..Default::default() }, peer_id: 1,
         projector_id: SvProjectorId::encode(id).unwrap(), recovery_mode: 1, ..Default::default() };
@@ -16,7 +16,7 @@ unsafe fn with_host(table: &SvProjectorHostV2, id: &str, run: impl for<'io> FnOn
 pub(super) struct Fixture {
     stopped: AtomicBool, delivered: AtomicBool, offers: AtomicU64, releases: AtomicU64,
     frame_releases: AtomicU64, retain_frame: bool, fail_frame: bool, fail_reply: bool,
-    receives: AtomicU64, fail_stop: bool, info_failure: Option<ProjectorFailure>, bad_frame: bool,
+    receives: AtomicU64, fail_stop: bool, info_failure: Option<ProjectorError>, bad_frame: bool,
     changes: bool, inactive_image: bool, calls: std::sync::Mutex<Vec<(u8, u32)>>,
 }
 impl Fixture {
@@ -40,16 +40,16 @@ unsafe extern "C" fn receive(raw: *mut c_void, _: u64, tag: *mut u32, cookie: *m
 unsafe extern "C" fn stop(raw: *mut c_void) -> SvStatus {
     let f = unsafe { fixture(raw) };
     f.calls.lock().unwrap().push((0, 0));
-    if f.fail_stop { return (&ProjectorFailure::HostPanicked).into(); }
+    if f.fail_stop { return (&ProjectorError::HostPanicked).into(); }
     f.stopped.store(true, Ordering::SeqCst); SvStatus::SUCCESS
 }
 unsafe extern "C" fn stopping(raw: *const c_void, out: *mut u32) -> SvStatus { unsafe { out.write(u32::from(fixture(raw).stopped.load(Ordering::SeqCst))); } SvStatus::SUCCESS }
 unsafe extern "C" fn notify(raw: *mut c_void, kind: u32, observation: *const SvProjectorFailureObservation) -> SvStatus {
-    if observation.is_null() { return (&ProjectorAbiFailure::NullPointer).into(); }
+    if observation.is_null() { return (&ProjectorAbiError::NullPointer).into(); }
     let value = unsafe { *observation };
     unsafe { fixture(raw) }.calls.lock().unwrap().push((kind as u8, value.slot));
     if kind == 2 && (value.slot != 0 || value.reserved != 0 || value.cause != SvStatus::SUCCESS) {
-        return (&ProjectorAbiFailure::InvalidHandle).into();
+        return (&ProjectorAbiError::InvalidHandle).into();
     }
     SvStatus::SUCCESS
 }
@@ -68,7 +68,7 @@ unsafe extern "C" fn info(raw: *mut c_void, _: u64, out: *mut SvFrameInfo) -> Sv
 unsafe extern "C" fn release_frame(raw: *mut c_void, cookie: *mut u64) -> SvStatus {
     let f = unsafe { fixture(raw) }; f.frame_releases.fetch_add(1, Ordering::SeqCst);
     if !f.retain_frame { unsafe { cookie.write(0); } }
-    if f.fail_frame { (&ProjectorFailure::HostPanicked).into() } else { SvStatus::SUCCESS }
+    if f.fail_frame { (&ProjectorError::HostPanicked).into() } else { SvStatus::SUCCESS }
 }
 unsafe extern "C" fn offer(raw: *mut c_void, tag: *mut u32, cookie: *mut u64) -> SvStatus {
     let c = unsafe { fixture(raw) }.offers.fetch_add(1, Ordering::SeqCst) + 10;
@@ -77,15 +77,15 @@ unsafe extern "C" fn offer(raw: *mut c_void, tag: *mut u32, cookie: *mut u64) ->
 unsafe extern "C" fn checkpoint(raw: *mut c_void, _: *const SvDurableOffsetReport, tag: *mut u32, cookie: *mut u64) -> SvStatus { unsafe { offer(raw, tag, cookie) } }
 unsafe extern "C" fn rebuild(raw: *mut c_void, _: *const SvRebuildCut, tag: *mut u32, cookie: *mut u64) -> SvStatus { unsafe { offer(raw, tag, cookie) } }
 unsafe extern "C" fn poll(_: *mut c_void, _: u64, value: *mut SvControlReply) -> SvStatus {
-    unsafe { value.write(ControlReply::Status(crate::ProjectorCheckpointStatus::Active { durable_raft_index: 0, engine_checkpoint_blocked_at: None }).into()); } SvStatus::SUCCESS
+    unsafe { value.write(ControlReply::Status(crate::ProjectorStatus::Active { durable_raft_index: 0, engine_checkpoint_blocked_at: None }).into()); } SvStatus::SUCCESS
 }
 unsafe extern "C" fn release_reply(raw: *mut c_void, cookie: *mut u64) -> SvStatus {
     let f = unsafe { fixture(raw) }; f.releases.fetch_add(1, Ordering::SeqCst);
     let fail = f.fail_reply && unsafe { *cookie } == 10;
     unsafe { cookie.write(0); }
-    if fail { (&ProjectorFailure::HostPanicked).into() } else { SvStatus::SUCCESS }
+    if fail { (&ProjectorError::HostPanicked).into() } else { SvStatus::SUCCESS }
 }
-macro_rules! unused { ($name:ident($($ty:ty),*)) => { unsafe extern "C" fn $name($(_: $ty),*) -> SvStatus { (&ProjectorAbiFailure::InvalidHandle).into() } }; }
+macro_rules! unused { ($name:ident($($ty:ty),*)) => { unsafe extern "C" fn $name($(_: $ty),*) -> SvStatus { (&ProjectorAbiError::InvalidHandle).into() } }; }
 unsafe extern "C" fn transaction(_: *mut c_void, _: u64, _: u64, out: *mut SvTransactionInfo) -> SvStatus {
     let mut tx: SvTransactionInfo = unsafe { std::mem::zeroed() };
     tx.result_digest_profile = 1;
@@ -115,21 +115,21 @@ fn release_failure_does_not_erase_the_later_explicit_application_error(retain: b
     let f = Fixture { fail_frame: true, retain_frame: retain, ..Fixture::new() };
     let completion = unsafe { with_host(&f.table(), "history", |io| {
         let mut source = io.split().source;
-        let Delivery::Frame(_loan) = source.try_next()? else { panic!("one mechanical test loan") };
-        Err(ProjectorFailure::Application { code: 42 })
+        let Delivery::RaftEntry(_loan) = source.try_next()? else { panic!("one mechanical test loan") };
+        Err(ProjectorError::Application { code: 42 })
     }) }.unwrap();
-    assert_eq!(completion.run_failure, (&ProjectorFailure::Application { code: 42 }).into());
-    assert_eq!(completion.frame_release_failure, (&ProjectorFailure::HostPanicked).into());
+    assert_eq!(completion.run_failure, (&ProjectorError::Application { code: 42 }).into());
+    assert_eq!(completion.frame_release_failure, (&ProjectorError::HostPanicked).into());
     assert_eq!(completion.joined, u32::from(!retain));
     assert_eq!(f.frame_releases.load(Ordering::SeqCst), 1, "never retry a release with uncertain custody");
-    assert!(completion.decode(Some(ProjectorWorkerFailure::FrameRelease(ProjectorFailure::HostPanicked))).is_ok());
+    assert!(completion.decode(Some(ProjectorWorkerError::EntryRelease(ProjectorError::HostPanicked))).is_ok());
     assert!(f.stopped.load(Ordering::SeqCst));
 }
 
 #[test_case::test_case(false; "caught_host_panic")]
 #[test_case::test_case(true; "malformed_success_dto")]
 fn ignored_callback_failure_cannot_be_returned_as_success(bad_frame: bool) {
-    let cause = if bad_frame { ProjectorAbiFailure::Reserved { actual: 1 }.into() } else { ProjectorFailure::HostPanicked };
+    let cause = if bad_frame { ProjectorAbiError::Reserved { actual: 1 }.into() } else { ProjectorError::HostPanicked };
     let f = Fixture { info_failure: if bad_frame { None } else { Some(cause) }, bad_frame, ..Fixture::new() };
     let completion = unsafe { with_host(&f.table(), "history", |io| {
         let mut parts = io.split();
@@ -151,14 +151,14 @@ fn release_failure_revokes_new_acquisitions_even_if_stop_callback_refuses() {
     let f = Fixture { fail_frame: true, fail_stop: true, ..Fixture::new() };
     let completion = unsafe { with_host(&f.table(), "history", |io| {
         let mut parts = io.split();
-        let Delivery::Frame(loan) = parts.source.try_next()? else { panic!("first frame") };
+        let Delivery::RaftEntry(loan) = parts.source.try_next()? else { panic!("first frame") };
         drop(loan);
-        assert!(matches!(parts.source.try_next(), Err(ProjectorFailure::HostPanicked)));
-        assert!(matches!(parts.control.offer_status(), Err(ProjectorFailure::HostPanicked)));
-        Err(ProjectorFailure::Application { code: 42 })
+        assert!(matches!(parts.source.try_next(), Err(ProjectorError::HostPanicked)));
+        assert!(matches!(parts.control.offer_status(), Err(ProjectorError::HostPanicked)));
+        Err(ProjectorError::Application { code: 42 })
     }) }.unwrap();
-    assert_eq!(completion.run_failure, (&ProjectorFailure::Application { code: 42 }).into());
-    assert_eq!(completion.frame_release_failure, (&ProjectorFailure::HostPanicked).into());
+    assert_eq!(completion.run_failure, (&ProjectorError::Application { code: 42 }).into());
+    assert_eq!(completion.frame_release_failure, (&ProjectorError::HostPanicked).into());
     assert_eq!(f.receives.load(Ordering::SeqCst), 1);
     assert_eq!(f.offers.load(Ordering::SeqCst), 0);
     assert_eq!(completion.joined, 1);
@@ -179,12 +179,12 @@ fn handled_local_receive_misuse_does_not_accuse_the_host(forgotten: bool) {
     let completion = unsafe { with_host(&fixture.table(), "history", |io| {
         let mut parts = io.split();
         if forgotten {
-            let Delivery::Frame(loan) = parts.source.try_next()? else { panic!("mechanical loan") };
+            let Delivery::RaftEntry(loan) = parts.source.try_next()? else { panic!("mechanical loan") };
             std::mem::forget(loan);
-            assert!(matches!(parts.source.try_next(), Err(ProjectorFailure::AbiContract(ProjectorAbiFailure::BorrowConflict))));
+            assert!(matches!(parts.source.try_next(), Err(ProjectorError::AbiContract(ProjectorAbiError::BorrowConflict))));
         } else {
-            assert!(matches!(parts.source.next_timeout(std::time::Duration::MAX), Err(ProjectorFailure::AbiContract(ProjectorAbiFailure::Length { .. }))));
-            let Delivery::Frame(loan) = parts.source.try_next()? else { panic!("local refusal must not stop receive") };
+            assert!(matches!(parts.source.next_timeout(std::time::Duration::MAX), Err(ProjectorError::AbiContract(ProjectorAbiError::Length { .. }))));
+            let Delivery::RaftEntry(loan) = parts.source.try_next()? else { panic!("local refusal must not stop receive") };
             drop(loan);
         }
         let Offer::Queued(reply) = parts.control.offer_status()? else { panic!("local misuse must not revoke control") };
@@ -279,7 +279,7 @@ fn in_progress_physical_offers_reserve_the_four_reply_slots() {
 #[test]
 fn failure_revokes_receive_before_notifying_host() {
     let fixture = Fixture::new();
-    let cause = ProjectorFailure::Application { code: 17 };
+    let cause = ProjectorError::Application { code: 17 };
     let completion = unsafe { with_host(&fixture.table(), "history", |_| Err(cause)) }.unwrap();
     assert_eq!(completion.run_failure, (&cause).into());
     let calls = fixture.calls.lock().unwrap();
@@ -307,14 +307,14 @@ fn record_change_decodes_literal_abi_operation_values(index: usize) {
     let fixture = Fixture { changes: true, ..Fixture::new() };
     let completion = unsafe { with_host(&fixture.table(), "history", |io| {
         let mut source = io.split().source;
-        let Delivery::Frame(loan) = source.try_next()? else { panic!("mechanical frame") };
+        let Delivery::RaftEntry(loan) = source.try_next()? else { panic!("mechanical frame") };
         let view = loan.view();
-        let tx = view.transaction(0)?;
-        let change = tx.change(index)?;
+        let tx = view.tx(0)?;
+        let change = tx.record_delta(index)?;
         assert!(matches!((index, change),
-            (0, RecordChangeView::Insert { after: [42], .. }) |
-            (1, RecordChangeView::Update { before: [17], after: [42], .. }) |
-            (2, RecordChangeView::Delete { before: [17], .. })), "literal ABI operation {index}: {change:?}");
+            (0, RecordDeltaView::Insert { after: [42], .. }) |
+            (1, RecordDeltaView::Update { before: [17], after: [42], .. }) |
+            (2, RecordDeltaView::Delete { before: [17], .. })), "literal ABI operation {index}: {change:?}");
         Ok(())
     }) }.unwrap();
     assert_eq!(completion.run_failure, SvStatus::SUCCESS);
@@ -324,11 +324,11 @@ fn record_change_decodes_literal_abi_operation_values(index: usize) {
 #[test_case::test_case(2; "delete_after_must_be_empty")]
 fn record_change_rejects_nonempty_inactive_image(index: usize) {
     let fixture = Fixture { changes: true, inactive_image: true, ..Fixture::new() };
-    let expected = ProjectorFailure::AbiContract(ProjectorAbiFailure::ChangeShape);
+    let expected = ProjectorError::AbiContract(ProjectorAbiError::ChangeShape);
     let completion = unsafe { with_host(&fixture.table(), "history", |io| {
         let mut source = io.split().source;
-        let Delivery::Frame(loan) = source.try_next()? else { panic!("mechanical frame") };
-        assert!(matches!(loan.view().transaction(0)?.change(index), Err(cause) if cause == expected));
+        let Delivery::RaftEntry(loan) = source.try_next()? else { panic!("mechanical frame") };
+        assert!(matches!(loan.view().tx(0)?.record_delta(index), Err(cause) if cause == expected));
         Ok(())
     }) }.unwrap();
     assert_eq!(completion.run_failure, (&expected).into());
@@ -350,7 +350,7 @@ fn forgotten_replies_remain_bounded_and_all_four_releases_run_after_one_fails() 
     }) }.unwrap();
     assert_eq!(f.offers.load(Ordering::SeqCst), 4);
     assert_eq!(f.releases.load(Ordering::SeqCst), 4);
-    assert_eq!(completion.reply_release_failure, (&ProjectorFailure::HostPanicked).into());
+    assert_eq!(completion.reply_release_failure, (&ProjectorError::HostPanicked).into());
     assert_eq!(completion.run_failure, SvStatus::SUCCESS);
     assert_eq!(completion.joined, 1);
 }
@@ -389,12 +389,12 @@ fn noncanonical_control_replies_refuse(reply: SvControlReply) { assert!(reply.de
 
 #[test]
 fn recovery_and_readiness_values_round_trip_without_native_authority() {
-    for recovery in [crate::plugin_v2::ProjectorRecovery::ContinuousHistory { offset: None }, crate::plugin_v2::ProjectorRecovery::LatestStateOnly] {
+    for recovery in [crate::v1::StartRequest::Continuous { offset: None }, crate::v1::StartRequest::LatestState] {
         assert_eq!(SvRecovery::encode(&recovery).unwrap().decode().unwrap(), recovery);
     }
     let mut inactive = SvRecovery::default(); inactive.offset.raft_index = 1;
     assert!(inactive.decode().is_err());
-    for value in [crate::ProjectorCheckpointStatus::Recovering { projector_raft_index: 9 }, crate::ProjectorCheckpointStatus::Active { durable_raft_index: 9, engine_checkpoint_blocked_at: Some(10) }] {
+    for value in [crate::ProjectorStatus::Recovering { projector_raft_index: 9 }, crate::ProjectorStatus::Active { durable_raft_index: 9, engine_checkpoint_blocked_at: Some(10) }] {
         assert_eq!(SvControlReply::from(ControlReply::Status(value)).decode().unwrap(), ControlReply::Status(value));
     }
 }

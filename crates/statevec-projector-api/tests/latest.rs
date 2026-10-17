@@ -3,18 +3,18 @@
 mod plugin;
 use plugin::model::Model;
 use statevec_model::RecordKey;
-use statevec_projector_api::plugin_v2::*;
+use statevec_projector_api::v1::*;
 
 #[test]
 fn rebuild_then_deltas_preserve_record_kinds_and_before_images() {
     let mut model = Model::default();
     for kind in [1, 2, u16::MAX] { model.insert(kind, 1, 4, &[kind as u8]).unwrap(); }
     let key = RecordKey { kind: 2, sys_id: 1 };
-    let delta = model.change(RecordChangeView::Update { key, revision: 5, before: &[2], after: &[10] }).unwrap();
+    let delta = model.change(RecordDeltaView::Update { key, revision: 5, before: &[2], after: &[10] }).unwrap();
     assert_eq!(delta["before"], serde_json::json!([2]));
     assert_eq!(delta["after"], serde_json::json!([10]));
-    model.change(RecordChangeView::Delete { key, revision: 6, before: &[10] }).unwrap();
-    model.change(RecordChangeView::Insert { key: RecordKey { kind: 2, sys_id: 2 }, revision: 1, after: &[20] }).unwrap();
+    model.change(RecordDeltaView::Delete { key, revision: 6, before: &[10] }).unwrap();
+    model.change(RecordDeltaView::Insert { key: RecordKey { kind: 2, sys_id: 2 }, revision: 1, after: &[20] }).unwrap();
     assert!(!model.records.contains_key(&(2, 1)));
     assert_eq!(model.records[&(2, 2)], (1, vec![20]));
     assert_eq!(model.records[&(1, 1)], (4, vec![1]));
@@ -27,8 +27,8 @@ fn duplicate_and_inconsistent_delta_leave_the_model_unchanged() {
     model.insert(2, 1, 4, b"original").unwrap();
     assert!(model.insert(2, 1, 5, b"wrong").is_err());
     let key = RecordKey { kind: 2, sys_id: 1 };
-    assert!(model.change(RecordChangeView::Update { key, revision: 5, before: b"wrong", after: b"next" }).is_err());
-    assert!(model.change(RecordChangeView::Delete { key, revision: 4, before: b"original" }).is_err());
+    assert!(model.change(RecordDeltaView::Update { key, revision: 5, before: b"wrong", after: b"next" }).is_err());
+    assert!(model.change(RecordDeltaView::Delete { key, revision: 4, before: b"original" }).is_err());
     assert_eq!(model.records[&(2, 1)], (4, b"original".to_vec()));
 }
 #[test]

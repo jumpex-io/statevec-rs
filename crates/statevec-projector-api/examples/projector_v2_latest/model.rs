@@ -1,7 +1,7 @@
-use statevec_projector_api::plugin_v2::{ProjectorFailure, RecordChangeView};
+use statevec_projector_api::v1::{ProjectorError, RecordDeltaView};
 use std::collections::{BTreeMap, btree_map::Entry};
 
-pub fn failure(code: u32) -> ProjectorFailure { ProjectorFailure::Application { code } }
+pub fn failure(code: u32) -> ProjectorError { ProjectorError::Application { code } }
 
 /// Private application model, not host evidence or a persisted consume offset.
 #[derive(Default)]
@@ -9,17 +9,17 @@ pub struct Model {
     pub records: BTreeMap<(u16, u64), (u64, Vec<u8>)>,
 }
 impl Model {
-    pub fn insert(&mut self, kind: u16, id: u64, revision: u64, bytes: &[u8]) -> Result<(), ProjectorFailure> {
+    pub fn insert(&mut self, kind: u16, id: u64, revision: u64, bytes: &[u8]) -> Result<(), ProjectorError> {
         match self.records.entry((kind, id)) {
             Entry::Vacant(slot) => { slot.insert((revision, bytes.to_vec())); Ok(()) }
             Entry::Occupied(_) => Err(failure(1201)),
         }
     }
-    pub fn change(&mut self, change: RecordChangeView<'_>) -> Result<serde_json::Value, ProjectorFailure> {
+    pub fn change(&mut self, change: RecordDeltaView<'_>) -> Result<serde_json::Value, ProjectorError> {
         let (operation, key, revision, before, after) = match change {
-            RecordChangeView::Insert { key, revision, after } => ("insert", key, revision, None, Some(after)),
-            RecordChangeView::Update { key, revision, before, after } => ("update", key, revision, Some(before), Some(after)),
-            RecordChangeView::Delete { key, revision, before } => ("delete", key, revision, Some(before), None),
+            RecordDeltaView::Insert { key, revision, after } => ("insert", key, revision, None, Some(after)),
+            RecordDeltaView::Update { key, revision, before, after } => ("update", key, revision, Some(before), Some(after)),
+            RecordDeltaView::Delete { key, revision, before } => ("delete", key, revision, Some(before), None),
         };
         if let Some(before) = before {
             let previous = self.records.get(&(key.kind, key.sys_id)).ok_or_else(|| failure(1202))?;

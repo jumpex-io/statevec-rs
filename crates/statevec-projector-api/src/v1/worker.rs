@@ -1,7 +1,7 @@
 //! One physical SDK worker. Spawn refusal retains the caller's identical slot;
 //! accepted spawn is consumed only by real join, never by a readiness hint.
 use super::{caught, pointer, PreparedHolding};
-use crate::plugin_v2::{ffi::*, io::ScopeData, PreparedProjector, ProjectorAbiFailure as A, ProjectorFailure as F, ProjectorCallFailure, ProjectorIoStage, ProjectorIoKind};
+use crate::v1::{ffi::*, io::ScopeData, PreparedProjector, ProjectorAbiError as A, ProjectorError as F, ProjectorCallError, ProjectorIoStage, ProjectorIoKind};
 use std::{ffi::c_void, sync::Arc, thread::JoinHandle};
 
 struct Worker { scope: Arc<ScopeData>, join: Option<JoinHandle<SvProjectorCompletion>> }
@@ -88,12 +88,12 @@ pub(super) unsafe extern "C" fn join(raw: *mut *mut c_void, out: *mut SvProjecto
             Err(payload) => {
                 std::mem::forget(payload);
                 let mut completion = worker.scope.terminal();
-                completion.worker_join_failure = (&ProjectorCallFailure::WorkerJoinPanicked).into();
+                completion.worker_join_failure = (&ProjectorCallError::WorkerJoinPanicked).into();
                 completion
             }
         };
         if completion.joined == 0 {
-            // Preserve the exact outstanding-loan bookkeeping on uncertain
+            // Preserve the exact outstanding-borrow bookkeeping on uncertain
             // retirement. The host likewise retains its callback dependencies.
             std::mem::forget(worker.scope.clone());
         }

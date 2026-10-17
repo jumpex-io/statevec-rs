@@ -1,6 +1,6 @@
 //! Raw-table protocol tests, not native provenance/durability evidence.
 use super::*;
-use crate::plugin_v2::control::SourceCut;
+use crate::v1::control::RaftEntryToken;
 use std::{collections::VecDeque, sync::Mutex};
 use test_case::test_case;
 
@@ -15,10 +15,10 @@ fn latest_declaration_is_local_and_does_not_poison_the_scope() {
         projector_id: SvProjectorId::encode("latest").unwrap(), recovery_mode: 2,
         initialization: 1, rebuild_target: 1, ..Default::default()
     };
-    let completion = unsafe { crate::plugin_v2::host::with_host(&table, &startup, |io| {
+    let completion = unsafe { crate::v1::host::with_host(&table, &startup, |io| {
         let mut parts = io.split();
-        let Delivery::Frame(loan) = parts.source.try_next()? else { panic!("mechanical latest frame") };
-        let cut = loan.source_cut();
+        let Delivery::RaftEntry(loan) = parts.source.try_next()? else { panic!("mechanical latest frame") };
+        let cut = loan.token();
         assert!(cut.offset().is_none());
         assert!(matches!(cut.declare_durable(), Err(NotContinuousHistory)));
         assert_eq!(fixture.offers.load(Ordering::SeqCst), 0, "no host declaration call");
@@ -31,19 +31,19 @@ fn latest_declaration_is_local_and_does_not_poison_the_scope() {
     assert_eq!(completion.joined, 1);
 }
 
-#[test_case(ProjectorAbiFailure::BindingMismatch, 17; "binding")]
-#[test_case(ProjectorAbiFailure::RelativeBaseDir, 18; "path")]
-#[test_case(ProjectorAbiFailure::ZeroPeer, 19; "peer")]
-#[test_case(ProjectorAbiFailure::PartialCheckpointPolicy, 20; "policy")]
-#[test_case(ProjectorAbiFailure::ReplyKindMismatch, 21; "reply_kind")]
-#[test_case(ProjectorAbiFailure::ChangeShape, 22; "change_shape")]
-#[test_case(ProjectorAbiFailure::InvalidPosition, 23; "position")]
-#[test_case(ProjectorAbiFailure::ZeroTerm, 24; "term")]
-#[test_case(ProjectorAbiFailure::ZeroIndex, 25; "index")]
-fn new_causes_use_independent_literal_codes(cause: ProjectorAbiFailure, code: u32) {
+#[test_case(ProjectorAbiError::BindingMismatch, 17; "binding")]
+#[test_case(ProjectorAbiError::RelativeBaseDir, 18; "path")]
+#[test_case(ProjectorAbiError::ZeroPeer, 19; "peer")]
+#[test_case(ProjectorAbiError::PartialCheckpointPolicy, 20; "policy")]
+#[test_case(ProjectorAbiError::ReplyKindMismatch, 21; "reply_kind")]
+#[test_case(ProjectorAbiError::ChangeShape, 22; "change_shape")]
+#[test_case(ProjectorAbiError::InvalidPosition, 23; "position")]
+#[test_case(ProjectorAbiError::ZeroTerm, 24; "term")]
+#[test_case(ProjectorAbiError::ZeroIndex, 25; "index")]
+fn new_causes_use_independent_literal_codes(cause: ProjectorAbiError, code: u32) {
     let expected = SvStatus { tag: 9, cause: code, detail: [0; 3] };
     assert_eq!(SvStatus::from(&cause), expected);
-    assert_eq!(decode_call(expected, ProjectorOperation::Prepare).unwrap(), Some(ProjectorCallFailure::Operation(ProjectorFailure::AbiContract(cause))));
+    assert_eq!(decode_call(expected, ProjectorOperation::Prepare).unwrap(), Some(ProjectorCallError::Operation(ProjectorError::AbiContract(cause))));
     assert!(decode_call(SvStatus { detail: [1, 0, 0], ..expected }, ProjectorOperation::Prepare).is_err());
 }
 
@@ -68,10 +68,10 @@ fn local_mode_refusal_is_a_standard_error() {
 
 #[test]
 fn recovery_codec_preserves_literal_tags_and_inactive_fields() {
-    use crate::plugin_v2::ProjectorRecovery;
+    use crate::v1::StartRequest;
     let offset = crate::ConsumeOffset { cluster_id: "01".repeat(32), projector_id: "history".into(), raft_term: 2, raft_index: 3 };
-    for (value, tag) in [(ProjectorRecovery::ContinuousHistory { offset: None }, 0),
-        (ProjectorRecovery::ContinuousHistory { offset: Some(offset.clone()) }, 1), (ProjectorRecovery::LatestStateOnly, 2)] {
+    for (value, tag) in [(StartRequest::Continuous { offset: None }, 0),
+        (StartRequest::Continuous { offset: Some(offset.clone()) }, 1), (StartRequest::LatestState, 2)] {
         let encoded = SvRecovery::encode(&value).unwrap();
         assert_eq!(encoded.tag, tag);
         assert_eq!(encoded.decode().unwrap(), value);
@@ -86,13 +86,13 @@ fn recovery_codec_preserves_literal_tags_and_inactive_fields() {
 #[test]
 fn local_decoders_preserve_distinct_path_offset_and_reply_causes() {
     let relative = SvBytes::borrowed(b"relative/path");
-    assert_eq!(unsafe { crate::plugin_v2::inputs::base_dir(relative) }, Err(ProjectorAbiFailure::RelativeBaseDir));
+    assert_eq!(unsafe { crate::v1::inputs::base_dir(relative) }, Err(ProjectorAbiError::RelativeBaseDir));
     let mut offset = SvConsumeOffset { cluster: [0; 32], projector_id: SvProjectorId::encode("history").unwrap(), raft_term: 0, raft_index: 1 };
-    assert_eq!(offset.decode(), Err(ProjectorAbiFailure::ZeroTerm));
+    assert_eq!(offset.decode(), Err(ProjectorAbiError::ZeroTerm));
     offset.raft_term = 1;
     offset.raft_index = 0;
-    assert_eq!(offset.decode(), Err(ProjectorAbiFailure::ZeroIndex));
-    assert_eq!(<ControlDecision as crate::plugin_v2::control::ReplyValue>::decode(ControlReply::Status(crate::ProjectorCheckpointStatus::Disabled)), Err(ProjectorAbiFailure::ReplyKindMismatch));
+    assert_eq!(offset.decode(), Err(ProjectorAbiError::ZeroIndex));
+    assert_eq!(<ControlDecision as crate::v1::control::ReplyValue>::decode(ControlReply::Status(crate::ProjectorStatus::Disabled)), Err(ProjectorAbiError::ReplyKindMismatch));
 }
 
 #[derive(Clone, Copy)]
@@ -132,7 +132,7 @@ unsafe fn offer_bytes(raw: *mut c_void, bytes: [u8; 264], tag: *mut u32, cookie:
         Some(OfferAction::Full) => (1, 0), Some(OfferAction::Capacity) => (3, 0),
         Some(OfferAction::Queued) => (0, f.base.offers.fetch_add(1, Ordering::SeqCst) + 10),
         Some(OfferAction::Closed) => (2, 0),
-        Some(OfferAction::Fail) | None => return (&ProjectorFailure::HostPanicked).into(),
+        Some(OfferAction::Fail) | None => return (&ProjectorError::HostPanicked).into(),
     };
     unsafe { tag.write(t); cookie.write(c); } SvStatus::SUCCESS
 }
@@ -145,7 +145,7 @@ unsafe extern "C" fn offer_rebuild(raw: *mut c_void, value: *const SvRebuildCut,
 unsafe extern "C" fn poll_report(raw: *mut c_void, _: u64, value: *mut SvControlReply) -> SvStatus {
     let f = unsafe { script(raw) };
     f.order.lock().unwrap().push("poll");
-    let Some(reply) = f.replies.lock().unwrap().pop_front() else { return (&ProjectorFailure::HostPanicked).into(); };
+    let Some(reply) = f.replies.lock().unwrap().pop_front() else { return (&ProjectorError::HostPanicked).into(); };
     unsafe { value.write(reply.into()); } SvStatus::SUCCESS
 }
 unsafe extern "C" fn release_report(raw: *mut c_void, cookie: *mut u64) -> SvStatus {
@@ -153,8 +153,8 @@ unsafe extern "C" fn release_report(raw: *mut c_void, cookie: *mut u64) -> SvSta
     unsafe { release_reply(raw, cookie) }
 }
 fn declaration() -> DurableOffsetReport {
-    SourceCut { raw: SvCut { bytes: [93; 264] }, position: SvPosition::default(),
-        projector_id: crate::ProjectorId::new("history").unwrap(), mode: crate::ProjectorRecoveryMode::ContinuousHistory }
+    RaftEntryToken { raw: SvCut { bytes: [93; 264] }, position: SvPosition::default(),
+        projector_id: crate::ProjectorId::new("history").unwrap(), mode: crate::HistoryMode::Continuous }
         .declare_durable().unwrap()
 }
 
@@ -187,15 +187,15 @@ fn bounded_retry_retains_exact_report_and_releases_before_reoffer() {
 #[test_case(OfferAction::Fail; "call_failure")]
 #[test_case(OfferAction::Queued; "owner_rejection")]
 fn terminal_result_retains_report_without_retry(action: OfferAction) {
-    let f = ReportFixture::new(&[action], &[ControlReply::Rejected(crate::ProjectorCheckpointRejection::OwnerNotRunning)]);
+    let f = ReportFixture::new(&[action], &[ControlReply::Rejected(crate::ProjectorControlRejection::OwnerNotRunning)]);
     let _completion = unsafe { with_host(&f.table(), "history", |io| {
         let control = io.split().control;
         let mut pending = PendingDurableOffset::new(declaration());
         let mut result = pending.progress(&control);
         if result == Ok(ControlProgress::Pending) { result = pending.progress(&control); }
         let expected = match action {
-            OfferAction::Closed => Ok(ControlProgress::Closed), OfferAction::Fail => Err(ProjectorFailure::HostPanicked),
-            _ => Ok(ControlProgress::Rejected(crate::ProjectorCheckpointRejection::OwnerNotRunning)),
+            OfferAction::Closed => Ok(ControlProgress::Closed), OfferAction::Fail => Err(ProjectorError::HostPanicked),
+            _ => Ok(ControlProgress::Rejected(crate::ProjectorControlRejection::OwnerNotRunning)),
         };
         assert_eq!(result, expected);
         assert_eq!(pending.progress(&control), expected);
@@ -210,13 +210,13 @@ fn rebuild_helper_retries_its_distinct_eof_cut() {
     let f = ReportFixture::new(&[OfferAction::Queued, OfferAction::Queued], &[ControlReply::Disconnected, ControlReply::Accepted]);
     let completion = unsafe { with_host(&f.table(), "history", |io| {
         let control = io.split().control;
-        let cut = RebuildCut { raw: SvRebuildCut { bytes: [41; 264] } };
-        let mut pending = PendingRebuildConfirmation::new(cut);
+        let cut = SnapshotToken { raw: SvRebuildCut { bytes: [41; 264] } };
+        let mut pending = PendingSnapshotConfirmation::new(cut);
         assert_eq!(pending.progress(&control)?, ControlProgress::Pending);
         assert_eq!(pending.progress(&control)?, ControlProgress::Pending);
-        assert_eq!(pending.cut().unwrap().raw, cut.raw);
+        assert_eq!(pending.token().unwrap().raw, cut.raw);
         assert_eq!(pending.progress(&control)?, ControlProgress::Accepted);
-        assert!(pending.cut().is_none());
+        assert!(pending.token().is_none());
         assert_eq!(*f.offered.lock().unwrap(), vec![cut.raw.bytes; 2]);
         Ok(())
     }) }.unwrap();

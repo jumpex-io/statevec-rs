@@ -1,9 +1,9 @@
 //! Native runtime ports, separate from the configured-plugin contracts.
-//! Implementations retain source provenance and admission authority.
+//! Implementations retain source identity and admission authority.
 use crate::{
-    ConsumeOffset, ProjectionContext, ProjectionPosition, ProjectorCheckpointRejection,
-    ProjectorCheckpointStatus, TransactionProjection,
-    TransactionResult,
+    ConsumeOffset, ProjectionContext, SourcePosition, ProjectorControlRejection,
+    ProjectorStatus, TxDelta,
+    TxResult,
 };
 use std::{sync::mpsc, time::Duration};
 
@@ -16,13 +16,13 @@ pub enum AttachmentRecovery {
     LatestState,
 }
 
-/// Immutable evidence supplied by a committed source. Implementations determine
-/// provenance; the production implementation cannot be constructed from metadata.
-/// Copying a cut does not duplicate frame custody or acknowledge a checkpoint.
-pub trait CheckpointCut: Copy {
-    type Publication: CheckpointPublication<Cut = Self>;
+/// Immutable token supplied by an applied source. The production implementation
+/// cannot be constructed from metadata. Copying a token does not duplicate entry
+/// ownership or acknowledge durability.
+pub trait NativeEntryToken: Copy {
+    type Report: NativeDurableOffsetReport<Token = Self>;
 
-    fn position(&self) -> ProjectionPosition;
+    fn position(&self) -> SourcePosition;
 
     /// A continuous source supplies its bound namespace. Native ReplayOnly has
     /// no durable consumer offset and returns None.
@@ -30,61 +30,63 @@ pub trait CheckpointCut: Copy {
 
     /// Call only after business effects and the complete offset are durable.
     /// This is the application's assertion, not host file I/O or an automatic ACK.
-    fn checkpointed(self) -> Self::Publication;
+    /// Unlike the plugin token, this native declaration does not check the mode;
+    /// the owner decides whether the report is admissible.
+    fn declare_durable(self) -> Self::Report;
 }
 
-/// Store publication bound to its source's concrete cut token.
-pub trait CheckpointPublication: Copy {
-    type Cut: CheckpointCut<Publication = Self>;
+/// Durability declaration bound to its source's concrete entry token.
+pub trait NativeDurableOffsetReport: Copy {
+    type Token: NativeEntryToken<Report = Self>;
 
-    fn cut(&self) -> Self::Cut;
+    fn token(&self) -> Self::Token;
     fn offset(&self) -> Option<ConsumeOffset>;
 }
 
-/// Read-only member output. Raw engine output alone is not a committed frame.
-pub trait CommittedTransaction {
-    fn result(&self) -> TransactionResult<'_>;
-    fn output(&self) -> &TransactionProjection;
+/// Read-only Tx output. Raw engine output alone is not an applied Raft entry.
+pub trait AppliedTx {
+    fn result(&self) -> TxResult<'_>;
+    fn output(&self) -> &TxDelta;
 }
 
 /// One complete committed entry, including empty membership/no-op barriers.
-/// The production frame is move-only. Consumers cannot skip part of a frame
-/// or reconstruct its cut token from the readable position.
-pub trait CommittedFrame {
-    type Cut: CheckpointCut;
-    type Transaction: CommittedTransaction;
+/// The production entry is move-only. Consumers cannot skip part of an entry
+/// or reconstruct its token from the readable position.
+pub trait AppliedRaftEntry {
+    type Token: NativeEntryToken;
+    type Tx: AppliedTx;
 
-    fn checkpoint_cut(&self) -> Self::Cut;
+    fn token(&self) -> Self::Token;
     fn peer_id(&self) -> u64;
     fn context(&self) -> ProjectionContext;
-    fn transactions(&self) -> &[Self::Transaction];
+    fn txs(&self) -> &[Self::Tx];
 }
 
 /// Bounded delivery. Dequeue/disconnection notify the runtime; they do not
 /// acknowledge durable consumption. Empty and disconnected remain distinct.
 pub trait ProjectionReceiver {
-    type Frame: CommittedFrame;
+    type Entry: AppliedRaftEntry;
 
-    fn try_recv(&self) -> Result<Box<Self::Frame>, mpsc::TryRecvError>;
-    fn recv_timeout(&self, timeout: Duration) -> Result<Box<Self::Frame>, mpsc::RecvTimeoutError>;
+    fn try_recv(&self) -> Result<Box<Self::Entry>, mpsc::TryRecvError>;
+    fn recv_timeout(&self, timeout: Duration) -> Result<Box<Self::Entry>, mpsc::RecvTimeoutError>;
 }
 
-/// Nonblocking checkpoint offers to the existing runtime. The associated
-/// failure preserves the host's exact typed cause and unqueued request custody;
+/// Nonblocking control requests to the existing runtime. The associated
+/// error preserves the host's exact typed cause and unqueued request ownership;
 /// these methods neither retry nor choose a shutdown policy.
 pub trait ProjectorControl {
-    type Cut: CheckpointCut;
-    type RequestFailure<T>;
+    type Token: NativeEntryToken;
+    type RequestError<T>;
 
-    fn enqueue_projector_checkpoint(
+    fn enqueue_durable_offset(
         &self,
-        publication: <Self::Cut as CheckpointCut>::Publication,
+        publication: <Self::Token as NativeEntryToken>::Report,
     ) -> Result<
-        mpsc::Receiver<Result<(), ProjectorCheckpointRejection>>,
-        Self::RequestFailure<<Self::Cut as CheckpointCut>::Publication>,
+        mpsc::Receiver<Result<(), ProjectorControlRejection>>,
+        Self::RequestError<<Self::Token as NativeEntryToken>::Report>,
     >;
 
-    fn enqueue_projector_checkpoint_status(
+    fn enqueue_status(
         &self,
-    ) -> Result<mpsc::Receiver<ProjectorCheckpointStatus>, Self::RequestFailure<()>>;
+    ) -> Result<mpsc::Receiver<ProjectorStatus>, Self::RequestError<()>>;
 }

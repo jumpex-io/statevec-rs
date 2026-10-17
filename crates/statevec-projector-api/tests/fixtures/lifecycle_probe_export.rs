@@ -34,7 +34,7 @@ fn generated() -> SvProjectorV2 {
 fn caught(f: impl FnOnce() -> SvStatus) -> SvStatus {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(value) => value,
-        Err(payload) => { std::mem::forget(payload); (&ProjectorFailure::PluginPanicked).into() }
+        Err(payload) => { std::mem::forget(payload); (&ProjectorError::PluginPanicked).into() }
     }
 }
 unsafe extern "C" fn configure(config: SvBytes, base: SvBytes, out: *mut *mut c_void) -> SvStatus {
@@ -81,7 +81,7 @@ unsafe extern "C" fn start(raw: *mut *mut c_void, host: *const SvProjectorHostV2
             unsafe { *raw = ptr::null_mut(); }
         } else if !unchanged {
             // Preserve a changed handle identity instead of normalizing it to
-            // an apparently unchanged prepared holding. Old custody is unknown.
+            // an apparently unchanged prepared holding. Old ownership is unknown.
             unsafe { *raw = Box::into_raw(Box::new(Holding { inner: c.inner, harness: c.harness.clone() })).cast(); }
         }
         if !worker.inner.is_null() {
@@ -101,7 +101,7 @@ unsafe extern "C" fn poll(raw: *const c_void, ready: *mut u32, observation: *mut
     if matches!(unsafe { (*observation).slot }, 2 | 3 | 4) { h.release_observed.store(true, Ordering::Release); }
     // One test-only status on a budget breach fails the real Node gate, rather
     // than merely logging a measurement that would not influence its oracle.
-    if allocations != 0 { (&ProjectorFailure::HostPanicked).into() } else { result }
+    if allocations != 0 { (&ProjectorError::HostPanicked).into() } else { result }
 }
 unsafe extern "C" fn stop(raw: *mut c_void) -> SvStatus {
     unsafe { generated().request_stop.unwrap()((*raw.cast::<Worker>()).inner) }
