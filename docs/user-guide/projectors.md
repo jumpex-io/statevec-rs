@@ -75,8 +75,8 @@ let offset = ConsumeOffset {
     raft_term: 7,
     raft_index: 42,
 };
-let bytes = offset.encode_json()?;
-assert_eq!(ConsumeOffset::decode_json(&bytes)?, offset);
+let bytes = offset.encode_properties()?;
+assert_eq!(ConsumeOffset::decode_properties(&bytes)?, offset);
 # Ok::<(), statevec_projector_api::ConsumeOffsetError>(())
 ```
 
@@ -84,7 +84,28 @@ assert_eq!(ConsumeOffset::decode_json(&bytes)?, offset);
 case-sensitive logical consumer name (1–128 UTF-8 bytes, no C0/DEL/C1 control
 characters). It is not a peer ID or an implicit file path. Both coordinates are
 nonzero `u64` values for the last completely consumed Raft entry, including an
-empty barrier. Do not round them through a floating-point JSON consumer.
+empty barrier. Custom stores must preserve the entire integer range.
+
+The SDK codec uses bounded UTF-8 properties, not JSON:
+
+```text
+cluster_id=abababababababababababababababababababababababababababababababab
+projector_id=trading-history
+raft_term=7
+raft_index=42
+```
+
+Each line, including the last, ends with LF. The writer emits this field order;
+the reader accepts any order but requires each field exactly once. It splits at
+the first equals sign and preserves values literally: spaces, equals signs,
+quotes, backslashes and Unicode in a valid projector ID are not trimmed or
+unescaped. There are no comments, blank lines, continuation lines, CRLF or BOM.
+Coordinates use decimal ASCII digits without signs or leading zeroes.
+Missing/unknown/duplicate fields, invalid identities, overflow and inputs over
+1024 bytes are typed errors that do not echo input values. This is a fixed
+four-field format, not the Java Properties grammar. The old JSON codec methods
+and JSON-specific error type are removed; application configuration/output JSON
+remains application-owned.
 
 Save your effects and offset together in a database transaction when possible.
 If you use separate stores, save effects first and make replay idempotent.
@@ -124,8 +145,10 @@ ReplayOnly recovery move to `native`; configured recovery has only
 ContinuousHistory and LatestStateOnly. Host integration uses `plugin_v2::host`.
 Rebuild the SDK, native host and plugins together. Discovery rejects old major
 tables before configure/start; there is no mixed-version fallback. All nine SDK
-crates use 0.4.0. Core V3, four-field offset JSON and persisted business/native
-formats remain unchanged.
+crates use 0.4.0. Core V3 and persisted business/native formats remain unchanged.
+The subsequent offset-storage simplification replaces the JSON codec and the
+SDK file envelope as described below; it does not change the four offset fields
+or the C ABI. Rebuild source users against the same Git revision.
 
 `EngineCheckpointPolicy::min_capture_residence_ms` is the engine's delay after
 adopting a selected checkpoint before successor capture, not an application
@@ -214,13 +237,22 @@ The helper refuses competing writers, symlinks/non-regular selected files,
 corruption and namespace mismatch; only positive absence returns `None`.
 
 `load()` reads the actual selected bytes. `persist_offset(&offset)` writes the
-bounded version-1 envelope, syncs the file, atomically replaces it and syncs the
+bounded version-2 envelope, syncs the file, atomically replaces it and syncs the
 directory before success. Exact duplicate saves are idempotent; a backwards
 index or conflicting term at the same index refuses. A failed save requires
 closing/reopening and inspecting the actual selection; it may contain the old
 or new offset. Successful reopen re-establishes file/directory durability, not
 business effects or atomicity across stores. No file/host operation runs implicitly
 from Drop.
+
+The envelope is ASCII `SVPOFF02`, a little-endian u32 payload length, at most
+1024 bytes from `encode_properties()`, and SHA-256 of the header plus payload.
+There are no trailing bytes. Old `SVPOFF01` JSON files are explicitly rejected
+with `OffsetStoreError::Format(OffsetFileFailure::Header)` and left unchanged;
+there is no automatic conversion or fresh fallback. Preserve old stores and
+use the matching old SDK until an explicit application migration is arranged;
+deleting the offset is not a safe migration. Database users persisting the four
+fields directly do not change their stored representation.
 
 An abrupt process exit before replacement can leave `.sv-offset-<pid>-<n>`
 temporaries. They are never selected or adopted on reopen. The helper removes

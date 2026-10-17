@@ -1,8 +1,6 @@
 //! Portable consumer metadata. Decoding this value never constructs a live cut.
-use serde::{Deserialize, Serialize};
-
 pub const MAX_PROJECTOR_ID_BYTES: usize = 128;
-pub const MAX_OFFSET_JSON_BYTES: usize = 1024;
+pub const MAX_OFFSET_PROPERTIES_BYTES: usize = 1024;
 
 /// An application's durable whole-entry prefix, not a host acknowledgement.
 /// Save alongside business effects before offering the corresponding live cut.
@@ -43,14 +41,19 @@ impl std::fmt::Debug for ProjectorId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum OffsetJsonCategory { Io, Syntax, Data, Eof }
+/// A known offset field, used in diagnostics without retaining input values.
+pub enum OffsetField { ClusterId, ProjectorId, RaftTerm, RaftIndex }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ConsumeOffsetError {
     TooLarge { actual: usize, maximum: usize },
-    Json { category: OffsetJsonCategory, line: usize, column: usize },
+    Utf8 { valid_up_to: usize },
+    PropertySyntax { line: usize },
+    UnknownProperty { line: usize },
+    DuplicateProperty { field: OffsetField },
+    MissingProperty { field: OffsetField },
+    InvalidInteger { field: OffsetField },
     ClusterIdentity,
     ProjectorIdLength { actual: usize },
     EmbeddedNul,
@@ -65,28 +68,6 @@ impl std::fmt::Display for ConsumeOffsetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "consume offset: {self:?}") }
 }
 impl std::error::Error for ConsumeOffsetError {}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OffsetFields {
-    cluster_id: String,
-    projector_id: String,
-    raft_term: u64,
-    raft_index: u64,
-}
-
-/// Limit the public JSON envelope to a map. Derived struct deserializers also
-/// accept positional arrays; reuse their field checks only after map admission.
-struct OffsetObject;
-impl<'de> serde::de::Visitor<'de> for OffsetObject {
-    type Value = OffsetFields;
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a four-field consume offset object")
-    }
-    fn visit_map<M: serde::de::MapAccess<'de>>(self, map: M) -> Result<Self::Value, M::Error> {
-        OffsetFields::deserialize(serde::de::value::MapAccessDeserializer::new(map))
-    }
-}
 
 pub(crate) fn validate_projector_id(value: &str) -> Result<(), ConsumeOffsetError> {
     if value.is_empty() || value.len() > MAX_PROJECTOR_ID_BYTES {
@@ -121,41 +102,75 @@ impl ConsumeOffset {
         Ok(())
     }
 
-    pub fn encode_json(&self) -> Result<Vec<u8>, ConsumeOffsetError> {
+    /// Encode exactly four LF-terminated UTF-8 `key=value` lines in field order.
+    /// Values are literal: no trimming, escapes, comments or continuation lines.
+    pub fn encode_properties(&self) -> Result<Vec<u8>, ConsumeOffsetError> {
         self.validate()?;
-        let fields = OffsetFields {
-            cluster_id: self.cluster_id.clone(), projector_id: self.projector_id.clone(),
-            raft_term: self.raft_term, raft_index: self.raft_index,
-        };
-        let bytes = serde_json::to_vec(&fields).map_err(json_failure)?;
+        let bytes = format!(
+            "cluster_id={}\nprojector_id={}\nraft_term={}\nraft_index={}\n",
+            self.cluster_id, self.projector_id, self.raft_term, self.raft_index,
+        ).into_bytes();
         check_length(bytes.len())?;
         Ok(bytes)
     }
 
-    /// Checks the complete input bound before JSON allocation. Duplicate/unknown
-    /// fields, non-integer coordinates and trailing data are refused.
-    pub fn decode_json(bytes: &[u8]) -> Result<Self, ConsumeOffsetError> {
+    /// Decode four unique fields in any order, bounded before allocation.
+    /// Every line ends with LF and splits at its first `=`; names and values
+    /// are not trimmed or unescaped. Blank/comment lines, missing/unknown keys,
+    /// CRLF, BOM, signs and leading-zero integers are not part of this format.
+    /// This is a small fixed schema, not the Java Properties grammar.
+    pub fn decode_properties(bytes: &[u8]) -> Result<Self, ConsumeOffsetError> {
         check_length(bytes.len())?;
-        let mut decoder = serde_json::Deserializer::from_slice(bytes);
-        let fields = serde::Deserializer::deserialize_map(&mut decoder, OffsetObject).map_err(json_failure)?;
-        decoder.end().map_err(json_failure)?;
-        let offset = Self { cluster_id: fields.cluster_id, projector_id: fields.projector_id, raft_term: fields.raft_term, raft_index: fields.raft_index };
+        let text = std::str::from_utf8(bytes)
+            .map_err(|error| ConsumeOffsetError::Utf8 { valid_up_to: error.valid_up_to() })?;
+        let body = text.strip_suffix('\n').ok_or(ConsumeOffsetError::PropertySyntax {
+            line: bytes.iter().filter(|&&b| b == b'\n').count() + 1,
+        })?;
+        let (mut cluster_id, mut projector_id, mut raft_term, mut raft_index) = (None, None, None, None);
+        for (index, line) in body.split('\n').enumerate() {
+            let line_number = index + 1;
+            let (key, value) = line.split_once('=')
+                .ok_or(ConsumeOffsetError::PropertySyntax { line: line_number })?;
+            let (field, slot) = match key {
+                "cluster_id" => (OffsetField::ClusterId, &mut cluster_id),
+                "projector_id" => (OffsetField::ProjectorId, &mut projector_id),
+                "raft_term" => (OffsetField::RaftTerm, &mut raft_term),
+                "raft_index" => (OffsetField::RaftIndex, &mut raft_index),
+                _ => return Err(ConsumeOffsetError::UnknownProperty { line: line_number }),
+            };
+            if slot.replace(value).is_some() {
+                return Err(ConsumeOffsetError::DuplicateProperty { field });
+            }
+        }
+        let offset = Self {
+            cluster_id: required(cluster_id, OffsetField::ClusterId)?.into(),
+            projector_id: required(projector_id, OffsetField::ProjectorId)?.into(),
+            raft_term: integer(required(raft_term, OffsetField::RaftTerm)?, OffsetField::RaftTerm)?,
+            raft_index: integer(required(raft_index, OffsetField::RaftIndex)?, OffsetField::RaftIndex)?,
+        };
         offset.validate()?;
         Ok(offset)
     }
 }
 
 fn check_length(actual: usize) -> Result<(), ConsumeOffsetError> {
-    if actual > MAX_OFFSET_JSON_BYTES {
-        Err(ConsumeOffsetError::TooLarge { actual, maximum: MAX_OFFSET_JSON_BYTES })
+    if actual > MAX_OFFSET_PROPERTIES_BYTES {
+        Err(ConsumeOffsetError::TooLarge { actual, maximum: MAX_OFFSET_PROPERTIES_BYTES })
     } else { Ok(()) }
 }
 
-fn json_failure(error: serde_json::Error) -> ConsumeOffsetError {
-    use serde_json::error::Category;
-    let category = match error.classify() { Category::Io => OffsetJsonCategory::Io, Category::Syntax => OffsetJsonCategory::Syntax, Category::Data => OffsetJsonCategory::Data, Category::Eof => OffsetJsonCategory::Eof };
-    // Never retain rendered JSON errors: they can contain application values.
-    ConsumeOffsetError::Json { category, line: error.line(), column: error.column() }
+fn required(value: Option<&str>, field: OffsetField) -> Result<&str, ConsumeOffsetError> {
+    value.ok_or(ConsumeOffsetError::MissingProperty { field })
+}
+
+fn integer(value: &str, field: OffsetField) -> Result<u64, ConsumeOffsetError> {
+    let invalid = ConsumeOffsetError::InvalidInteger { field };
+    if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0')) {
+        return Err(invalid);
+    }
+    // Preserve the field, never the rejected input or its rendered parse error.
+    value.parse().map_err(|_| invalid)
 }
 
 #[cfg(test)]

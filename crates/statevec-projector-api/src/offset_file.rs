@@ -1,6 +1,6 @@
 //! Explicit whole-entry offset persistence. Directory-relative operations keep
 //! the lock, selected file and directory sync bound to one opened directory.
-use crate::{ConsumeOffset, ConsumeOffsetError, MAX_OFFSET_JSON_BYTES};
+use crate::{ConsumeOffset, ConsumeOffsetError, MAX_OFFSET_PROPERTIES_BYTES};
 use sha2::{Digest, Sha256};
 use std::{
     ffi::CString,
@@ -14,10 +14,10 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-const MAGIC: &[u8; 8] = b"SVPOFF01";
+const MAGIC: &[u8; 8] = b"SVPOFF02";
 const HEADER: usize = 12;
 const HASH: usize = 32;
-const MAX_FILE: usize = HEADER + MAX_OFFSET_JSON_BYTES + HASH;
+const MAX_FILE: usize = HEADER + MAX_OFFSET_PROPERTIES_BYTES + HASH;
 static TEMPORARY: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,7 +236,7 @@ impl FileOffsetStore {
         offset
             .check_source(&self.cluster_id, &self.projector_id)
             .map_err(OffsetStoreError::Offset)?;
-        let payload = offset.encode_json().map_err(OffsetStoreError::Offset)?;
+        let payload = offset.encode_properties().map_err(OffsetStoreError::Offset)?;
         let previous = self.load()?;
         if let Some(old) = &previous {
             if offset.raft_index < old.raft_index {
@@ -341,14 +341,14 @@ fn read_offset(file: &File) -> Result<ConsumeOffset, OffsetStoreError> {
         return Err(OffsetStoreError::Format(OffsetFileFailure::Header));
     }
     let length = u32::from_le_bytes(bytes[8..12].try_into().expect("checked header")) as usize;
-    if length > MAX_OFFSET_JSON_BYTES || bytes.len() != HEADER + length + HASH {
+    if length > MAX_OFFSET_PROPERTIES_BYTES || bytes.len() != HEADER + length + HASH {
         return Err(OffsetStoreError::Format(OffsetFileFailure::Length));
     }
     let digest = Sha256::digest(&bytes[..HEADER + length]);
     if digest.as_slice() != &bytes[HEADER + length..] {
         return Err(OffsetStoreError::Format(OffsetFileFailure::Checksum));
     }
-    ConsumeOffset::decode_json(&bytes[HEADER..HEADER + length]).map_err(OffsetStoreError::Offset)
+    ConsumeOffset::decode_properties(&bytes[HEADER..HEADER + length]).map_err(OffsetStoreError::Offset)
 }
 fn encode_file(payload: &[u8]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(HEADER + payload.len() + HASH);

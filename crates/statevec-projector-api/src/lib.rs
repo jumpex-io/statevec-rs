@@ -8,7 +8,7 @@
 //! then wait for the separate owner decision through [`plugin_v2::PendingDurableOffset`].
 //! Latest-state instead enumerates a frozen baseline and confirms its installation.
 //! Source attachment, replication, replay and checkpoint selection stay native.
-//! [`ConsumeOffset`] supplies a bounded four-field JSON codec. On Unix,
+//! [`ConsumeOffset`] supplies a bounded four-field UTF-8 properties codec. On Unix,
 //! [`FileOffsetStore`] persists it explicitly; applications report durability
 //! separately through [`plugin_v2::ProjectorControlPort::report_durable_offset`].
 //! [`native`] contains the host's owned-frame/receiver/control traits; these are
@@ -50,8 +50,8 @@ pub mod plugin_v2;
 pub use offset_file::{FileOffsetStore, OffsetFileFailure, OffsetStoreError, OffsetStoreOperation};
 
 pub use offset::{
-    ConsumeOffset, ConsumeOffsetError, MAX_OFFSET_JSON_BYTES, MAX_PROJECTOR_ID_BYTES,
-    OffsetJsonCategory, ProjectorId,
+    ConsumeOffset, ConsumeOffsetError, MAX_OFFSET_PROPERTIES_BYTES, MAX_PROJECTOR_ID_BYTES,
+    OffsetField, ProjectorId,
 };
 
 pub use types::*;

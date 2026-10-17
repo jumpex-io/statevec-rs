@@ -55,13 +55,16 @@ fn persist_reopens_actual_bounded_envelope_and_duplicate_is_idempotent() {
     let mut store = FileOffsetStore::open(&path, &value.cluster_id, &value.projector_id).unwrap();
     store.persist_offset(&value).unwrap();
     let actual = fs::read(&path).unwrap();
-    let json = value.encode_json().unwrap();
-    assert_eq!(&actual[..8], b"SVPOFF01");
-    assert_eq!(&actual[8..12], &(json.len() as u32).to_le_bytes());
-    assert_eq!(&actual[12..12 + json.len()], &json);
+    let payload = format!(
+        "cluster_id={}\nprojector_id={}\nraft_term=18446744073709551615\nraft_index=18446744073709551615\n",
+        value.cluster_id, value.projector_id,
+    );
+    assert_eq!(&actual[..8], b"SVPOFF02");
+    assert_eq!(&actual[8..12], &(payload.len() as u32).to_le_bytes());
+    assert_eq!(&actual[12..12 + payload.len()], payload.as_bytes());
     assert_eq!(
-        &actual[12 + json.len()..],
-        &Sha256::digest(&actual[..12 + json.len()])[..]
+        &actual[12 + payload.len()..],
+        &Sha256::digest(&actual[..12 + payload.len()])[..]
     );
     store.persist_offset(&value).unwrap();
     assert_eq!(fs::read(&path).unwrap(), actual);
@@ -97,25 +100,23 @@ enum Damage {
     Length,
     Checksum,
     Oversized,
-    Json,
 }
 #[test_case(Damage::Empty; "empty_is_corruption")]
 #[test_case(Damage::Header; "unsupported_header")]
 #[test_case(Damage::Length; "trailing_bytes")]
 #[test_case(Damage::Checksum; "content_changed")]
 #[test_case(Damage::Oversized; "length_bound")]
-#[test_case(Damage::Json; "invalid_payload")]
 fn corrupt_selection_refuses_without_replacing_its_bytes(damage: Damage) {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("history");
-    let mut bytes = encode_file(&offset(1).encode_json().unwrap());
+    let mut bytes = encode_file(&offset(1).encode_properties().unwrap());
     let expected = match damage {
         Damage::Empty => {
             bytes.clear();
             OffsetFileFailure::Header
         }
         Damage::Header => {
-            bytes[7] = b'2';
+            bytes[7] = b'9';
             OffsetFileFailure::Header
         }
         Damage::Length => {
@@ -130,22 +131,55 @@ fn corrupt_selection_refuses_without_replacing_its_bytes(damage: Damage) {
             bytes.resize(MAX_FILE + 1, 0);
             OffsetFileFailure::TooLarge
         }
-        Damage::Json => {
-            bytes = encode_file(b"[]");
-            OffsetFileFailure::Header
-        }
     };
     fs::write(&path, &bytes).unwrap();
     let result = FileOffsetStore::open(&path, &offset(1).cluster_id, "trade-history");
-    if matches!(damage, Damage::Json) {
-        assert!(matches!(
-            result,
-            Err(OffsetStoreError::Offset(ConsumeOffsetError::Json { .. }))
-        ));
-    } else {
-        assert!(matches!(result, Err(OffsetStoreError::Format(actual)) if actual == expected));
-    }
+    assert!(matches!(result, Err(OffsetStoreError::Format(actual)) if actual == expected));
     assert_eq!(fs::read(&path).unwrap(), bytes);
+}
+
+#[test]
+fn valid_checksum_does_not_admit_malformed_properties() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("history");
+    let payload = format!(
+        "cluster_id={}\nprojector_id=trade-history\nraft_term=9\nraft_index=1\nraft_index=2\n",
+        offset(1).cluster_id,
+    );
+    let bytes = encode_file(payload.as_bytes());
+    fs::write(&path, &bytes).unwrap();
+
+    assert!(matches!(
+        FileOffsetStore::open(&path, &offset(1).cluster_id, "trade-history"),
+        Err(OffsetStoreError::Offset(ConsumeOffsetError::DuplicateProperty {
+            field: crate::OffsetField::RaftIndex,
+        }))
+    ));
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+}
+
+#[test]
+fn version_one_json_selection_is_refused_without_rewrite_or_fresh_fallback() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("history");
+    let json = format!(
+        r#"{{"cluster_id":"{}","projector_id":"trade-history","raft_term":9,"raft_index":1}}"#,
+        offset(1).cluster_id,
+    );
+    // Construct the actual old format independently of the new encoder.
+    let mut bytes = b"SVPOFF01".to_vec();
+    bytes.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(json.as_bytes());
+    bytes.extend_from_slice(&Sha256::digest(&bytes));
+    fs::write(&path, &bytes).unwrap();
+
+    for _ in 0..2 {
+        assert!(matches!(
+            FileOffsetStore::open(&path, &offset(1).cluster_id, "trade-history"),
+            Err(OffsetStoreError::Format(OffsetFileFailure::Header))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+    }
 }
 
 #[test]

@@ -109,7 +109,7 @@ fn offer_fixture_checkpoint(control: ProjectorControlPort<'_>, cut: SourceCut) -
         // it, then return that saved offset from recovery() on the next startup.
         // The report-only configured example below deliberately does neither.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        cut.offset().ok_or(ProjectorFailure::Application { code: 903 })?.encode_json().map_err(|_| ProjectorFailure::Application { code: 903 })?;
+        cut.offset().ok_or(ProjectorFailure::Application { code: 903 })?.encode_properties().map_err(|_| ProjectorFailure::Application { code: 903 })?;
         let publication = cut.declare_durable().map_err(|_| ProjectorFailure::Application { code: 903 })?;
         let mut reply = loop {
             match control.report_durable_offset(&publication)? {
