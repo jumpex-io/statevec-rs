@@ -122,7 +122,7 @@ parser rejects it.
   field's schema scale; the scale is preserved in IDL and schema identity.
   Generated helpers and IDL-imported generic encoders produce the same bytes.
 - Generated helpers: `Order::unique_key(..)` encodes UK 0, `Order::unique_key_<name>(..)`
-  encodes a named UK, and `Order::<NAME>_UK_ID` is its id. For
+  encodes a named unique key, and `Order::<NAME>_UNIQUE_KEY_ID` is its id. For
   `name = "by_external_id"`, use `Order::unique_key_by_external_id(..)`.
 - A UK value identifies at most one live record of that kind. Choose fields the
   business already treats as an identity, such as an account number or an
