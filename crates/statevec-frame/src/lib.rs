@@ -14,13 +14,13 @@ use std::sync::Arc;
 pub mod applied_binding;
 pub mod command;
 mod clock;
-mod digest;
+pub mod lifecycle;
 pub mod outcome;
 mod stream_batch;
 pub mod stream_batch_protocol;
 
 pub use clock::{ClockReadError, MonotonicMillis};
-pub use digest::Digest32;
+pub use statevec_model::{CoreVersion, Digest32};
 pub use stream_batch::{
     CLIENT_STREAM_BATCH_COMMITMENT_BYTES, CLIENT_STREAM_BATCH_HEADER_BYTES, ClientStreamBatch,
     ClientStreamBatchCommitment, ClientStreamBatchError,

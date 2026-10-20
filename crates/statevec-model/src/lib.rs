@@ -11,6 +11,8 @@
 /// Schema IDL JSON generation and parsing.
 pub mod idl;
 mod idl_limits;
+mod core_version;
+pub use core_version::{CoreVersion, Digest32};
 /// Core record, command, event, field, and accessor model types.
 pub mod model;
 /// Schema registry and stable schema fingerprint calculation.
@@ -52,7 +54,7 @@ pub mod command {
     pub use crate::model::{
         Command, CommandDefinition, CommandKind, CommandSchema, GeneratedCommandAccess, INVALID_KIND,
         PayloadBuildError, PayloadFieldDefinition, RepeatedCompatibilityError, RepeatedElement, RepeatedScalar,
-        SYSTEM_KIND_MAX, SYSTEM_KIND_MIN, SYSTEM_RUNTIME_MANIFEST_CUTOVER_COMMAND_KIND,
+        SYSTEM_KIND_MAX, SYSTEM_KIND_MIN, SYSTEM_LIFECYCLE_COMMAND_KIND, SYSTEM_RUNTIME_MANIFEST_CUTOVER_COMMAND_KIND,
         SYSTEM_SCHEMA_CUTOVER_COMMAND_KIND, SemanticCompatibilityError, SemanticTag, SemanticTagParseError,
         StatevecCommandPayloadBuilder, USER_KIND_MAX, USER_KIND_MIN, Version, read_repeated_scalar, read_var_bytes,
         validate_repeated_payload_compat, validate_repeated_scalar, validate_semantic_compat, write_repeated_scalar,

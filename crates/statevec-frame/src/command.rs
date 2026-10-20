@@ -3,7 +3,7 @@
 //! This module only encodes command payloads. It does not assign stream positions,
 //! sign intents, impose deployment limits or grant execution/admission authority.
 use crate::{EngineCommandPayload, PayloadCodec};
-use statevec_model::command::{Command, INVALID_KIND, USER_KIND_MAX, USER_KIND_MIN};
+use statevec_model::command::{Command, INVALID_KIND, SYSTEM_LIFECYCLE_COMMAND_KIND, USER_KIND_MAX, USER_KIND_MIN};
 use std::sync::Arc;
 
 /// Exhaustive typed codec failures; independent of engine and Raft state.
@@ -36,6 +36,16 @@ pub struct DecodedCommandPayload {
     pub ref_ext_time_us: u64,
     pub payload: Vec<u8>,
 }
+
+/// Checked outer envelope. Its borrowed body has not been schema-checked or
+/// decoded as a lifecycle operation. In particular, this grants no admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandEnvelope<'a> {
+    pub command_kind: u16,
+    pub ext_seq: u64,
+    pub ref_ext_time_us: u64,
+    pub payload: &'a [u8],
+}
 pub use crate::{RUNTIME_BINARY_V0_CODEC_ID, RUNTIME_BINARY_V0_CODEC_VERSION};
 
 const RUNTIME_BINARY_V0_MAGIC: &[u8; 4] = b"SVR0";
@@ -60,24 +70,50 @@ pub fn encode_runtime_binary_v0_command_payload(
     command: &Command,
 ) -> Result<EngineCommandPayload, CommandPayloadError> {
     check_command_kind(command.command_kind())?;
-    let (payload_len, encoded_len) = encoded_length(command.payload().len())?;
+    encode_envelope(command.command_kind(), command.ext_seq(), command.ref_ext_time_us(), command.payload())
+}
+
+// Only the ordinary encoder and the typed lifecycle encoder call this. There
+// is no public arbitrary-system-kind encoding path.
+pub(crate) fn encode_envelope(
+    kind: u16,
+    ext_seq: u64,
+    ref_ext_time_us: u64,
+    payload: &[u8],
+) -> Result<EngineCommandPayload, CommandPayloadError> {
+    let (payload_len, encoded_len) = encoded_length(payload.len())?;
     let mut flags = RUNTIME_BINARY_V0_FLAG_EXT_SEQ;
-    if command.ref_ext_time_us() != 0 {
+    if ref_ext_time_us != 0 {
         flags |= RUNTIME_BINARY_V0_FLAG_REF_EXT_TIME_US;
     }
     let mut bytes = Vec::with_capacity(encoded_len);
     bytes.extend_from_slice(RUNTIME_BINARY_V0_MAGIC);
     bytes.extend_from_slice(&RUNTIME_BINARY_V0_PAYLOAD_VERSION.to_le_bytes());
     bytes.extend_from_slice(&flags.to_le_bytes());
-    bytes.extend_from_slice(&command.command_kind().to_le_bytes());
-    bytes.extend_from_slice(&command.ext_seq().to_le_bytes());
-    bytes.extend_from_slice(&command.ref_ext_time_us().to_le_bytes());
+    bytes.extend_from_slice(&kind.to_le_bytes());
+    bytes.extend_from_slice(&ext_seq.to_le_bytes());
+    bytes.extend_from_slice(&ref_ext_time_us.to_le_bytes());
     bytes.extend_from_slice(&payload_len.to_le_bytes());
-    bytes.extend_from_slice(command.payload());
+    bytes.extend_from_slice(payload);
     Ok(EngineCommandPayload { payload_codec: PayloadCodec::runtime_binary_v0(), payload_bytes: Arc::from(bytes) })
 }
 
 impl CommandDecoder {
+    /// Decode the execution envelope without copying its body. This recognizes
+    /// the lifecycle kind as well as user kinds; ordinary `decode_checked`
+    /// continues to refuse all system kinds. Reserved 0xF000/0xF001 refuse here.
+    pub fn decode_envelope<'a>(
+        &self,
+        payload: &'a EngineCommandPayload,
+    ) -> Result<CommandEnvelope<'a>, CommandPayloadError> {
+        self.check_codec(payload)?;
+        let envelope = decode_runtime_binary_v0_envelope(&payload.payload_bytes)?;
+        if envelope.command_kind != SYSTEM_LIFECYCLE_COMMAND_KIND {
+            check_command_kind(envelope.command_kind)?;
+        }
+        Ok(envelope)
+    }
+
     pub fn decode_checked(&self, payload: &EngineCommandPayload) -> Result<Command, CommandPayloadError> {
         self.check_codec(payload)?;
         decode_runtime_binary_v0_payload(&payload.payload_bytes)
@@ -109,6 +145,17 @@ fn decode_runtime_binary_v0_payload(bytes: &[u8]) -> Result<Command, CommandPayl
 }
 
 fn decode_runtime_binary_v0_payload_fields(bytes: &[u8]) -> Result<DecodedCommandPayload, CommandPayloadError> {
+    let envelope = decode_runtime_binary_v0_envelope(bytes)?;
+    check_command_kind(envelope.command_kind)?;
+    Ok(DecodedCommandPayload {
+        command_kind: envelope.command_kind,
+        ext_seq: envelope.ext_seq,
+        ref_ext_time_us: envelope.ref_ext_time_us,
+        payload: envelope.payload.to_vec(),
+    })
+}
+
+fn decode_runtime_binary_v0_envelope(bytes: &[u8]) -> Result<CommandEnvelope<'_>, CommandPayloadError> {
     if bytes.len() < RUNTIME_BINARY_V0_HEADER_LEN {
         return Err(CommandPayloadError::Truncated);
     }
@@ -131,7 +178,6 @@ fn decode_runtime_binary_v0_payload_fields(bytes: &[u8]) -> Result<DecodedComman
     }
 
     let command_kind = read_u16_le(bytes, &mut cursor)?;
-    check_command_kind(command_kind)?;
 
     let ext_seq = read_u64_le(bytes, &mut cursor)?;
     let ref_ext_time_us = read_u64_le(bytes, &mut cursor)?;
@@ -157,10 +203,10 @@ fn decode_runtime_binary_v0_payload_fields(bytes: &[u8]) -> Result<DecodedComman
 
     let ext_seq = if has_ext_seq { ext_seq } else { 0 };
     let ref_ext_time_us = if has_ref_ext_time_us { ref_ext_time_us } else { 0 };
-    Ok(DecodedCommandPayload { command_kind, ext_seq, ref_ext_time_us, payload: bytes[cursor..end].to_vec() })
+    Ok(CommandEnvelope { command_kind, ext_seq, ref_ext_time_us, payload: &bytes[cursor..end] })
 }
 
-fn encoded_length(length: usize) -> Result<(u32, usize), CommandPayloadError> {
+pub(crate) fn encoded_length(length: usize) -> Result<(u32, usize), CommandPayloadError> {
     let payload_len = u32::try_from(length).map_err(|_| CommandPayloadError::LengthOverflow)?;
     let encoded_len = RUNTIME_BINARY_V0_HEADER_LEN.checked_add(length).ok_or(CommandPayloadError::LengthOverflow)?;
     Ok((payload_len, encoded_len))

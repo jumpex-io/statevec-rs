@@ -640,6 +640,13 @@ fn schema_registry_rejects_system_command_kind() {
 }
 
 #[test]
+#[should_panic(expected = "command kind 61442 is reserved for StateVec system commands")]
+fn business_schema_cannot_register_the_lifecycle_kind() {
+    let command = CommandDefinition { kind: 0xF002, ..COMMAND_A };
+    let _ = SchemaRegistry::new(Version::new(1, 0), &[], &[command], &[], &[]);
+}
+
+#[test]
 #[should_panic(expected = "duplicate event kind registered")]
 fn schema_registry_rejects_duplicate_event_kind() {
     let event_alt = EventDefinition {

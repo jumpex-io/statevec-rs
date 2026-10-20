@@ -54,10 +54,12 @@ pub const SYSTEM_KIND_MAX: u16 = u16::MAX;
 pub const SYSTEM_SCHEMA_RECORD_KIND: RecordKind = 0xF000;
 /// Reserved system runtime manifest metadata record kind.
 pub const SYSTEM_RUNTIME_MANIFEST_RECORD_KIND: RecordKind = 0xF001;
-/// Reserved future schema/runtime cutover command kind.
+/// Reserved, unsupported command kind. Not an alternate lifecycle route.
 pub const SYSTEM_SCHEMA_CUTOVER_COMMAND_KIND: CommandKind = 0xF000;
-/// Reserved future runtime manifest cutover command kind.
+/// Reserved, unsupported command kind. Not an alternate lifecycle route.
 pub const SYSTEM_RUNTIME_MANIFEST_CUTOVER_COMMAND_KIND: CommandKind = 0xF001;
+/// Engine-owned InitializeCore / UpdateCore command envelope.
+pub const SYSTEM_LIFECYCLE_COMMAND_KIND: CommandKind = 0xF002;
 /// Reserved future schema/runtime cutover event kind.
 pub const SYSTEM_SCHEMA_CUTOVER_EVENT_KIND: EventKind = 0xF000;
 /// Reserved future runtime manifest cutover event kind.
