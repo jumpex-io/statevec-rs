@@ -390,9 +390,9 @@ fn initialization_refuses_old_host_major_before_calling_author() {
     assert!(fixture.create().is_success());
     let host = Host::default();
     let mut tx = table(&host);
-    tx.h.abi_major = 3;
+    tx.h.abi_major = 4;
     // SAFETY: complete table with an intentionally unsupported header.
     let status = unsafe { (TABLE.0.initialize_core.unwrap())(fixture.instance, &tx, SvBytes::EMPTY) };
-    assert_eq!(status, SvStatus::from(&CoreAbiError::Version { expected: 4, actual: 3 }));
+    assert_eq!(status, SvStatus::from(&CoreAbiError::Version { expected: 5, actual: 4 }));
     assert_eq!(fixture.counts.run.load(Ordering::Relaxed), 0);
 }

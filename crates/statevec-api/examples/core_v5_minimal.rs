@@ -1,5 +1,5 @@
 //! Minimal rule-free plugin. Build with:
-//! cargo build -p statevec-api --example core_v4_minimal
+//! cargo build -p statevec-api --example core_v5_minimal
 //! This demonstrates packaging, not a durable host or a business application.
 use statevec_api::{RuntimeCommandRef, TypedTxContext, v1::*};
 use statevec_model::{CommandSchemaError, SchemaRegistry, Version};
@@ -47,4 +47,4 @@ impl CoreRuntime for Runtime {
         Ok(())
     }
 }
-statevec_api::export_core_plugin_v4!(Module);
+statevec_api::export_core_plugin_v5!(Module);

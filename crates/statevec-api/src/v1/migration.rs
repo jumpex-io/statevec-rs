@@ -17,32 +17,58 @@ use std::ffi::c_void;
 /// }
 /// ```
 pub struct MigrationTx<'call> {
-    table: &'call SvMigrationV4,
+    table: &'call SvMigrationV5,
     pub(super) failure: CallFailure,
 }
 
+/// Old-layout reads, confined to the migration call.
+///
+/// ```compile_fail
+/// use statevec_api::v1::SourceRecords;
+/// fn escape(source: SourceRecords<'_>) -> SourceRecords<'static> { source }
+/// ```
+///
+/// ```compile_fail
+/// use statevec_api::v1::SourceRecords;
+/// fn send(source: SourceRecords<'_>) {
+///     std::thread::scope(|scope| { scope.spawn(move || drop(source)); });
+/// }
+/// ```
 pub struct SourceRecords<'call> {
-    table: &'call SvMigrationV4,
+    table: &'call SvMigrationV5,
     failure: &'call CallFailure,
 }
 
+/// Writes to a disposable source-backed candidate, never the live state.
+///
+/// ```compile_fail
+/// use statevec_api::v1::TargetRecords;
+/// fn escape(target: TargetRecords<'_>) -> TargetRecords<'static> { target }
+/// ```
+///
+/// ```compile_fail
+/// use statevec_api::v1::TargetRecords;
+/// fn send(target: TargetRecords<'_>) {
+///     std::thread::scope(|scope| { scope.spawn(move || drop(target)); });
+/// }
+/// ```
 pub struct TargetRecords<'call> {
-    table: &'call SvMigrationV4,
+    table: &'call SvMigrationV5,
     failure: &'call CallFailure,
 }
 
 impl<'call> MigrationTx<'call> {
     /// # Safety
-    /// This exact major-4 host table and all callback storage stay live for the
+    /// This exact current-major host table and all callback storage stay live for the
     /// call, never unwind across C or retain/concurrently invoke visitors.
-    pub(super) unsafe fn from_raw(raw: *const SvMigrationV4) -> Result<Self, CoreAbiError> {
+    pub(super) unsafe fn from_raw(raw: *const SvMigrationV5) -> Result<Self, CoreAbiError> {
         // SAFETY: forward the caller's scoped host-table obligation.
         let table = unsafe { table(raw, CORE_MIGRATION_KIND, CORE_BASE_CAPABILITIES)? };
         if table.context.is_null()
             || table.time_ns.is_none() || table.tx_seq.is_none()
             || table.source_read.is_none() || table.source_keys.is_none()
             || table.preserve_record.is_none() || table.create_record.is_none()
-            || table.emit_event.is_none()
+            || table.emit_event.is_none() || table.delete_record.is_none()
         {
             return Err(CoreAbiError::NullPointer);
         }
@@ -104,6 +130,17 @@ impl SourceRecords<'_> {
 }
 
 impl TargetRecords<'_> {
+    /// Explicitly remove a source row, with a checked successor revision.
+    /// A source ID may be replaced or deleted only once in this call.
+    /// Untouched compatible source rows are retained, without a record delta.
+    pub fn delete_record(&mut self, source: RecordKey) -> Result<(), CoreExecutionError> {
+        self.failure.current()?;
+        // SAFETY: checked scoped table/context and a value-only source key.
+        self.failure.check(unsafe {
+            (self.table.delete_record.unwrap())(self.table.context, wire_key(source))
+        })
+    }
+
     /// Carry a source sys_id into the complete target set, with revision + 1.
     /// Duplicate IDs, absent source records and revision overflow refuse.
     pub fn preserve_record(&mut self, source: RecordKey, target_kind: u16, bytes: &[u8]) -> Result<RecordKey, CoreExecutionError> {

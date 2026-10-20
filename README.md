@@ -9,7 +9,7 @@ guide, examples and a small in-memory engine for local business tests.
 
 ## Development compatibility
 
-The local naming cutover prepares **0.5.0**, with source-breaking public Rust
+The paired lifecycle development prepares **0.6.0**, with source-breaking public Rust
 names defined in the [glossary](docs/glossary.md). The
 [Projector API](docs/user-guide/projectors.md#sdk-050-rust-vocabulary) uses the
 `v1` Rust namespace while retaining C ABI 2. Following `dev` is not a compatible
@@ -103,7 +103,7 @@ dependencies. Applications provide their plugins and business configuration.
 The actual engine/Node executables still come from the matching host distribution;
 the launcher is not a replacement engine or a claim of release availability.
 
-Configured hosts use the public Core V4 and Projector V1 interfaces with a
+Configured hosts use the public Core V5 and Projector V1 interfaces with a
 matched host build. The legacy plugin ABI version 2 remains a separate surface;
 its presence does not provide compatibility with those configured interfaces
 or establish support for online upgrades.

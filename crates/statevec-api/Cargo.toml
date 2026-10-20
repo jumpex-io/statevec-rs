@@ -18,5 +18,5 @@ smallvec.workspace = true
 test-case = "3.3.1"
 
 [[example]]
-name = "core_v4_minimal"
+name = "core_v5_minimal"
 crate-type = ["cdylib"]

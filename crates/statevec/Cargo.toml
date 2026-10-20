@@ -20,17 +20,21 @@ serde.workspace = true
 serde_json.workspace = true
 
 [[example]]
-name = "core_v4_bank"
+name = "core_v5_bank"
 crate-type = ["cdylib"]
 
 [[example]]
-name = "core_v4_faults"
+name = "core_v5_bank_migration"
 crate-type = ["cdylib"]
 
 [[example]]
-name = "core_v4_exchange"
+name = "core_v5_faults"
 crate-type = ["cdylib"]
 
 [[example]]
-name = "core_v4_exchange_no_rules"
+name = "core_v5_exchange"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "core_v5_exchange_no_rules"
 crate-type = ["cdylib"]

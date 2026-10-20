@@ -303,12 +303,12 @@ unsafe extern "C" fn event(raw: *mut c_void, kind: u16, value: SvBytes) -> SvSta
         .push((kind, unsafe { bytes(value).unwrap() }.to_vec()));
     SvStatus::SUCCESS
 }
-pub(crate) fn table(host: &Host) -> SvTxV4 {
-    let mut table = SvTxV4 {
+pub(crate) fn table(host: &Host) -> SvTxV5 {
+    let mut table = SvTxV5 {
         h: SvHeader {
             abi_major: CORE_ABI_MAJOR,
             kind: 3,
-            table_bytes: std::mem::size_of::<SvTxV4>() as u64,
+            table_bytes: std::mem::size_of::<SvTxV5>() as u64,
             provided_caps: CORE_CAPABILITIES,
             required_caps: 0,
         },
@@ -461,6 +461,17 @@ fn visitor_create_draft_host_is_rejected_before_reading_callbacks() {
     // SAFETY: the fixture still provides a complete readable header/table.
     let failure = unsafe { PluginTx::from_raw(&table) }.err().expect("old create ABI must refuse");
     assert_eq!(failure, CoreAbiError::UnsupportedCapabilities { required: CORE_RAW_CREATE_CAPABILITY });
+    assert_eq!(host.reads.get(), 0);
+}
+
+#[test]
+fn transaction_table_requires_lifecycle_capability_before_any_callback() {
+    let host = Host::default();
+    let mut table = table(&host);
+    table.h.provided_caps &= !128;
+    // SAFETY: a complete readable current-major table with one missing bit.
+    let failure = unsafe { PluginTx::from_raw(&table) }.err().expect("missing lifecycle capability");
+    assert_eq!(failure, CoreAbiError::UnsupportedCapabilities { required: 128 });
     assert_eq!(host.reads.get(), 0);
 }
 

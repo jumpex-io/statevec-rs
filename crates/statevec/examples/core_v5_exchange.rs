@@ -9,4 +9,4 @@ impl CoreModule for Module {
         exchange::Module::<true>.configure(config)
     }
 }
-statevec::api::export_core_plugin_v4!(Module);
+statevec::api::export_core_plugin_v5!(Module);

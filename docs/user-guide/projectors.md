@@ -20,7 +20,7 @@ host-side decoding live in `v1::{ffi, host}`.
 
 `v1` is the first safe Rust API namespace in this naming scheme. It does not
 mean C ABI 1: `export_projector_plugin_v2!` exports Projector ABI 2, while
-`export_core_plugin_v4!` exports Core ABI 4 in the development 0.6.0 SDK.
+`export_core_plugin_v5!` exports Core ABI 5 in the development 0.6.0 SDK.
 The lifecycle change does not change Projector ABI 2.
 
 ## Consume complete Raft entries
@@ -144,7 +144,7 @@ offset for unrelated history: the four fields deliberately omit a content hash.
 
 ## SDK 0.5.0 Rust vocabulary
 
-All nine SDK crates use 0.5.0. Build the SDK, native host and plugins together
+All nine SDK crates now use the development 0.6.0. Build the SDK, native host and plugins together
 from one reviewed revision. The safe Rust API uses `v1`, `RaftEntryDelivery`,
 `RaftEntryToken` and `SnapshotReader`; the C symbols, layouts and numbers stay
 unchanged. No old-name aliases are supplied. Configured `HistoryMode` selects

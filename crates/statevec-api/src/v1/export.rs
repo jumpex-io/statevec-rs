@@ -1,4 +1,4 @@
-//! SDK-generated Core V4 entrypoints. Authors implement safe traits only.
+//! SDK-generated Core V5 entrypoints. Authors implement safe traits only.
 use super::{
     CoreAbiError, SvStatus, author::*, borrow::*, candidate::Candidate, ffi::*, tx::PluginTx,
 };
@@ -21,7 +21,7 @@ const TARGET: &str = "unsupported";
 /// Private macro support. Only built from static target bytes and monomorphized
 /// SDK functions; this wrapper does not make arbitrary raw tables Sync.
 #[doc(hidden)]
-pub struct CoreExportTable(SvCoreV4);
+pub struct CoreExportTable(SvCoreV5);
 // SAFETY: constructor owns an immutable table containing only static target
 // bytes/function addresses. It contains no configured or runtime state.
 unsafe impl Sync for CoreExportTable {}
@@ -31,11 +31,11 @@ impl CoreExportTable {
     ) -> Self {
         let rules =
             <<M::Configured as ConfiguredCore>::Runtime as CoreRuntime>::TX_INVARIANTS.is_some();
-        Self(SvCoreV4 {
+        Self(SvCoreV5 {
             h: SvHeader {
                 abi_major: CORE_ABI_MAJOR,
                 kind: CORE_KIND,
-                table_bytes: size_of::<SvCoreV4>() as u64,
+                table_bytes: size_of::<SvCoreV5>() as u64,
                 provided_caps: CORE_CAPABILITIES,
                 required_caps: CORE_BASE_CAPABILITIES
                     | if rules { CORE_CANDIDATE_CAPABILITY } else { 0 },
@@ -66,8 +66,8 @@ impl CoreExportTable {
         // and alignment checked; all fields are written without reading it.
         unsafe {
             out.write(SvDiscovery {
-                table: (&self.0 as *const SvCoreV4).cast(),
-                table_bytes: size_of::<SvCoreV4>() as u64,
+                table: (&self.0 as *const SvCoreV5).cast(),
+                table_bytes: size_of::<SvCoreV5>() as u64,
             })
         };
         0
@@ -277,7 +277,7 @@ unsafe extern "C" fn preflight<R: CoreRuntime>(
 
 unsafe extern "C" fn run<R: CoreRuntime>(
     instance: *const c_void,
-    tx: *const SvTxV4,
+    tx: *const SvTxV5,
     raw: *const SvCommand,
 ) -> SvStatus {
     caught(|| {
@@ -307,7 +307,7 @@ unsafe extern "C" fn run<R: CoreRuntime>(
 
 unsafe extern "C" fn rules_call<R: CoreRuntime>(
     instance: *const c_void,
-    candidate: *const SvCandidateV4,
+    candidate: *const SvCandidateV5,
 ) -> SvStatus {
     caught(|| {
         let Some(hook) = R::TX_INVARIANTS else {
@@ -335,7 +335,7 @@ unsafe extern "C" fn rules_call<R: CoreRuntime>(
 
 unsafe extern "C" fn initialize<R: CoreRuntime>(
     instance: *const c_void,
-    tx: *const SvTxV4,
+    tx: *const SvTxV5,
     input: SvBytes,
 ) -> SvStatus {
     caught(|| {
@@ -363,7 +363,7 @@ unsafe extern "C" fn initialize<R: CoreRuntime>(
 
 unsafe extern "C" fn migrate<R: CoreRuntime>(
     instance: *const c_void,
-    tx: *const SvMigrationV4,
+    tx: *const SvMigrationV5,
     source: *const [u8; 32],
     input: SvBytes,
 ) -> SvStatus {
@@ -412,15 +412,15 @@ unsafe extern "C" fn destroy<T>(out: *mut *mut c_void) -> SvStatus {
 }
 
 /// Export one unit-struct CoreModule. User code supplies no raw pointer or C
-/// adapter. Pair this ABI with a qualified Core V4 host; this is not a V1 shim.
+/// adapter. Pair this ABI with a qualified Core V5 host; this is not a V1 shim.
 #[macro_export]
-macro_rules! export_core_plugin_v4 {
+macro_rules! export_core_plugin_v5 {
     ($module:ident) => {
         #[cfg(panic = "abort")]
         compile_error!("StateVec Core plugins require panic = \"unwind\"");
 
         #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn statevec_core_plugin_entry_v4(
+        pub unsafe extern "C" fn statevec_core_plugin_entry_v5(
             out_bytes: u64,
             out: *mut $crate::v1::ffi::SvDiscovery,
         ) -> u32 {

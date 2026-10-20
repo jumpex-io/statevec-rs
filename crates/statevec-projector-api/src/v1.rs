@@ -1,9 +1,9 @@
 //! Configured Projector contracts: implement configure -> prepare -> run.
 //! Source tokens, durability declarations and owner acceptance are distinct.
 //! `v1` names the safe Rust API. `export_projector_plugin_v2!` still exports
-//! Projector C ABI 2; `export_core_plugin_v4!` still exports Core C ABI 3.
+//! Projector C ABI 2; `export_core_plugin_v5!` exports Core C ABI 5.
 //! These C ABI versions are independent of the Rust module name.
-//! Core V4 shares scalar representations only; its operation decoder is unchanged.
+//! Core V5 shares scalar representations only; its operation decoder is unchanged.
 pub mod ffi;
 mod failure;
 mod status;

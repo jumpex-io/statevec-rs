@@ -23,7 +23,7 @@ use std::ffi::c_void;
 /// }
 /// ```
 pub struct PluginTx<'call> {
-    table: &'call SvTxV4,
+    table: &'call SvTxV5,
     pub(super) failure: CallFailure,
 }
 
@@ -32,7 +32,7 @@ impl<'call> PluginTx<'call> {
     /// Host table, context and callback storage are live for 'call, have their
     /// V4 C signatures and never unwind, retain loans or run callbacks in
     /// parallel. The table header must be readable even when incompatible.
-    pub(super) unsafe fn from_raw(raw: *const SvTxV4) -> Result<Self, CoreAbiError> {
+    pub(super) unsafe fn from_raw(raw: *const SvTxV5) -> Result<Self, CoreAbiError> {
         // SAFETY: forwarding the caller's header/table lifetime obligation.
         let table = unsafe { table(raw, 3, CORE_BASE_CAPABILITIES)? };
         if table.context.is_null()

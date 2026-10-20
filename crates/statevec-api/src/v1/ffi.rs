@@ -1,4 +1,4 @@
-//! Raw Core V4 C representations. Integer fields and optional function pointers
+//! Raw Core V5 C representations. Integer fields and optional function pointers
 //! are deliberately unchecked here. A caller must validate the table/extent and
 //! retain all pointees for the complete call; no Rust ownership crosses C.
 //!
@@ -7,7 +7,7 @@ use std::ffi::c_void;
 use super::SvStatus;
 use statevec_model::SchemaIdentity;
 
-pub const CORE_ABI_MAJOR: u32 = 4;
+pub const CORE_ABI_MAJOR: u32 = 5;
 pub const CORE_KIND: u32 = 1;
 pub const CORE_MIGRATION_KIND: u32 = 6;
 /// Required to distinguish raw create bytes from the unreleased visitor draft.
@@ -16,7 +16,7 @@ pub const CORE_LIFECYCLE_CAPABILITY: u64 = 1 << 7;
 pub const CORE_BASE_CAPABILITIES: u64 = 0x1f | CORE_RAW_CREATE_CAPABILITY | CORE_LIFECYCLE_CAPABILITY;
 pub const CORE_CANDIDATE_CAPABILITY: u64 = 1 << 5;
 pub const CORE_CAPABILITIES: u64 = CORE_BASE_CAPABILITIES | CORE_CANDIDATE_CAPABILITY;
-pub const CORE_ENTRY_SYMBOL: &std::ffi::CStr = c"statevec_core_plugin_entry_v4";
+pub const CORE_ENTRY_SYMBOL: &std::ffi::CStr = c"statevec_core_plugin_entry_v5";
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -100,26 +100,26 @@ pub struct SvCoreMetadata {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct SvCoreV4 {
+pub struct SvCoreV5 {
     pub h: SvHeader,
     pub build_target: SvBytes,
     pub configure: Option<unsafe extern "C" fn(SvBytes, *mut *mut c_void) -> SvStatus>,
     pub metadata: Option<unsafe extern "C" fn(*const c_void, *mut SvCoreMetadata) -> SvStatus>,
     pub create_instance: Option<unsafe extern "C" fn(*const c_void, *mut *mut c_void) -> SvStatus>,
     pub preflight_batch: Option<unsafe extern "C" fn(*const c_void, *const SvCommand, u64, *mut u64) -> SvStatus>,
-    pub run_tx: Option<unsafe extern "C" fn(*const c_void, *const SvTxV4, *const SvCommand) -> SvStatus>,
-    pub initialize_core: Option<unsafe extern "C" fn(*const c_void, *const SvTxV4, SvBytes) -> SvStatus>,
-    pub migrate: Option<unsafe extern "C" fn(*const c_void, *const SvMigrationV4, *const [u8; 32], SvBytes) -> SvStatus>,
-    pub validate_tx_invariants: Option<unsafe extern "C" fn(*const c_void, *const SvCandidateV4) -> SvStatus>,
+    pub run_tx: Option<unsafe extern "C" fn(*const c_void, *const SvTxV5, *const SvCommand) -> SvStatus>,
+    pub initialize_core: Option<unsafe extern "C" fn(*const c_void, *const SvTxV5, SvBytes) -> SvStatus>,
+    pub migrate: Option<unsafe extern "C" fn(*const c_void, *const SvMigrationV5, *const [u8; 32], SvBytes) -> SvStatus>,
+    pub validate_tx_invariants: Option<unsafe extern "C" fn(*const c_void, *const SvCandidateV5) -> SvStatus>,
     pub destroy_instance: Option<unsafe extern "C" fn(*mut *mut c_void) -> SvStatus>,
     pub destroy_configured: Option<unsafe extern "C" fn(*mut *mut c_void) -> SvStatus>,
 }
 
-/// Old records and the separate empty target record set. No native Rust object,
+/// Old records and a separate source-backed target record set. No native Rust object,
 /// source-schema typed access or lifecycle/history writer crosses this table.
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct SvMigrationV4 {
+pub struct SvMigrationV5 {
     pub h: SvHeader,
     pub context: *const c_void,
     pub time_ns: Option<unsafe extern "C" fn(*const c_void, *mut u64) -> SvStatus>,
@@ -129,6 +129,7 @@ pub struct SvMigrationV4 {
     pub preserve_record: Option<unsafe extern "C" fn(*const c_void, SvKey, u16, SvBytes, *mut SvKey) -> SvStatus>,
     pub create_record: Option<unsafe extern "C" fn(*const c_void, u16, SvBytes, *mut SvKey) -> SvStatus>,
     pub emit_event: Option<unsafe extern "C" fn(*const c_void, u16, SvBytes) -> SvStatus>,
+    pub delete_record: Option<unsafe extern "C" fn(*const c_void, SvKey) -> SvStatus>,
 }
 
 #[repr(C)]
@@ -146,7 +147,7 @@ pub type SvWriteVisitor = Option<unsafe extern "C" fn(*mut c_void, SvKey, SvMutB
 pub type SvKeyVisitor = Option<unsafe extern "C" fn(*mut c_void, SvKey, *mut u32) -> SvStatus>;
 
 #[repr(C)]
-pub struct SvTxV4 {
+pub struct SvTxV5 {
     pub h: SvHeader,
     pub context: *mut c_void,
     pub time_ns: Option<unsafe extern "C" fn(*const c_void, *mut u64) -> SvStatus>,
@@ -179,7 +180,7 @@ pub struct SvCandidateChange {
 pub type SvChangeVisitor = Option<unsafe extern "C" fn(*mut c_void, *const SvCandidateChange) -> SvStatus>;
 
 #[repr(C)]
-pub struct SvCandidateV4 {
+pub struct SvCandidateV5 {
     pub h: SvHeader,
     pub context: *const c_void,
     pub time_ns: Option<unsafe extern "C" fn(*const c_void, *mut u64) -> SvStatus>,

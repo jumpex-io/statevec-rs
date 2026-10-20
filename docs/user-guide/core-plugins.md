@@ -1,14 +1,14 @@
 # Core plugin authoring (experimental)
 
-Core V4 supplies a safe Rust authoring API and a generated C export. The matching
+Core V5 supplies a safe Rust authoring API and a generated C export. The matching
 host is still undergoing qualification; building a library does not yet provide
 a supported way to run a production node.
 
-The [minimal example](../../crates/statevec-api/examples/core_v4_minimal.rs) builds
+The [minimal example](../../crates/statevec-api/examples/core_v5_minimal.rs) builds
 without any private StateVec crate:
 
 ```sh
-cargo build -p statevec-api --example core_v4_minimal
+cargo build -p statevec-api --example core_v5_minimal
 ```
 
 For your own library, set `crate-type = ["cdylib"]` under `[lib]` and implement
@@ -21,8 +21,8 @@ these interfaces from `statevec_api::v1`:
   and declare either `TX_INVARIANTS = None` or a candidate-rule function.
   All lifecycle callbacks and the rule declaration are required.
 
-Export the unit module with `statevec_api::export_core_plugin_v4!(MyModule)`.
-The `v1` module names the safe Rust API. The macro exports Core C ABI 4;
+Export the unit module with `statevec_api::export_core_plugin_v5!(MyModule)`.
+The `v1` module names the safe Rust API. The macro exports Core C ABI 5;
 the Rust module version and Cargo package version do not change the C ABI.
 Use the shared [glossary](../glossary.md) for the public terms.
 Invoke this macro in the final `cdylib` crate, even if the implementation lives
@@ -53,19 +53,32 @@ discard instances repeatedly.
 ## Initialization and migration
 
 The development 0.6.0 SDK adds `initialize_core` and `migrate`; pair it with a
-Core ABI 4 host. Core ABI 3 material is refused before configuration. This is
+Core ABI 5 host. Older Core material, including ABI 4, is refused before configuration. This is
 an in-progress lifecycle capability, not a claim that Node upgrade/recovery is
 ready for deployment.
 
-`initialize_core` writes the initial business state through `PluginTx`.
+`initialize_core` writes the initial business state through `PluginTx` on the
+current V0 runtime; it does not acquire or replace a same-version instance.
 `migrate` receives source semantic `CoreVersion`, explicit input and a distinct
 `MigrationTx`. `tx.records()` returns `SourceRecords` (old-layout raw reads) and
-`TargetRecords` (a separate, initially empty complete record set).
+`TargetRecords` (a separate candidate based on the source).
 `preserve_record` carries a source ID into a chosen target kind with revision
-incremented by one; `create_record` allocates a new ID with revision 1. The host
-checks lengths, values, duplicates and overflow. Omission deletes the old row;
-it never implicitly reinterprets old bytes as a new layout. Target indexes and
-rules must validate before the host publishes the candidate.
+incremented by one, even for identical bytes; `create_record` allocates a new
+ID with revision 1. `delete_record` explicitly removes a source row and checks
+its successor revision. Replacement/deletion can touch each source ID only once.
+Untouched compatible rows keep their bytes, ID and revision, with no row delta.
+Compatibility compares canonical fields (including names), referenced types
+and reserved spans, not just byte length. Indexes and rules can change.
+Untouched incompatible or removed-kind rows reject the whole migration with
+system code 5, reason 8 (`UnprocessedSourceRecord`): the plugin omitted required
+handling. The same package/input/source state will refuse again.
+
+The host validates all target values and rebuilds indexes before one candidate
+invariant callback. Untouched rows are not included in change traversal; an
+author's new whole-state policy must explicitly read the relevant rows. Pages
+and indexes are still copied/rebuilt: zero delta is not zero CPU or memory.
+Row schema metadata follows the target's global schema even for untouched rows.
+This does not provide a cross-schema Projector delivery contract.
 
 Both callbacks must be deterministic and repeatable. Proposal, follower
 validation, committed apply and replay may call them independently. They must

@@ -1,5 +1,5 @@
-//! A stateful Core V4 example with double-entry deposits/transfers and a
-//! configured exposure rule. Build: cargo build -p statevec --example core_v4_bank.
+//! A stateful Core V5 example with double-entry deposits/transfers and a
+//! configured exposure rule. Build: cargo build -p statevec --example core_v5_bank.
 //! This has its own schema/revision; it is not an upgrade of another Bank demo.
 use statevec::api::v1::*;
 use statevec::prelude::*;
@@ -57,6 +57,8 @@ use bank::*;
 struct Policy {
     max_balance: u64,
     min_amount: u64,
+    #[serde(default)]
+    retain_migration: bool,
 }
 struct Module;
 struct Configured {
@@ -76,7 +78,8 @@ impl CoreModule for Module {
         }
         Ok(Configured {
             schema: registry(),
-            revision: format!("core-bank-v1;max={};min={}", policy.max_balance, policy.min_amount),
+            revision: format!("core-bank-v1;max={};min={}{}", policy.max_balance, policy.min_amount,
+                if policy.retain_migration { ";migration=retain-v1" } else { "" }),
             policy,
         })
     }
@@ -163,9 +166,29 @@ impl Runtime {
 }
 impl CoreRuntime for Runtime {
     fn initialize_core(&self, _: &mut PluginTx<'_>, _: &[u8]) -> Result<(), CoreTxError> { Ok(()) }
-    fn migrate(&self, _: &mut MigrationTx<'_>, _: CoreVersion, _: &[u8]) -> Result<(), CoreTxError> {
-        // This fixed-layout example declares no accepted source migration yet.
-        Err(reject(5))
+    fn migrate(&self, tx: &mut MigrationTx<'_>, _: CoreVersion, input: &[u8]) -> Result<(), CoreTxError> {
+        if !self.0.retain_migration || input != b"retain-bank-v1" {
+            return Err(reject(5));
+        }
+        // This input explicitly selects the Bank-v1 source layout. The host
+        // additionally binds the actual source V and checks untouched layouts.
+        // Candidate change visitors intentionally do not enumerate retained
+        // rows; a new whole-state policy must inspect them here.
+        let (source, _) = tx.records();
+        let mut result = Ok(());
+        source.for_each_key(Account::KIND, &mut |key| {
+            if result.is_err() { return }
+            result = source.with_record(key, |bytes| {
+                if bytes.len() != 104 { return Err(reject(5)) }
+                let row = Account::wrap(bytes);
+                let balance = row.credit().checked_sub(row.debit());
+                if row.account_id() != 0 && balance.is_none_or(|balance| balance > self.0.max_balance) {
+                    return Err(reject(4));
+                }
+                Ok(())
+            }).map_err(CoreTxError::from).and_then(|row| row.ok_or_else(|| reject(5))?);
+        })?;
+        result
     }
     const TX_INVARIANTS: Option<TxInvariantHook<Self>> = Some(Self::rules);
     fn preflight_command(
@@ -210,4 +233,4 @@ impl CoreRuntime for Runtime {
         }
     }
 }
-statevec::api::export_core_plugin_v4!(Module);
+statevec::api::export_core_plugin_v5!(Module);

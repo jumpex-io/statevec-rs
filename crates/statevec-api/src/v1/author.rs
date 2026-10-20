@@ -1,4 +1,4 @@
-//! Safe authoring surface for a configured Core ABI 4 host.
+//! Safe authoring surface for a configured Core ABI 5 host.
 use super::{ConfigureError, CoreCreateError, CoreExecutionError, CoreTxError, CoreVersion, MigrationTx, tx::PluginTx};
 use crate::{ReferenceTimeUnavailable, RuntimeCommandRef};
 use statevec_model::{CommandSchemaError, RecordKey, SchemaRegistry};

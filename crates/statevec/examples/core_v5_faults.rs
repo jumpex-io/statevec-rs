@@ -1,4 +1,4 @@
-//! Core ABI 4 qualification fixture, not an application runtime. Valid commands
+//! Core ABI 5 qualification fixture, not an application runtime. Valid commands
 //! deliberately unwind in preflight, dispatch or the rule hook. Atomic counts
 //! observe physical calls only; they never decide business output or recovery.
 use statevec::api::v1::*;

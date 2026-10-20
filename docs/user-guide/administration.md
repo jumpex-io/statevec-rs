@@ -3,7 +3,7 @@
 Use the `statevec-admin` binary from the matching official host distribution.
 Applications invoke it as a subprocess; they do not need a private Rust
 dependency, an admin protocol encoder, or an SDK-side admin server. This tool
-is on the unreleased 0.5.0 paired development line: local builds are not evidence
+is on the unreleased 0.6.0 paired development line: local builds are not evidence
 that an official binary/revision has been published. Keep the host and SDK
 revisions pinned together for deployment.
 

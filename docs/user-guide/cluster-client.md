@@ -37,7 +37,7 @@ intents as a recovery migration.
 `ReservedFlags`, `InvalidKind`, `LengthOverflow`, `TrailingBytes`,
 `SequenceWithoutFlag`, and `TimeWithoutFlag`. Match these typed variants, not
 Display text. The codec neither signs nor submits commands and its success is
-not an admission receipt. These additions are on the unreleased 0.5.0 dev line;
+not an admission receipt. These additions are on the unreleased 0.6.0 dev line;
 pin a published revision containing them before external deployment.
 
 ## Prepare and submit

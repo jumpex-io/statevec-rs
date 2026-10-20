@@ -34,6 +34,10 @@ impl CoreRuntime for Runtime {
         assert_eq!(source.digest().bytes(), [7; 32]);
         assert_eq!((tx.tx_seq()?, tx.ref_tx_time_ns()?), (17, 123));
         let (source, mut target) = tx.records();
+        if input == b"delete" {
+            target.delete_record(RecordKey { kind: 1, sys_id: 7 })?;
+            return Ok(());
+        }
         let mut visited = Vec::new();
         source.for_each_key(1, &mut |key| visited.push(key))?;
         assert_eq!(visited, [RecordKey { kind: 1, sys_id: 7 }]);
@@ -61,7 +65,7 @@ unsafe extern "C" fn unused_configure(_: SvBytes, _: *mut *mut c_void) -> SvStat
 static EXPORT: __export::CoreExportTable = __export::CoreExportTable::new::<Module>(unused_configure);
 
 struct Plugin {
-    table: SvCoreV4,
+    table: SvCoreV5,
     configured: *mut c_void,
     instance: *mut c_void,
     calls: Arc<AtomicUsize>,
@@ -74,14 +78,14 @@ impl Plugin {
         // SAFETY: exact SDK discovery/configuration and uniquely owned outputs.
         let table = unsafe {
             assert_eq!(EXPORT.discover(size_of::<SvDiscovery>() as u64, &mut discovery), 0);
-            let table = *discovery.table.cast::<SvCoreV4>();
+            let table = *discovery.table.cast::<SvCoreV5>();
             assert_eq!(__export::configure(&Module(Arc::clone(&calls)), SvBytes::EMPTY, &mut configured), SvStatus::SUCCESS);
             assert_eq!((table.create_instance.unwrap())(configured, &mut instance), SvStatus::SUCCESS);
             table
         };
         Self { table, configured, instance, calls }
     }
-    fn run(&self, table: &SvMigrationV4, input: &[u8]) -> SvStatus {
+    fn run(&self, table: &SvMigrationV5, input: &[u8]) -> SvStatus {
         // SAFETY: exact live instance plus this synchronous scripted host loan.
         unsafe { (self.table.migrate.unwrap())(self.instance, table, &[7; 32], SvBytes::borrowed(input)) }
     }
@@ -102,15 +106,16 @@ struct Host {
     fault: HostFault,
     writes: RefCell<Vec<(RecordKey, Vec<u8>)>>,
     creates: Cell<usize>,
+    deletes: RefCell<Vec<RecordKey>>,
 }
 impl Host {
-    fn new(fault: HostFault) -> Self { Self { fault, writes: RefCell::new(Vec::new()), creates: Cell::new(0) } }
-    fn table(&self) -> SvMigrationV4 {
-        SvMigrationV4 {
-            h: SvHeader { abi_major: 4, kind: 6, table_bytes: 96, provided_caps: 255, required_caps: 223 },
+    fn new(fault: HostFault) -> Self { Self { fault, writes: RefCell::new(Vec::new()), creates: Cell::new(0), deletes: RefCell::new(Vec::new()) } }
+    fn table(&self) -> SvMigrationV5 {
+        SvMigrationV5 {
+            h: SvHeader { abi_major: 5, kind: 6, table_bytes: 104, provided_caps: 255, required_caps: 223 },
             context: (self as *const Self).cast(),
             time_ns: Some(time), tx_seq: Some(sequence), source_read: Some(read), source_keys: Some(keys),
-            preserve_record: Some(preserve), create_record: Some(create), emit_event: Some(event),
+            preserve_record: Some(preserve), create_record: Some(create), emit_event: Some(event), delete_record: Some(delete),
         }
     }
 }
@@ -121,6 +126,22 @@ unsafe extern "C" fn time(_: *const c_void, out: *mut u64) -> SvStatus {
 }
 unsafe extern "C" fn sequence(_: *const c_void, out: *mut u64) -> SvStatus {
     unsafe { out.write(17) }; SvStatus::SUCCESS
+}
+unsafe extern "C" fn delete(raw: *const c_void, source: SvKey) -> SvStatus {
+    // SAFETY: the synchronous test table carries this exact live Host.
+    let host = unsafe { &*raw.cast::<Host>() };
+    host.deletes.borrow_mut().push(RecordKey { kind: source.kind, sys_id: source.sys_id });
+    SvStatus::SUCCESS
+}
+
+#[test]
+fn migration_delete_uses_the_final_scoped_slot() {
+    let plugin = Plugin::open();
+    let host = Host::new(HostFault::None);
+    assert_eq!(plugin.run(&host.table(), b"delete"), SvStatus::SUCCESS);
+    assert_eq!(*host.deletes.borrow(), [RecordKey { kind: 1, sys_id: 7 }]);
+    assert!(host.writes.borrow().is_empty());
+    assert_eq!(host.creates.get(), 0);
 }
 unsafe extern "C" fn keys(raw: *const c_void, kind: u16, visit: SvKeyVisitor, context: *mut c_void, out: *mut SvWalk) -> SvStatus {
     let host = unsafe { &*raw.cast::<Host>() };
@@ -218,10 +239,11 @@ fn source_visitor_panic_cannot_escape_or_be_hidden() {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum BadTable { OldMajor, CandidateKind, MissingSourceRead, MissingTargetWrite, MissingCapability, NullContext }
-#[test_case(BadTable::OldMajor, CoreAbiError::Version { expected: 4, actual: 3 }; "old_major")]
+enum BadTable { OldMajor, CandidateKind, MissingSourceRead, MissingTargetWrite, MissingDelete, MissingCapability, NullContext }
+#[test_case(BadTable::OldMajor, CoreAbiError::Version { expected: 5, actual: 4 }; "old_major")]
 #[test_case(BadTable::MissingSourceRead, CoreAbiError::NullPointer; "source_callback")]
 #[test_case(BadTable::MissingTargetWrite, CoreAbiError::NullPointer; "target_callback")]
+#[test_case(BadTable::MissingDelete, CoreAbiError::NullPointer; "delete_callback")]
 #[test_case(BadTable::MissingCapability, CoreAbiError::UnsupportedCapabilities { required: 128 }; "capability")]
 #[test_case(BadTable::NullContext, CoreAbiError::NullPointer; "context")]
 #[test_case(BadTable::CandidateKind, CoreAbiError::Kind { expected: 6, actual: 4 }; "candidate_is_not_migration")]
@@ -230,10 +252,11 @@ fn bad_migration_host_table_refuses_before_author_callback(fault: BadTable, expe
     let host = Host::new(HostFault::None);
     let mut table = host.table();
     match fault {
-        BadTable::OldMajor => table.h.abi_major = 3,
+        BadTable::OldMajor => table.h.abi_major = 4,
         BadTable::CandidateKind => table.h.kind = 4,
         BadTable::MissingSourceRead => table.source_read = None,
         BadTable::MissingTargetWrite => table.preserve_record = None,
+        BadTable::MissingDelete => table.delete_record = None,
         BadTable::MissingCapability => table.h.provided_caps &= !128,
         BadTable::NullContext => table.context = std::ptr::null(),
     }
