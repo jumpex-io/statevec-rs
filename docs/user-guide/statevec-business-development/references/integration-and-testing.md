@@ -197,8 +197,10 @@ Schema kinds, field layouts, keys, enum discriminants and schema versions feed
 the schema identity. A different business outcome, refusal code or event needs
 a different execution revision even when the schema is unchanged.
 
-Production binds both identities to its execution profile. Existing cluster
-roots refuse a different profile. Coordinate changes with the platform's data
+Production binds both identities and the rules-callback flag to Core version V.
+Cluster/client/projector context carries original execution lineage L, not V;
+the actual opener and image restore separately check V. A loose-file change
+does not authorize activation of another version in an existing root. Coordinate changes with the platform's data
 migration and deployment process; local testing does not establish upgrade
 compatibility.
 

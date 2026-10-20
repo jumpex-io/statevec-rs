@@ -640,7 +640,7 @@ enum ContextComponent {
 
 #[test_case(ContextComponent::Cluster; "cluster")]
 #[test_case(ContextComponent::Genesis; "genesis")]
-#[test_case(ContextComponent::ExecutionProfile; "execution_profile")]
+#[test_case(ContextComponent::ExecutionProfile; "execution_lineage")]
 fn current_operation_context_mismatch_reports_problem_without_releasing_intent(component: ContextComponent) {
     let clock = Clock::new();
     let mut client = client(&clock);
@@ -653,7 +653,7 @@ fn current_operation_context_mismatch_reports_problem_without_releasing_intent(c
     match component {
         ContextComponent::Cluster => context.cluster_identity = Digest32::new([77; 32]),
         ContextComponent::Genesis => context.genesis_identity = Digest32::new([77; 32]),
-        ContextComponent::ExecutionProfile => context.execution_profile = Digest32::new([77; 32]),
+        ContextComponent::ExecutionProfile => context.execution_lineage = Digest32::new([77; 32]),
     }
 
     receive(&mut client, connection, incompatible);
@@ -757,7 +757,7 @@ fn exchange_expiry_waits_for_close_then_retries_the_original_without_a_query() {
         ClientResult::Waiting { .. }
     ));
     let mut stale = completed(&request);
-    stale.binding.context.execution_profile = Digest32::new([77; 32]);
+    stale.binding.context.execution_lineage = Digest32::new([77; 32]);
     receive(&mut client, connection, stale);
     assert!(client.poll_event().is_none(), "old connection input cannot become a current context failure");
     let (query_connection, query) = take_write(&mut client);

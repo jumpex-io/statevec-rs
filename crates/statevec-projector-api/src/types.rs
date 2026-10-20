@@ -34,7 +34,8 @@ pub enum ProjectionContext {
 pub struct SourcePosition {
     pub cluster_identity: Digest32,
     pub genesis_identity: Digest32,
-    pub execution_profile_identity: Digest32,
+    /// Immutable original execution lineage, not the active Core version.
+    pub execution_lineage_identity: Digest32,
     pub manifest: ProjectionManifest,
     pub raft_index: u64,
     pub raft_term: u64,

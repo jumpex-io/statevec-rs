@@ -25,7 +25,7 @@ pub struct ProjectorConfig<'a> {
 pub struct SourceIdentity {
     pub cluster_identity: Digest32,
     pub genesis_identity: Digest32,
-    pub execution_profile_identity: Digest32,
+    pub execution_lineage_identity: Digest32,
     pub manifest: ProjectionManifest,
 }
 

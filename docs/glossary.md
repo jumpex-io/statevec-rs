@@ -17,7 +17,7 @@ One concept uses one term. The qualified terms below identify distinct contracts
 | Event view | `EventView` borrows an event's ordinal, kind and encoded payload from the entry. | A domain-typed decoded event. |
 | Typed event view | `statevec_test::TypedEventView` borrows a captured test event and exposes its generated domain accessor. | A separate decoded copy or a Projector delivery handle. |
 | Raft entry token | Host-issued `RaftEntryToken`, obtained from `entry.token()`, binds the delivered entry to its exact source position for control requests. | A token manufactured from a log index, completed business processing, durability or host acceptance. |
-| Source identity | `SourceIdentity` binds cluster, genesis, execution profile and manifest. | A log position or an ordering between different namespaces. |
+| Source identity | `SourceIdentity` binds cluster, genesis, execution lineage and manifest. | A log position, active Core version or an ordering between different namespaces. |
 | Source position | `SourcePosition` combines source identity, Raft index/term, complete applied-batch identity and transaction progress. | A live token or a recovery authorization. |
 | Raft index | `RaftIndex` means the position of one entry in the Raft log; existing fields remain `raft_index`. | `TxSeq`, a record revision or a byte offset. No new wrapper type is required by this glossary. |
 | Raft term | `RaftTerm` means the Raft election term associated with an entry; existing fields remain `raft_term`. | A transaction sequence or log position. No new wrapper type is required by this glossary. |

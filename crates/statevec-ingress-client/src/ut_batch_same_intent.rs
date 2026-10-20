@@ -337,7 +337,7 @@ fn historical_strong_reply_still_requires_complete_semantic_validation(invalid: 
     let mut response = completed(&original);
     let expected = match invalid {
         InvalidStrongReply::Context => {
-            response.binding.context.execution_profile = Digest32::new([99; 32]);
+            response.binding.context.execution_lineage = Digest32::new([99; 32]);
             ClientError::BatchReply { source: ReplyRequestError::ContextMismatch }
         }
         InvalidStrongReply::Intent => {

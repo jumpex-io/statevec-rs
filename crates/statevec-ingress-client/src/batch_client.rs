@@ -389,7 +389,7 @@ impl IngressClientOwner {
                 context: RequestContext {
                     cluster_identity: identity.0,
                     genesis_identity: identity.1,
-                    execution_profile: identity.2,
+                    execution_lineage: identity.2,
                     session_incarnation,
                     request_id: NonZeroU64::MIN,
                 },
@@ -1028,7 +1028,7 @@ fn validate_batch_state(
             || stream.client_seq != handle.intent.first_sequence()
             || handle.context.cluster_identity != context.cluster_identity
             || handle.context.genesis_identity != context.genesis_identity
-            || handle.context.execution_profile != context.execution_profile
+            || handle.context.execution_lineage != context.execution_lineage
             || handle.context.session_incarnation != context.session_incarnation
             || handle.context.request_id >= request_id
         {

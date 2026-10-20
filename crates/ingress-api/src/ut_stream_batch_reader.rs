@@ -59,7 +59,7 @@ fn encoded_request() -> Vec<u8> {
     ).unwrap();
     let request = Request::Submit {
         context: super::super::RequestContext {
-            cluster_identity: Digest32::ZERO, genesis_identity: Digest32::ZERO, execution_profile: Digest32::ZERO,
+            cluster_identity: Digest32::ZERO, genesis_identity: Digest32::ZERO, execution_lineage: Digest32::ZERO,
             session_incarnation: std::num::NonZeroU128::new(1).unwrap(),
             request_id: std::num::NonZeroU64::new(2).unwrap(),
         }, batch,

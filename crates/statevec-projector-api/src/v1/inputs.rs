@@ -22,7 +22,7 @@ pub(super) fn identity(raw: SvProjectionIdentity) -> Result<SourceIdentity, A> {
     if raw.manifest != 1 { return Err(A::Flag { actual: raw.manifest }); }
     Ok(SourceIdentity {
         cluster_identity: Digest32::new(raw.cluster), genesis_identity: Digest32::new(raw.genesis),
-        execution_profile_identity: Digest32::new(raw.profile), manifest: ProjectionManifest::AllRegisteredSchemaV1,
+        execution_lineage_identity: Digest32::new(raw.profile), manifest: ProjectionManifest::AllRegisteredSchemaV1,
     })
 }
 pub(super) unsafe fn text<'a>(raw: SvBytes, maximum: u64) -> Result<&'a str, A> {

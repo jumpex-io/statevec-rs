@@ -11,9 +11,9 @@ use std::num::{NonZeroU64, NonZeroU128};
 pub const MAX_BATCH_LIFETIME_MILLIS: u64 = 24 * 60 * 60 * 1000;
 
 pub const REPLY_OBSERVATION_BYTES: usize = 34;
-/// Complete v14 request framing and context, before the canonical intent.
+/// Complete v15 request framing and lineage context, before the canonical intent.
 pub const REQUEST_PREFIX_BYTES: usize = 16 + 120;
-/// V13 complete fixed envelope, including framing, context, intent and observation.
+/// Complete fixed envelope, including framing, context, intent and observation.
 pub const REPLY_BASE_BYTES: usize =
     16 + 120 + crate::CLIENT_STREAM_BATCH_COMMITMENT_BYTES + REPLY_OBSERVATION_BYTES + 1;
 pub const ENTRY_BINDING_BYTES: usize = 48;
@@ -41,7 +41,8 @@ impl std::error::Error for InvalidReplyObservation {}
 pub struct RequestContext {
     pub cluster_identity: Digest32,
     pub genesis_identity: Digest32,
-    pub execution_profile: Digest32,
+    /// Original history lineage. Ordinary requests do not select a Core version.
+    pub execution_lineage: Digest32,
     pub session_incarnation: NonZeroU128,
     pub request_id: NonZeroU64,
 }

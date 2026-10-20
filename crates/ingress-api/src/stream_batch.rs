@@ -1,7 +1,8 @@
-//! Current v14 whole-batch ingress codec; retired versions have no fallback.
-//! v14 permits retained Completed results on Reconcile; the body layout is unchanged.
+//! Current v15 whole-batch ingress codec; retired versions have no fallback.
+//! The context binds execution lineage, not the active Core version. Retained
+//! Completed results on Reconcile keep the existing body layout.
 //! Wire context is a declaration, not authenticated identity or admission proof.
-//! The owner must join it to its checked cluster/profile and current history.
+//! The owner must join it to its checked cluster/lineage and current history.
 
 use std::num::{NonZeroU64, NonZeroU128};
 
@@ -17,7 +18,7 @@ pub use reply::{
     ReplyObservation, ReplyRequestError, decode_reply, encode_reply, reply_frame_len,
 };
 
-pub const VERSION: u16 = 14;
+pub const VERSION: u16 = 15;
 pub const HEADER_BYTES: usize = 16;
 pub const CONTEXT_BYTES: usize = 120;
 const PREFIX_BYTES: usize = statevec_frame::stream_batch_protocol::REQUEST_PREFIX_BYTES;
@@ -201,7 +202,7 @@ fn decode_header(
 fn append_context(bytes: &mut Vec<u8>, context: &RequestContext) {
     bytes.extend_from_slice(&context.cluster_identity.bytes());
     bytes.extend_from_slice(&context.genesis_identity.bytes());
-    bytes.extend_from_slice(&context.execution_profile.bytes());
+    bytes.extend_from_slice(&context.execution_lineage.bytes());
     bytes.extend_from_slice(&context.session_incarnation.get().to_le_bytes());
     bytes.extend_from_slice(&context.request_id.get().to_le_bytes());
 }
@@ -210,7 +211,7 @@ fn take_context(remaining: &mut &[u8]) -> Result<RequestContext, FrameError> {
     Ok(RequestContext {
         cluster_identity: Digest32::new(take(remaining)?),
         genesis_identity: Digest32::new(take(remaining)?),
-        execution_profile: Digest32::new(take(remaining)?),
+        execution_lineage: Digest32::new(take(remaining)?),
         session_incarnation: NonZeroU128::new(u128::from_le_bytes(take(remaining)?))
             .ok_or(FrameError::ZeroSessionIncarnation)?,
         request_id: NonZeroU64::new(u64::from_le_bytes(take(remaining)?)).ok_or(FrameError::ZeroRequestId)?,

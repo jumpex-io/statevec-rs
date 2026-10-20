@@ -68,7 +68,7 @@ pub(super) fn position_allowing_genesis(value: SvPosition) -> Result<crate::Sour
     }
     Ok(crate::SourcePosition {
         cluster_identity: crate::Digest32::new(value.cluster), genesis_identity: crate::Digest32::new(value.genesis),
-        execution_profile_identity: crate::Digest32::new(value.profile), manifest: crate::ProjectionManifest::AllRegisteredSchemaV1,
+        execution_lineage_identity: crate::Digest32::new(value.profile), manifest: crate::ProjectionManifest::AllRegisteredSchemaV1,
         raft_index: value.raft_index, raft_term: value.raft_term, applied_batch_identity: crate::AppliedBatchIdentity(value.applied_batch_identity),
         frontier: crate::AppliedTxProgress { applied_tx_seq: value.applied_tx_seq, tx_chain_hash: value.tx_chain_hash },
     })

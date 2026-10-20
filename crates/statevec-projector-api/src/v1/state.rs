@@ -66,7 +66,7 @@ impl<'a> SnapshotReader<'a> {
         let base = host.startup;
         if p.raft_index != target || p.cluster_identity != base.identity.cluster_identity
             || p.genesis_identity != base.identity.genesis_identity
-            || p.execution_profile_identity != base.identity.execution_profile_identity
+            || p.execution_lineage_identity != base.identity.execution_lineage_identity
             || p.manifest != base.identity.manifest
             || p.raft_index == base.raft_index && (p.raft_term != base.raft_term || p.frontier != base.frontier) {
             return Err(A::BindingMismatch.into());

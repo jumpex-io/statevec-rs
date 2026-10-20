@@ -157,7 +157,7 @@ fn current_query_joins_kind_and_full_context(corrupt_profile: bool) {
     let mut response =
         if corrupt_profile { exact(&query) } else { reply(&query, ReplyDisposition::IngressAdmitted(entry())) };
     if corrupt_profile {
-        response.binding.context.execution_profile = Digest32::new([92; 32]);
+        response.binding.context.execution_lineage = Digest32::new([92; 32]);
     }
     receive(&mut client, connection, response);
     let Some(BatchEvent::Progress(BatchProgress::Problem { cause, .. })) = client.poll_event() else {
