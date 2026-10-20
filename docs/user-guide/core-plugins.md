@@ -69,6 +69,10 @@ its successor revision. Replacement/deletion can touch each source ID only once.
 Untouched compatible rows keep their bytes, ID and revision, with no row delta.
 Compatibility compares canonical fields (including names), referenced types
 and reserved spans, not just byte length. Indexes and rules can change.
+The conservative comparison includes each field's `semantic`,
+`rust_type_name` and `immutable` metadata. Changing only a consumer semantic
+tag or diagnostic Rust type name still requires explicit replacement of
+existing rows; byte-compatible aliases are not inferred.
 Untouched incompatible or removed-kind rows reject the whole migration with
 system code 5, reason 8 (`UnprocessedSourceRecord`): the plugin omitted required
 handling. The same package/input/source state will refuse again.
