@@ -98,7 +98,7 @@ pub(super) fn caught(f: impl FnOnce() -> SvStatus) -> SvStatus {
     }
 }
 
-/// Mechanical first unusability/void-callback failure for one accepted call.
+/// Mechanical call-failure fence for local resources, unusability and void callbacks.
 /// The native owner, not this latch or a plugin tag, decides terminal disposition.
 #[derive(Default)]
 pub(super) struct CallFailure(Cell<Option<SvStatus>>);
@@ -108,11 +108,8 @@ impl CallFailure {
     }
     pub(super) fn check(&self, status: SvStatus) -> Result<(), CoreExecutionError> {
         let result = decode(status);
-        if let Err(
-            source @ (CoreExecutionError::PluginPanicked
-            | CoreExecutionError::HostPanicked
-            | CoreExecutionError::AbiContract(_)),
-        ) = &result
+        if let Err(source) = &result
+            && source.must_fail_call()
         {
             self.remember(source);
         }

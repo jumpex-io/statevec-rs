@@ -201,6 +201,17 @@ impl SvStatus {
                     _ => unreachable!(),
                 })
             }
+            20 => {
+                self.require_zero(0)?;
+                self.require_zero(1)?;
+                self.require_zero(2)?;
+                CoreAccessError::EventSequenceOverflow
+            }
+            21 => CoreAccessError::PayloadLength {
+                kind: self.u16(0)?,
+                expected: self.usize(1)?,
+                actual: self.usize(2)?,
+            },
             _ => return Err(self.unknown_cause()),
         })
     }
@@ -279,6 +290,10 @@ impl From<&CoreAccessError> for SvStatus {
                     CoreStorageError::Internal => 12,
                 };
                 (1, [category, 0, 0])
+            }
+            CoreAccessError::EventSequenceOverflow => (20, [0, 0, 0]),
+            CoreAccessError::PayloadLength { kind, expected, actual } => {
+                (21, [kind.into(), expected as u64, actual as u64])
             }
             CoreAccessError::SchemaMissing { kind } => (2, [kind.into(), 0, 0]),
             CoreAccessError::UnknownUniqueKey { kind, unique_key_id } => (3, [kind.into(), unique_key_id.into(), 0]),

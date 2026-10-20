@@ -58,6 +58,22 @@ pub enum CoreExecutionError {
     AbiContract(CoreAbiError),
 }
 
+impl CoreExecutionError {
+    /// This observation must fence the accepted call even if author code
+    /// catches it. Local storage/resource failures cannot become successful
+    /// output. This is not an instance-unusability or retry decision.
+    pub fn must_fail_call(&self) -> bool {
+        matches!(
+            self,
+            Self::Access(CoreAccessError::Storage(_))
+                | Self::Host(_)
+                | Self::PluginPanicked
+                | Self::HostPanicked
+                | Self::AbiContract(_)
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreTxError {
     Rejected(BusinessRejectCode),

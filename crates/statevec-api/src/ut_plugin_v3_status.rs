@@ -75,6 +75,8 @@ fn storage_categories_do_not_require_diagnostic_strings(failure: CoreStorageErro
 #[test_case(CoreAccessError::RecordValues(RecordValueError::MissingDefinition { kind: 0x1234, field_index: 0x5678_9abc }), 17, [0x5678_9abc_1234, 0, 0]; "record enum definition")]
 #[test_case(CoreAccessError::RecordValues(RecordValueError::InvalidValue { kind: 0x1234, field_index: 0x5678_9abc, value: 255 }), 18, [0x5678_9abc_1234, 255, 0]; "record enum value")]
 #[test_case(CoreAccessError::RecordValues(RecordValueError::FixedBytesLength { kind: 0x1234, field_index: 0x5678_9abc, len: 65535, capacity: 64 }), 19, [0x5678_9abc_1234, 65535, 64]; "record fixed bytes length")]
+#[test_case(CoreAccessError::EventSequenceOverflow, 20, [0, 0, 0]; "event sequence exhausted")]
+#[test_case(CoreAccessError::PayloadLength { kind: 0x1234, expected: 40, actual: 8 }, 21, [0x1234, 40, 8]; "exact payload length")]
 fn access_causes_preserve_fields_without_truncation(failure: CoreAccessError, cause: u32, detail: [u64; 3]) {
     let expected = SvStatus { tag: 3, cause, detail };
 
@@ -133,6 +135,7 @@ fn decode(status: SvStatus, decoder: Decoder) -> Result<(), CoreStatusDecodeErro
 #[test_case(Decoder::Access, 3, 19, 0, 0xffff_ffff_ffff; "record bytes packed high bits")]
 #[test_case(Decoder::Access, 3, 19, 1, 65535; "record bytes length width")]
 #[test_case(Decoder::Access, 3, 19, 2, 0xffff_ffff; "record bytes capacity width")]
+#[test_case(Decoder::Access, 3, 21, 0, 65535; "payload kind width")]
 fn checked_detail_width_precedes_narrowing(decoder: Decoder, tag: u32, cause: u32, slot: u8, maximum: u64) {
     let mut status = SvStatus { tag, cause, detail: [0; 3] };
     status.detail[usize::from(slot)] = maximum;
@@ -157,6 +160,9 @@ fn checked_detail_width_precedes_narrowing(decoder: Decoder, tag: u32, cause: u3
 #[test_case(Decoder::Access, 3, 17, 1; "record definition first spare")]
 #[test_case(Decoder::Access, 3, 17, 2; "record definition second spare")]
 #[test_case(Decoder::Access, 3, 18, 2; "record value spare")]
+#[test_case(Decoder::Access, 3, 20, 0; "event sequence first spare")]
+#[test_case(Decoder::Access, 3, 20, 1; "event sequence second spare")]
+#[test_case(Decoder::Access, 3, 20, 2; "event sequence third spare")]
 fn unused_details_must_be_zero(decoder: Decoder, tag: u32, cause: u32, slot: u8) {
     let mut status = SvStatus { tag, cause, detail: [0; 3] };
     status.detail[usize::from(slot)] = 1;
@@ -167,7 +173,7 @@ fn unused_details_must_be_zero(decoder: Decoder, tag: u32, cause: u32, slot: u8)
 #[test_case(Decoder::Schema, 2, 0; "zero schema cause")]
 #[test_case(Decoder::Schema, 2, 8; "unknown schema cause")]
 #[test_case(Decoder::Access, 3, 0; "zero access cause")]
-#[test_case(Decoder::Access, 3, 20; "unknown access cause")]
+#[test_case(Decoder::Access, 3, 22; "unknown access cause")]
 fn unknown_causes_never_become_a_known_failure(decoder: Decoder, tag: u32, cause: u32) {
     assert_eq!(decode(SvStatus { tag, cause, detail: [0; 3] }, decoder), Err(CoreStatusDecodeError::UnknownCause { tag, cause }));
 }

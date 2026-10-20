@@ -97,7 +97,7 @@ impl Drop for Plugin {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum HostFault { None, WrongKey, HostPanic, DoubleRead, WalkCount }
+enum HostFault { None, WrongKey, HostPanic, DoubleRead, WalkCount, Storage(CoreStorageError), Missing, EventSequence, Payload }
 struct Host {
     fault: HostFault,
     writes: RefCell<Vec<(RecordKey, Vec<u8>)>>,
@@ -144,6 +144,15 @@ unsafe extern "C" fn read(raw: *const c_void, _: SvKey, visit: SvReadVisitor, co
 unsafe extern "C" fn preserve(raw: *const c_void, source: SvKey, kind: u16, bytes: SvBytes, out: *mut SvKey) -> SvStatus {
     let host = unsafe { &*raw.cast::<Host>() };
     if matches!(host.fault, HostFault::HostPanic) { return SvStatus::from(&CoreExecutionError::HostPanicked); }
+    if let HostFault::Storage(source) = host.fault {
+        return SvStatus::from(&CoreAccessError::Storage(source));
+    }
+    match host.fault {
+        HostFault::Missing => return SvStatus::from(&CoreAccessError::MissingRecord { key: RecordKey { kind: source.kind, sys_id: source.sys_id } }),
+        HostFault::EventSequence => return SvStatus::from(&CoreAccessError::EventSequenceOverflow),
+        HostFault::Payload => return SvStatus::from(&CoreAccessError::PayloadLength { kind, expected: 4, actual: 3 }),
+        _ => {}
+    }
     let key = RecordKey { kind, sys_id: source.sys_id };
     let data = unsafe { std::slice::from_raw_parts(bytes.ptr, bytes.len as usize) };
     host.writes.borrow_mut().push((key, data.to_vec()));
@@ -176,12 +185,26 @@ fn exported_migration_preserves_result_and_exact_callback_inputs(input: &[u8], e
 #[test_case(HostFault::HostPanic, CoreExecutionError::HostPanicked; "host_panic")]
 #[test_case(HostFault::DoubleRead, CoreExecutionError::AbiContract(CoreAbiError::CallbackCount { expected: 1, actual: 2 }); "repeated_read_visitor")]
 #[test_case(HostFault::WalkCount, CoreExecutionError::AbiContract(CoreAbiError::CallbackCount { expected: 1, actual: 2 }); "walk_count")]
+#[test_case(HostFault::Storage(CoreStorageError::Capacity), CoreExecutionError::Access(CoreAccessError::Storage(CoreStorageError::Capacity)); "ignored_capacity")]
+#[test_case(HostFault::Storage(CoreStorageError::Io), CoreExecutionError::Access(CoreAccessError::Storage(CoreStorageError::Io)); "ignored_io")]
+#[test_case(HostFault::Storage(CoreStorageError::Internal), CoreExecutionError::Access(CoreAccessError::Storage(CoreStorageError::Internal)); "ignored_internal")]
 fn ignored_host_failure_fences_later_writes_and_final_success(fault: HostFault, expected: CoreExecutionError) {
     let plugin = Plugin::open();
     let host = Host::new(fault);
     assert_eq!(plugin.run(&host.table(), b"hide").decode_for(CoreOperation::Migrate),
         Ok(Some(CoreError::Transaction(CoreTxError::Execution(expected)))));
     assert_eq!(host.creates.get(), 0);
+}
+
+#[test_case(HostFault::Missing; "handled missing record")]
+#[test_case(HostFault::EventSequence; "handled deterministic bound")]
+#[test_case(HostFault::Payload; "handled bad payload")]
+fn handled_deterministic_access_error_does_not_poison_the_migration(fault: HostFault) {
+    let plugin = Plugin::open();
+    let host = Host::new(fault);
+    assert_eq!(plugin.run(&host.table(), b"hide"), SvStatus::SUCCESS);
+    assert!(host.writes.borrow().is_empty(), "failed preserve did not publish output");
+    assert_eq!(host.creates.get(), 1, "subsequent author work is still permitted");
 }
 
 #[test]

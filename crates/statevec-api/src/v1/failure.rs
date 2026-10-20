@@ -57,6 +57,9 @@ pub enum CoreStorageError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreAccessError {
     Storage(CoreStorageError),
+    /// Deterministic output bound, not a local allocation failure.
+    EventSequenceOverflow,
+    PayloadLength { kind: u16, expected: usize, actual: usize },
     SchemaMissing { kind: u16 },
     UnknownUniqueKey { kind: u16, unique_key_id: u8 },
     MissingRecord { key: RecordKey },
