@@ -1,5 +1,5 @@
-//! A stateful Core V3 example with double-entry deposits/transfers and a
-//! configured exposure rule. Build: cargo build -p statevec --example core_v3_bank.
+//! A stateful Core V4 example with double-entry deposits/transfers and a
+//! configured exposure rule. Build: cargo build -p statevec --example core_v4_bank.
 //! This has its own schema/revision; it is not an upgrade of another Bank demo.
 use statevec::api::v1::*;
 use statevec::prelude::*;
@@ -96,7 +96,8 @@ impl ConfiguredCore for Configured {
 }
 
 // Business codes belong to this example's revision: 1 invalid amount/account,
-// 2 insufficient funds, 3 arithmetic overflow, 4 candidate exposure limit.
+// 2 insufficient funds, 3 arithmetic overflow, 4 candidate exposure limit,
+// 5 unsupported migration source.
 fn reject(code: u16) -> CoreTxError {
     CoreTxError::Rejected(BusinessRejectCode::new(code).expect("example rejection code"))
 }
@@ -161,6 +162,11 @@ impl Runtime {
     }
 }
 impl CoreRuntime for Runtime {
+    fn initialize_core(&self, _: &mut PluginTx<'_>, _: &[u8]) -> Result<(), CoreTxError> { Ok(()) }
+    fn migrate(&self, _: &mut MigrationTx<'_>, _: CoreVersion, _: &[u8]) -> Result<(), CoreTxError> {
+        // This fixed-layout example declares no accepted source migration yet.
+        Err(reject(5))
+    }
     const TX_INVARIANTS: Option<TxInvariantHook<Self>> = Some(Self::rules);
     fn preflight_command(
         &self,
@@ -204,4 +210,4 @@ impl CoreRuntime for Runtime {
         }
     }
 }
-statevec::api::export_core_plugin_v3!(Module);
+statevec::api::export_core_plugin_v4!(Module);

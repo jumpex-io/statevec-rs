@@ -19,11 +19,16 @@ fn core_tables_match_the_64_bit_c_layout() {
     assert_eq!(align_of::<SvDiscovery>(), 8);
     assert_eq!(offset_of!(SvDiscovery, table), 0);
     assert_eq!(offset_of!(SvDiscovery, table_bytes), 8);
-    assert_eq!(size_of::<SvCoreV3>(), 112);
-    assert_eq!(align_of::<SvCoreV3>(), 8);
-    assert_eq!(offset_of!(SvCoreV3, build_target), 32);
-    assert_eq!(offset_of!(SvCoreV3, configure), 48);
-    assert_eq!(offset_of!(SvCoreV3, destroy_configured), 104);
+    assert_eq!(CORE_ABI_MAJOR, 4);
+    assert_eq!(CORE_LIFECYCLE_CAPABILITY, 128);
+    assert_eq!(CORE_MIGRATION_KIND, 6);
+    assert_eq!(size_of::<SvCoreV4>(), 128);
+    assert_eq!(align_of::<SvCoreV4>(), 8);
+    assert_eq!(offset_of!(SvCoreV4, build_target), 32);
+    assert_eq!(offset_of!(SvCoreV4, configure), 48);
+    assert_eq!(offset_of!(SvCoreV4, initialize_core), 88);
+    assert_eq!(offset_of!(SvCoreV4, migrate), 96);
+    assert_eq!(offset_of!(SvCoreV4, destroy_configured), 120);
     assert_eq!(size_of::<SvCoreMetadata>(), 128);
     assert_eq!(offset_of!(SvCoreMetadata, tx_rules), 48);
     assert_eq!(offset_of!(SvCoreMetadata, schema), 56);
@@ -57,15 +62,20 @@ fn callback_tables_have_no_implicit_padding_between_fields() {
     assert_eq!(offset_of!(SvKey, sys_id), 8);
     assert_eq!(size_of::<SvWalk>(), 16);
     assert_eq!(offset_of!(SvWalk, count), 8);
-    assert_eq!(size_of::<SvTxV3>(), 144);
-    assert_eq!(offset_of!(SvTxV3, context), 32);
-    assert_eq!(offset_of!(SvTxV3, time_ns), 40);
-    assert_eq!(offset_of!(SvTxV3, emit_event), 136);
+    assert_eq!(size_of::<SvTxV4>(), 144);
+    assert_eq!(offset_of!(SvTxV4, context), 32);
+    assert_eq!(offset_of!(SvTxV4, time_ns), 40);
+    assert_eq!(offset_of!(SvTxV4, emit_event), 136);
     assert_eq!(size_of::<SvCandidateChange>(), 64);
     assert_eq!(offset_of!(SvCandidateChange, operation), 16);
     assert_eq!(offset_of!(SvCandidateChange, before), 32);
-    assert_eq!(size_of::<SvCandidateV3>(), 72);
-    assert_eq!(offset_of!(SvCandidateV3, changes), 64);
+    assert_eq!(size_of::<SvCandidateV4>(), 72);
+    assert_eq!(offset_of!(SvCandidateV4, changes), 64);
+    assert_eq!(size_of::<SvMigrationV4>(), 96);
+    assert_eq!(offset_of!(SvMigrationV4, context), 32);
+    assert_eq!(offset_of!(SvMigrationV4, source_read), 56);
+    assert_eq!(offset_of!(SvMigrationV4, preserve_record), 72);
+    assert_eq!(offset_of!(SvMigrationV4, emit_event), 88);
 }
 
 #[test]

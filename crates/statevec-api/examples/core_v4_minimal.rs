@@ -1,5 +1,5 @@
 //! Minimal rule-free plugin. Build with:
-//! cargo build -p statevec-api --example core_v3_minimal
+//! cargo build -p statevec-api --example core_v4_minimal
 //! This demonstrates packaging, not a durable host or a business application.
 use statevec_api::{RuntimeCommandRef, TypedTxContext, v1::*};
 use statevec_model::{CommandSchemaError, SchemaRegistry, Version};
@@ -35,6 +35,9 @@ impl ConfiguredCore for Configured {
 }
 impl CoreRuntime for Runtime {
     const TX_INVARIANTS: Option<TxInvariantHook<Self>> = None;
+    fn initialize_core(&self, _: &mut PluginTx<'_>, _: &[u8]) -> Result<(), CoreTxError> { Ok(()) }
+    // This deliberately empty-schema example produces an empty target.
+    fn migrate(&self, _: &mut MigrationTx<'_>, _: CoreVersion, _: &[u8]) -> Result<(), CoreTxError> { Ok(()) }
     fn preflight_command(&self, _: &RuntimeCommandRef<'_>) -> Result<(), CommandSchemaError> {
         Ok(())
     }
@@ -44,4 +47,4 @@ impl CoreRuntime for Runtime {
         Ok(())
     }
 }
-statevec_api::export_core_plugin_v3!(Module);
+statevec_api::export_core_plugin_v4!(Module);

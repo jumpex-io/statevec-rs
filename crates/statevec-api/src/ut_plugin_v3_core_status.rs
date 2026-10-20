@@ -1,6 +1,16 @@
 use crate::{BusinessRejectCode, v1::*};
 use test_case::test_case;
 
+#[test]
+fn lifecycle_operation_numbers_append_without_reusing_existing_codes() {
+    assert_eq!(CoreOperation::HostCallback.code(), 9);
+    assert_eq!(CoreOperation::InitializeCore.code(), 10);
+    assert_eq!(CoreOperation::Migrate.code(), 11);
+    assert_eq!(CoreOperation::from_code(10), Some(CoreOperation::InitializeCore));
+    assert_eq!(CoreOperation::from_code(11), Some(CoreOperation::Migrate));
+    assert_eq!(CoreOperation::from_code(12), None);
+}
+
 #[test_case(ConfigureError::Invalid { code: u32::MAX }, 1, 0xffff_ffff; "invalid configuration")]
 #[test_case(ConfigureError::UnsupportedCapabilities { required: u64::MAX }, 2, u64::MAX; "required capabilities")]
 #[test_case(ConfigureError::Resource(ResourceError::Allocation { requested: 4096 }), 3, 4096; "configuration allocation")]
@@ -153,6 +163,8 @@ const RETURNS: [SvStatus; 12] = [
 #[test_case(CoreOperation::DestroyInstance, &[0, 7, 9]; "destroy instance")]
 #[test_case(CoreOperation::DestroyConfigured, &[0, 7, 9]; "destroy configured")]
 #[test_case(CoreOperation::HostCallback, &[0, 2, 3, 4, 5, 6, 7, 8, 9]; "host callback")]
+#[test_case(CoreOperation::InitializeCore, &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]; "initialize core")]
+#[test_case(CoreOperation::Migrate, &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]; "migrate")]
 fn operation_selects_legal_returns(operation: CoreOperation, accepted: &[u32]) {
     for wire in RETURNS {
         let result = wire.decode_for(operation);

@@ -149,6 +149,11 @@ impl<const RULES: bool> Runtime<RULES> {
     }
 }
 impl<const RULES: bool> CoreRuntime for Runtime<RULES> {
+    fn initialize_core(&self, _: &mut PluginTx<'_>, _: &[u8]) -> Result<(), CoreTxError> { Ok(()) }
+    fn migrate(&self, _: &mut MigrationTx<'_>, _: CoreVersion, _: &[u8]) -> Result<(), CoreTxError> {
+        // Migration requires an explicitly supported source layout.
+        Err(reject(5))
+    }
     const TX_INVARIANTS: Option<TxInvariantHook<Self>> = if RULES { Some(Self::rules) } else { None };
     fn preflight_command(&self, command: &RuntimeCommandRef<'_>) -> Result<(), statevec::model::CommandSchemaError> {
         match command.command_kind() {

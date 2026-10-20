@@ -84,6 +84,8 @@ pub enum CoreOperation {
     DestroyInstance,
     DestroyConfigured,
     HostCallback,
+    InitializeCore,
+    Migrate,
 }
 
 impl CoreOperation {
@@ -98,6 +100,8 @@ impl CoreOperation {
             Self::DestroyInstance => 7,
             Self::DestroyConfigured => 8,
             Self::HostCallback => 9,
+            Self::InitializeCore => 10,
+            Self::Migrate => 11,
         }
     }
 
@@ -112,6 +116,8 @@ impl CoreOperation {
             7 => Self::DestroyInstance,
             8 => Self::DestroyConfigured,
             9 => Self::HostCallback,
+            10 => Self::InitializeCore,
+            11 => Self::Migrate,
             _ => return None,
         })
     }
@@ -122,7 +128,7 @@ impl CoreOperation {
             Self::Metadata => matches!(tag, 0 | 7 | 9),
             Self::CreateInstance => matches!(tag, 0 | 7 | 9 | 11),
             Self::PreflightBatch | Self::HostCallback => matches!(tag, 0 | 2..=9),
-            Self::RunTx | Self::ValidateTxInvariants => matches!(tag, 0..=9),
+            Self::RunTx | Self::ValidateTxInvariants | Self::InitializeCore | Self::Migrate => matches!(tag, 0..=9),
             Self::DestroyInstance | Self::DestroyConfigured => matches!(tag, 0 | 7 | 9),
         }
     }

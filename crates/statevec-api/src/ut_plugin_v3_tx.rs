@@ -303,12 +303,12 @@ unsafe extern "C" fn event(raw: *mut c_void, kind: u16, value: SvBytes) -> SvSta
         .push((kind, unsafe { bytes(value).unwrap() }.to_vec()));
     SvStatus::SUCCESS
 }
-pub(crate) fn table(host: &Host) -> SvTxV3 {
-    let mut table = SvTxV3 {
+pub(crate) fn table(host: &Host) -> SvTxV4 {
+    let mut table = SvTxV4 {
         h: SvHeader {
-            abi_major: 3,
+            abi_major: CORE_ABI_MAJOR,
             kind: 3,
-            table_bytes: std::mem::size_of::<SvTxV3>() as u64,
+            table_bytes: std::mem::size_of::<SvTxV4>() as u64,
             provided_caps: CORE_CAPABILITIES,
             required_caps: 0,
         },

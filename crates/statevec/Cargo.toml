@@ -1,6 +1,6 @@
 [package]
 name = "statevec"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.91"
 description = "Facade crate for building schema-first deterministic StateVec domain plugins."
@@ -20,17 +20,17 @@ serde.workspace = true
 serde_json.workspace = true
 
 [[example]]
-name = "core_v3_bank"
+name = "core_v4_bank"
 crate-type = ["cdylib"]
 
 [[example]]
-name = "core_v3_faults"
+name = "core_v4_faults"
 crate-type = ["cdylib"]
 
 [[example]]
-name = "core_v3_exchange"
+name = "core_v4_exchange"
 crate-type = ["cdylib"]
 
 [[example]]
-name = "core_v3_exchange_no_rules"
+name = "core_v4_exchange_no_rules"
 crate-type = ["cdylib"]

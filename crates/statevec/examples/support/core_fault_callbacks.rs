@@ -14,7 +14,7 @@ unsafe extern "C" fn configure(config: SvBytes, out: *mut *mut c_void) -> SvStat
     unsafe { __export::configure(&Module, config, out) }
 }
 static ORIGINAL: __export::CoreExportTable = __export::CoreExportTable::new::<Module>(configure);
-struct Tables { original: SvCoreV3, exposed: SvCoreV3 }
+struct Tables { original: SvCoreV4, exposed: SvCoreV4 }
 // SAFETY: immutable copied SDK tables contain only static target bytes and
 // functions. No runtime, configured handle or borrowed callback is stored here.
 unsafe impl Send for Tables {}
@@ -26,8 +26,8 @@ fn tables() -> &'static Tables {
         // SAFETY: aligned, exact-size local output; ORIGINAL is static.
         unsafe { ORIGINAL.discover(size_of::<SvDiscovery>() as u64, &mut discovery) };
         // SAFETY: the SDK returned its immutable full table, retained forever.
-        let original = unsafe { *discovery.table.cast::<SvCoreV3>() };
-        let exposed = SvCoreV3 {
+        let original = unsafe { *discovery.table.cast::<SvCoreV4>() };
+        let exposed = SvCoreV4 {
             create_instance: Some(entries::create),
             destroy_instance: Some(entries::destroy),
             preflight_batch: Some(entries::preflight),
@@ -40,10 +40,10 @@ fn tables() -> &'static Tables {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn statevec_core_plugin_entry_v3(bytes: u64, out: *mut SvDiscovery) -> u32 {
+pub unsafe extern "C" fn statevec_core_plugin_entry_v4(bytes: u64, out: *mut SvDiscovery) -> u32 {
     if bytes != size_of::<SvDiscovery>() as u64 || out.is_null() || !out.is_aligned() { return 1; }
     // SAFETY: host's valid writable discovery slot; full immutable table.
-    unsafe { out.write(SvDiscovery { table: (&tables().exposed as *const SvCoreV3).cast(), table_bytes: size_of::<SvCoreV3>() as u64 }) };
+    unsafe { out.write(SvDiscovery { table: (&tables().exposed as *const SvCoreV4).cast(), table_bytes: size_of::<SvCoreV4>() as u64 }) };
     0
 }
 
@@ -51,7 +51,7 @@ unsafe extern "C" fn conflicting_write(context: *mut c_void, _: SvBytes) -> SvSt
     // SAFETY: run's synchronous read visitor carries the live table, not the
     // borrowed record. This asks the host to mutate while its read loan lives;
     // the host must refuse before creating a mutable Rust borrow.
-    let tx = unsafe { &*context.cast::<SvTxV3>() };
+    let tx = unsafe { &*context.cast::<SvTxV4>() };
     let mut found = 0;
     let key = SvKey { kind: 1, reserved16: 0, reserved32: 0, sys_id: 1 };
     // SAFETY: live context and independent writable flag. This is a checked
@@ -63,7 +63,7 @@ unsafe extern "C" fn conflicting_write(context: *mut c_void, _: SvBytes) -> SvSt
     SvStatus::SUCCESS // Deliberately try to hide the callback failure.
 }
 
-unsafe extern "C" fn run(instance: *const c_void, tx: *const SvTxV3, command: *const SvCommand) -> SvStatus {
+unsafe extern "C" fn run(instance: *const c_void, tx: *const SvTxV4, command: *const SvCommand) -> SvStatus {
     entries::entered(instance, 1);
     // SAFETY: the production host loans valid V3 pointers and the complete
     // preflight-checked two-u64 payload for this synchronous call.

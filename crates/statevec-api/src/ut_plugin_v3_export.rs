@@ -80,6 +80,12 @@ impl ConfiguredCore for Bound {
     }
 }
 impl CoreRuntime for Runtime {
+    fn initialize_core(&self, tx: &mut PluginTx<'_>, input: &[u8]) -> Result<(), super::super::CoreTxError> {
+        self.run_tx(tx, &RuntimeCommandRef::new(1, 0, 0, input))
+    }
+    fn migrate(
+        &self, _: &mut super::super::MigrationTx<'_>, _: statevec_model::CoreVersion, _: &[u8],
+    ) -> Result<(), super::super::CoreTxError> { Ok(()) }
     const TX_INVARIANTS: Option<TxInvariantHook<Self>> = Some(|_, _| Ok(()));
     fn preflight_command(
         &self,
@@ -354,4 +360,39 @@ fn exported_run_preserves_void_callback_failure_without_hiding_unusability(exit:
     };
     assert_eq!(status, SvStatus::from(&expected));
     assert_eq!(fixture.counts.run.load(Ordering::Relaxed), 1);
+}
+
+#[test_case(HandlerExit::Success; "callback_error_then_success")]
+#[test_case(HandlerExit::Panic; "callback_error_then_panic")]
+fn exported_initialization_preserves_the_transaction_failure_latch(exit: HandlerExit) {
+    use crate::v1::tx::tests::{Fault, Host, table};
+    use crate::v1::{CoreExecutionError, CoreOperation, HostError, ResourceError};
+    let mut fixture = Fixture::bound(exit as u8);
+    assert!(fixture.create().is_success());
+    let mut host = Host::default();
+    host.fault = Fault::EventFailure;
+    let tx = table(&host);
+    // SAFETY: scoped scripted host table and exact SDK-owned instance.
+    let status = unsafe { (TABLE.0.initialize_core.unwrap())(fixture.instance, &tx, SvBytes::borrowed(b"init")) };
+    let expected = match exit {
+        HandlerExit::Success => CoreExecutionError::Host(HostError::Resource(ResourceError::Os { code: 5 })),
+        HandlerExit::Panic => CoreExecutionError::PluginPanicked,
+    };
+    assert_eq!(status, SvStatus::from(&expected));
+    assert!(status.decode_for(CoreOperation::InitializeCore).is_ok());
+    assert_eq!(fixture.counts.run.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn initialization_refuses_old_host_major_before_calling_author() {
+    use crate::v1::tx::tests::{Host, table};
+    let mut fixture = Fixture::bound(0);
+    assert!(fixture.create().is_success());
+    let host = Host::default();
+    let mut tx = table(&host);
+    tx.h.abi_major = 3;
+    // SAFETY: complete table with an intentionally unsupported header.
+    let status = unsafe { (TABLE.0.initialize_core.unwrap())(fixture.instance, &tx, SvBytes::EMPTY) };
+    assert_eq!(status, SvStatus::from(&CoreAbiError::Version { expected: 4, actual: 3 }));
+    assert_eq!(fixture.counts.run.load(Ordering::Relaxed), 0);
 }

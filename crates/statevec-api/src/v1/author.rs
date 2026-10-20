@@ -1,5 +1,5 @@
-//! Safe authoring surface for the fixed-version Core V3 host.
-use super::{ConfigureError, CoreCreateError, CoreExecutionError, CoreTxError, tx::PluginTx};
+//! Safe authoring surface for a configured Core ABI 4 host.
+use super::{ConfigureError, CoreCreateError, CoreExecutionError, CoreTxError, CoreVersion, MigrationTx, tx::PluginTx};
 use crate::{ReferenceTimeUnavailable, RuntimeCommandRef};
 use statevec_model::{CommandSchemaError, RecordKey, SchemaRegistry};
 
@@ -33,6 +33,21 @@ pub type TxInvariantHook<R> = fn(&R, &dyn CandidateRead) -> Result<(), CoreTxErr
 /// catching an unwind does not authorize reuse of this instance.
 pub trait CoreRuntime: Sized + 'static {
     const TX_INVARIANTS: Option<TxInvariantHook<Self>>;
+    /// Deterministic initialization of the empty business state. This can run
+    /// more than once (proposal, validation, apply or replay). It must have no
+    /// external side effects; use only input and the deterministic host views,
+    /// never wall-clock time, randomness, process state or external I/O.
+    fn initialize_core(&self, tx: &mut PluginTx<'_>, input: &[u8]) -> Result<(), CoreTxError>;
+    /// Construct the complete target record set from source-layout records.
+    /// Omission deletes a record. Trials are discarded and committed apply
+    /// recomputes this callback; the same deterministic/no-side-effects contract
+    /// as initialization applies. The host owns version, history and position.
+    fn migrate(
+        &self,
+        tx: &mut MigrationTx<'_>,
+        source: CoreVersion,
+        input: &[u8],
+    ) -> Result<(), CoreTxError>;
     fn preflight_command(
         &self,
         command: &RuntimeCommandRef<'_>,

@@ -1,4 +1,4 @@
-//! Core ABI qualification fixture, not an application runtime. Valid commands
+//! Core ABI 4 qualification fixture, not an application runtime. Valid commands
 //! deliberately unwind in preflight, dispatch or the rule hook. Atomic counts
 //! observe physical calls only; they never decide business output or recovery.
 use statevec::api::v1::*;
@@ -155,6 +155,10 @@ impl Runtime {
     }
 }
 impl CoreRuntime for Runtime {
+    fn initialize_core(&self, _: &mut PluginTx<'_>, _: &[u8]) -> Result<(), CoreTxError> { Ok(()) }
+    fn migrate(&self, _: &mut MigrationTx<'_>, _: CoreVersion, _: &[u8]) -> Result<(), CoreTxError> {
+        Err(CoreTxError::Rejected(BusinessRejectCode::new(1).unwrap()))
+    }
     const TX_INVARIANTS: Option<TxInvariantHook<Self>> = Some(Self::rules);
     fn preflight_command(
         &self,

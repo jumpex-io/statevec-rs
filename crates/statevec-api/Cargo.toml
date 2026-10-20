@@ -1,6 +1,6 @@
 [package]
 name = "statevec-api"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.91"
 description = "Runtime host APIs and plugin ABI types for StateVec domain plugins."
@@ -18,5 +18,5 @@ smallvec.workspace = true
 test-case = "3.3.1"
 
 [[example]]
-name = "core_v3_minimal"
+name = "core_v4_minimal"
 crate-type = ["cdylib"]

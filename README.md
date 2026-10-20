@@ -103,7 +103,7 @@ dependencies. Applications provide their plugins and business configuration.
 The actual engine/Node executables still come from the matching host distribution;
 the launcher is not a replacement engine or a claim of release availability.
 
-Configured hosts use the public Core V3 and Projector V1 interfaces with a
+Configured hosts use the public Core V4 and Projector V1 interfaces with a
 matched host build. The legacy plugin ABI version 2 remains a separate surface;
 its presence does not provide compatibility with those configured interfaces
 or establish support for online upgrades.

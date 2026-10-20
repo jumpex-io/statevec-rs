@@ -124,12 +124,12 @@ unsafe extern "C" fn changes(
     }
     SvStatus::SUCCESS
 }
-fn table(host: &Host) -> SvCandidateV3 {
-    SvCandidateV3 {
+fn table(host: &Host) -> SvCandidateV4 {
+    SvCandidateV4 {
         h: SvHeader {
-            abi_major: 3,
+            abi_major: CORE_ABI_MAJOR,
             kind: 4,
-            table_bytes: std::mem::size_of::<SvCandidateV3>() as u64,
+            table_bytes: std::mem::size_of::<SvCandidateV4>() as u64,
             provided_caps: CORE_CAPABILITIES,
             required_caps: 0,
         },

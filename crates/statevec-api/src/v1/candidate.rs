@@ -4,14 +4,14 @@ use statevec_model::RecordKey;
 use std::ffi::c_void;
 
 pub(super) struct Candidate<'call> {
-    table: &'call SvCandidateV3,
+    table: &'call SvCandidateV4,
     pub failure: CallFailure,
 }
 impl<'call> Candidate<'call> {
     /// # Safety
     /// The host supplies a live immutable table/context for this call, implements
     /// its C signatures, and loans callback bytes synchronously without unwind.
-    pub unsafe fn from_raw(raw: *const SvCandidateV3) -> Result<Self, CoreAbiError> {
+    pub unsafe fn from_raw(raw: *const SvCandidateV4) -> Result<Self, CoreAbiError> {
         // SAFETY: forwarding the host's readable header and scoped allocation.
         let table = unsafe { table(raw, 4, CORE_CANDIDATE_CAPABILITY | 1)? };
         if table.context.is_null()

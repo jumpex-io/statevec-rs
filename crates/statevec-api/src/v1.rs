@@ -4,8 +4,8 @@
 //! Core plugin contracts and typed error transport.
 //!
 //! Authors implement CoreModule, ConfiguredCore and CoreRuntime, and use
-//! `statevec_api::export_core_plugin_v3!` to build a loadable library. `v1`
-//! names the safe Rust API; the macro still exports Core C ABI 3. Neither the
+//! `statevec_api::export_core_plugin_v4!` to build a loadable library. `v1`
+//! names the safe Rust API; the macro exports Core C ABI 4. Neither the
 //! Rust module name nor the Cargo version changes the C ABI. A status
 //! does not prove speculation was discarded or authorize instance reuse. This
 //! API does not bridge the legacy plugin ABI or supply a durable host.
@@ -18,6 +18,7 @@ mod author;
 mod borrow;
 mod candidate;
 mod tx;
+mod migration;
 #[doc(hidden)]
 #[path = "v1/export.rs"]
 pub mod __export;
@@ -28,6 +29,8 @@ pub use author::{
     TxInvariantHook, CandidateRead, CandidateChange, CandidateAfterChange,
 };
 pub use tx::PluginTx;
+pub use migration::{MigrationTx, SourceRecords, TargetRecords};
+pub use statevec_model::CoreVersion;
 
 pub use failure::{CoreAccessError, CoreSchemaError, CoreStorageError};
 pub use status::{CoreStatusDecodeError, SvStatus};

@@ -71,7 +71,7 @@ pub(super) unsafe extern "C" fn preflight(
     returned(instance, CoreOperation::PreflightBatch, status);
     status
 }
-pub(super) unsafe extern "C" fn rules(instance: *const c_void, candidate: *const SvCandidateV3) -> SvStatus {
+pub(super) unsafe extern "C" fn rules(instance: *const c_void, candidate: *const SvCandidateV4) -> SvStatus {
     entered(instance, 2);
     // SAFETY: exact synchronous host arguments forwarded unchanged.
     let status = unsafe { (tables().original.validate_tx_invariants.unwrap())(instance, candidate) };

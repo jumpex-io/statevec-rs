@@ -23,16 +23,16 @@ use std::ffi::c_void;
 /// }
 /// ```
 pub struct PluginTx<'call> {
-    table: &'call SvTxV3,
+    table: &'call SvTxV4,
     pub(super) failure: CallFailure,
 }
 
 impl<'call> PluginTx<'call> {
     /// # Safety
     /// Host table, context and callback storage are live for 'call, have their
-    /// V3 C signatures and never unwind, retain loans or run callbacks in
+    /// V4 C signatures and never unwind, retain loans or run callbacks in
     /// parallel. The table header must be readable even when incompatible.
-    pub(super) unsafe fn from_raw(raw: *const SvTxV3) -> Result<Self, CoreAbiError> {
+    pub(super) unsafe fn from_raw(raw: *const SvTxV4) -> Result<Self, CoreAbiError> {
         // SAFETY: forwarding the caller's header/table lifetime obligation.
         let table = unsafe { table(raw, 3, CORE_BASE_CAPABILITIES)? };
         if table.context.is_null()
@@ -175,23 +175,7 @@ impl TxReadContext for PluginTx<'_> {
                 &mut out,
             )
         };
-        self.failure.check(call.failure.unwrap_or(status))?;
-        self.failure.check(status)?;
-        let checked = if out.reserved != 0 {
-            Err(abi(CoreAbiError::Reserved {
-                actual: out.reserved.into(),
-            }))
-        } else if out.tag != 0 {
-            Err(abi(CoreAbiError::Flag { actual: out.tag }))
-        } else if out.count != call.count {
-            Err(abi(CoreAbiError::CallbackCount {
-                expected: call.count,
-                actual: out.count,
-            }))
-        } else {
-            Ok(())
-        };
-        checked.inspect_err(|source| self.failure.remember(source))
+        call.finish(status, out, &self.failure)
     }
     fn count_index_prefix_capped_raw(
         &self,
@@ -411,13 +395,29 @@ unsafe extern "C" fn write_visit<
     status
 }
 
-struct KeyCall<'a> {
-    kind: u16,
-    visit: &'a mut dyn FnMut(RecordKey),
-    count: u64,
-    failure: Option<SvStatus>,
+pub(super) struct KeyCall<'a> {
+    pub(super) kind: u16,
+    pub(super) visit: &'a mut dyn FnMut(RecordKey),
+    pub(super) count: u64,
+    pub(super) failure: Option<SvStatus>,
 }
-unsafe extern "C" fn key_visit(context: *mut c_void, value: SvKey, flow: *mut u32) -> SvStatus {
+impl KeyCall<'_> {
+    pub(super) fn finish(&self, status: SvStatus, out: SvWalk, failure: &CallFailure) -> Result<(), CoreExecutionError> {
+        failure.check(self.failure.unwrap_or(status))?;
+        failure.check(status)?;
+        let checked = if out.reserved != 0 {
+            Err(abi(CoreAbiError::Reserved { actual: out.reserved.into() }))
+        } else if out.tag != 0 {
+            Err(abi(CoreAbiError::Flag { actual: out.tag }))
+        } else if out.count != self.count {
+            Err(abi(CoreAbiError::CallbackCount { expected: self.count, actual: out.count }))
+        } else {
+            Ok(())
+        };
+        checked.inspect_err(|source| failure.remember(source))
+    }
+}
+pub(super) unsafe extern "C" fn key_visit(context: *mut c_void, value: SvKey, flow: *mut u32) -> SvStatus {
     // SAFETY: adapter-supplied callback storage lives until traversal returns.
     let call = unsafe { &mut *context.cast::<KeyCall<'_>>() };
     if let Some(status) = call.failure {

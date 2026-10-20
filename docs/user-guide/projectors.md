@@ -20,7 +20,8 @@ host-side decoding live in `v1::{ffi, host}`.
 
 `v1` is the first safe Rust API namespace in this naming scheme. It does not
 mean C ABI 1: `export_projector_plugin_v2!` exports Projector ABI 2, while
-`export_core_plugin_v3!` exports Core ABI 3. Neither C ABI changes in SDK 0.5.0.
+`export_core_plugin_v4!` exports Core ABI 4 in the development 0.6.0 SDK.
+The lifecycle change does not change Projector ABI 2.
 
 ## Consume complete Raft entries
 
