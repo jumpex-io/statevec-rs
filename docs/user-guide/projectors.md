@@ -32,6 +32,15 @@ same fixed schema and offset does not repair a mismatch. Stop and remove the
 attachment to recover Core-only service; do not reset an offset or switch to
 latest-state while retaining an incompatible decoder.
 
+Removing the attachment also removes its continuous-offset constraint on Core
+checkpoint selection. A later Core checkpoint may advance beyond the saved
+projector offset P; reattaching that old offset to the advanced root then refuses
+with `RestoreBeforeEngineBase`. Core-only catch-up is not a promise that the old
+continuous projector can be attached again. Preserve a compatible checkpoint and
+its replay material before detaching if that history must remain recoverable;
+otherwise plan an explicit read-model rebuild/migration with a compatible decoder.
+Do not reset P or change the projector ID to imply that missing history was consumed.
+
 `v1` is the first safe Rust API namespace in this naming scheme. It does not
 mean C ABI 1: `export_projector_plugin_v2!` exports Projector ABI 2, while
 `export_core_plugin_v5!` exports Core ABI 5 in the development 0.6.0 SDK.
