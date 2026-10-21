@@ -46,6 +46,10 @@ pub trait NativeDurableOffsetReport: Copy {
 /// Read-only Tx output. Raw engine output alone is not an applied Raft entry.
 pub trait AppliedTx {
     fn result(&self) -> TxResult<'_>;
+    /// Schema of before images, as reported by the applied engine. It may
+    /// differ from `output().schema_identity` at a lifecycle activation.
+    /// Implementations must expose the real source, not assume source = target.
+    fn source_schema_identity(&self) -> statevec_model::SchemaIdentity;
     fn output(&self) -> &TxDelta;
 }
 

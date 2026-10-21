@@ -18,6 +18,20 @@ The separate `native` namespace contains owned-entry/receiver/control traits for
 runtime integration. It is not a second step of the plugin API. Raw C tables and
 host-side decoding live in `v1::{ffi, host}`.
 
+Native attachments also bind one fixed schema. The host checks the whole frame's
+actual source and target schemas before lending it to a native receiver or plugin;
+latest-state delivery checks the frozen state's schema. A mismatch stops the
+hosting learner without advancing its durable projector offset, not the voters.
+`native::AppliedTx::source_schema_identity()` exposes the actual before-image
+schema; `output().schema_identity` remains the target schema. Implementors must
+provide the new required accessor: this is a paired Rust source API change, not
+a default assumption that the two schemas are equal. The Projector C ABI is
+unchanged. Schema-preserving Core upgrades remain supported; a schema-changing
+upgrade requires a separately planned projector migration. Restarting with the
+same fixed schema and offset does not repair a mismatch. Stop and remove the
+attachment to recover Core-only service; do not reset an offset or switch to
+latest-state while retaining an incompatible decoder.
+
 `v1` is the first safe Rust API namespace in this naming scheme. It does not
 mean C ABI 1: `export_projector_plugin_v2!` exports Projector ABI 2, while
 `export_core_plugin_v5!` exports Core ABI 5 in the development 0.6.0 SDK.
