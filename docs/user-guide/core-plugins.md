@@ -50,6 +50,59 @@ Do not read side files or mutable global settings during execution. Live and
 snapshot-candidate runtime instances can coexist; an engine can create and
 discard instances repeatedly.
 
+## Build and pack a Core package
+
+The Linux `statevec-material` crate provides package authoring without a server
+checkout or runtime-engine dependency. Build your `cdylib`, then run:
+
+```sh
+cargo build --release -p my-core
+cargo run --locked -p statevec-material -- pack declaration.json configuration.bin core.svtar x86_64-unknown-linux-gnu target/release/libmy_core.so
+```
+
+From this SDK checkout, `cargo install --locked --path crates/statevec-material`
+installs the same `statevec-material pack` command. The SDK executable contains
+`pack` only. The server distribution supplies the extended tool with
+`inspect`, `verify`, `compare`, `provision`, `bind` and `list`; its `pack` command
+forwards to this implementation. Choose the appropriate distribution for an
+installation prefix; they intentionally use the same executable name and pack
+arguments, not two archive encoders.
+
+The declaration is JSON with no extra fields:
+
+```json
+{
+  "schema_identity": {
+    "version": "0100",
+    "types": "00000000000000000000000000000000",
+    "records": "00000000000000000000000000000000",
+    "commands": "00000000000000000000000000000000",
+    "events": "00000000000000000000000000000000"
+  },
+  "execution_revision": "example-rules-1",
+  "has_tx_invariants": true
+}
+```
+
+Replace the example values with your actual `SchemaRegistry::identity()`
+(`Version::to_bytes()` and the four fingerprints, lowercase hex), configured
+semantic revision and runtime rule-dispatch setting. The declaration does not
+contain a supplied V or byte digests: the shared `CoreVersion::derive` and
+packer compute them. Configuration is copied as exact bytes, not normalized
+JSON. Its execution-relevant meaning must already be bound by the revision.
+
+An optional second `TARGET ARTIFACT` adds `aarch64-unknown-linux-gnu`; in a
+dual-target archive x86_64 must come first. Either target may be the only one.
+The tool checks bounded input, ELF headers/dependencies and canonical tar bytes,
+but never executes a plugin. `execution: "not_checked"` is deliberate; use the
+matched server's `verify` before deployment to check actual ABI/configured V.
+The format and semantic-V hash are the same as server-authored packages.
+Manifest/configuration/artifact limits are 16 KiB / 1 MiB / 256 MiB per target;
+the complete archive is bounded by 514 MiB. Output is create-only. Failure may
+leave partial output for explicit inspection/removal; it is not a store
+publication. Success is exit 0, invalid arguments 2, I/O 3 and material refusal
+4; stdout is one bounded JSON object, never configuration/artifact contents.
+
 ## Initialization and migration
 
 The development 0.6.0 SDK adds `initialize_core` and `migrate`; pair it with a

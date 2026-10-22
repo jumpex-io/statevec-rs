@@ -6,6 +6,7 @@ members = [
     "crates/statevec-api",
     "crates/statevec-test",
     "crates/statevec-frame",
+    "crates/statevec-material",
     "crates/ingress-api",
     "crates/statevec-ingress-client",
     "crates/statevec-projector-api",
@@ -30,6 +31,7 @@ statevec_api = { package = "statevec-api", version = "0.6.0", path = "crates/sta
 statevec_test = { package = "statevec-test", version = "0.6.0", path = "crates/statevec-test" }
 
 statevec_frame = { package = "statevec-frame", version = "0.6.0", path = "crates/statevec-frame" }
+statevec_material = { package = "statevec-material", version = "0.6.0", path = "crates/statevec-material" }
 ingress_api = { package = "ingress-api", version = "0.6.0", path = "crates/ingress-api" }
 statevec_ingress_client = { package = "statevec-ingress-client", version = "0.6.0", path = "crates/statevec-ingress-client" }
 statevec_projector_api = { package = "statevec-projector-api", version = "0.6.0", path = "crates/statevec-projector-api" }

@@ -43,6 +43,7 @@ The flight-booking example covers inventory and reservations.
 | `statevec-model` | Records, commands, events, schemas, keys and schema identity |
 | `statevec-macros` | Schema declarations, accessors, builders and checked payloads |
 | `statevec-api` | Business transaction interfaces and the plugin ABI |
+| `statevec-material` | Canonical Core `.svtar` codec, static ELF checks and the SDK-only `statevec-material pack` command |
 | `statevec-test` | A small memory engine and helpers for local tests |
 | `statevec-ingress-client` | Bounded cluster client with manual, background and async driving |
 | `ingress-api` | Request/reply codecs and incremental frame readers |

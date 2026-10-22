@@ -23,6 +23,25 @@ impl Digest32 {
 pub struct CoreVersion(Digest32);
 
 impl CoreVersion {
+    /// Frozen semantic-V preimage shared by plugin authoring and the engine.
+    /// `revision` includes normalized execution-relevant rules; dispatch is
+    /// bound independently. Raw configuration and package bytes are not inputs.
+    /// Derivation does not attest that a runtime actually reports these values.
+    pub fn derive(schema: crate::SchemaIdentity, revision: &str, has_tx_invariants: bool) -> Self {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        hash.update(b"statevec-core-version-v1");
+        hash.update(schema.schema_version.to_bytes());
+        hash.update(schema.types_schema_fingerprint);
+        hash.update(schema.record_schema_fingerprint);
+        hash.update(schema.command_schema_fingerprint);
+        hash.update(schema.event_schema_fingerprint);
+        hash.update((revision.len() as u64).to_le_bytes());
+        hash.update(revision.as_bytes());
+        hash.update([u8::from(has_tx_invariants)]);
+        Self::from_digest(Digest32::new(hash.finalize().into()))
+    }
+
     pub const fn from_digest(digest: Digest32) -> Self {
         Self(digest)
     }

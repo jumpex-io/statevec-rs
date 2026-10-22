@@ -1,0 +1,23 @@
+[package]
+name = "statevec-material"
+version = "0.6.0"
+edition = "2024"
+rust-version = "1.91"
+description = "Canonical StateVec Core package authoring and static material checks."
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+statevec_model.workspace = true
+statevec_api.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
+rustix = { version = "1.1.4", features = ["param"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+test-case.workspace = true

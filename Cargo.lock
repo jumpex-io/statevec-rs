@@ -647,6 +647,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "statevec-material"
+version = "0.6.0"
+dependencies = [
+ "libc",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "statevec-api",
+ "statevec-model",
+ "tempfile",
+ "test-case",
+]
+
+[[package]]
 name = "statevec-model"
 version = "0.6.0"
 dependencies = [
