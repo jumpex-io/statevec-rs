@@ -427,6 +427,8 @@ fn refusal_tag(reason: BatchSubmitRefusal) -> u8 {
         BatchSubmitRefusal::ShuttingDown => 6,
         BatchSubmitRefusal::IncompatibleContext => 7,
         BatchSubmitRefusal::InternalFailure => 8,
+        BatchSubmitRefusal::CoreNotPrepared => 9,
+        BatchSubmitRefusal::CoreRuntimeFailure => 10,
     }
 }
 
@@ -440,6 +442,8 @@ fn take_refusal(tag: u8) -> Result<BatchSubmitRefusal, FrameError> {
         6 => BatchSubmitRefusal::ShuttingDown,
         7 => BatchSubmitRefusal::IncompatibleContext,
         8 => BatchSubmitRefusal::InternalFailure,
+        9 => BatchSubmitRefusal::CoreNotPrepared,
+        10 => BatchSubmitRefusal::CoreRuntimeFailure,
         observed => return Err(FrameError::UnsupportedRefusal { observed }),
     })
 }

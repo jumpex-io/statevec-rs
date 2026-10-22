@@ -1,4 +1,4 @@
-//! Current v15 whole-batch ingress codec; retired versions have no fallback.
+//! Current v16 whole-batch ingress codec; retired versions have no fallback.
 //! The context binds execution lineage, not the active Core version. Retained
 //! Completed results on Reconcile keep the existing body layout.
 //! Wire context is a declaration, not authenticated identity or admission proof.
@@ -18,7 +18,7 @@ pub use reply::{
     ReplyObservation, ReplyRequestError, decode_reply, encode_reply, reply_frame_len,
 };
 
-pub const VERSION: u16 = 15;
+pub const VERSION: u16 = 16;
 pub const HEADER_BYTES: usize = 16;
 pub const CONTEXT_BYTES: usize = 120;
 const PREFIX_BYTES: usize = statevec_frame::stream_batch_protocol::REQUEST_PREFIX_BYTES;

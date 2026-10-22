@@ -378,7 +378,9 @@ impl IngressClientOwner {
                         // not prove this original intent failed or never ran.
                         Some(unavailable_limit)
                     }
-                    BatchSubmitRefusal::InternalFailure => {
+                    BatchSubmitRefusal::InternalFailure
+                    | BatchSubmitRefusal::CoreNotPrepared
+                    | BatchSubmitRefusal::CoreRuntimeFailure => {
                         // Without the explicit node-failure observation, retain
                         // the execution/unknown fault rather than blindly retry.
                         self.suspend_batch(ClientError::ServerRefused { reason });

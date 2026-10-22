@@ -132,7 +132,8 @@ conservative. Local stop and lifetime expiry still return `OutcomeUnknown`;
 neither is a server refusal, even if no send was observed.
 
 For a Submit without known commitment, `InternalFailure` without a node `Failed`
-observation suspends the batch and publishes a problem rather than automatically
+observation, `CoreNotPrepared` (target not resident), or `CoreRuntimeFailure`
+(local target acquisition failure) suspends the batch and publishes a problem rather than automatically
 settling or replaying it. Correct the reported environment/configuration problem,
 retain the original intent, and use the uncertain-original recovery path below.
 Do not interpret the refusal name as proof that no earlier attempt was admitted.

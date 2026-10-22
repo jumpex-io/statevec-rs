@@ -631,6 +631,30 @@ fn old_session_is_ignored_but_wrong_intent_on_current_submit_is_a_typed_problem(
     assert!(matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::Applied { .. }))));
 }
 
+#[test_case(BatchSubmitRefusal::CoreNotPrepared; "not_prepared")]
+#[test_case(BatchSubmitRefusal::CoreRuntimeFailure; "runtime_failure")]
+fn core_material_refusal_retains_the_original_intent_without_automatic_retry(reason: BatchSubmitRefusal) {
+    let clock = Clock::new();
+    let mut client = client(&clock);
+    connect(&mut client);
+    client.try_submit(batch(1)).unwrap();
+    let (connection, request) = take_write(&mut client);
+    write_return(&mut client, connection, &request);
+
+    receive(&mut client, connection, reply(&request, ReplyDisposition::Refused(reason)));
+    assert!(matches!(client.poll_event(),
+        Some(BatchEvent::Progress(BatchProgress::Problem { cause, .. }))
+        if matches!(*cause, ClientError::ServerRefused { reason: actual } if actual == reason)));
+    assert!(matches!(client.try_submit(batch(1)).unwrap_err().reason, ClientError::Full));
+    clock.set(INITIAL_TIME + RETRY);
+    assert!(matches!(client.drive(ClientEvent::Drive), ClientResult::Waiting { wake_at: Some(due) }
+        if due.get() == INITIAL_TIME + LIFETIME), "material refusal grants no new Submit");
+
+    receive(&mut client, connection, completed(&request));
+    assert!(matches!(client.poll_event(), Some(BatchEvent::Terminal(BatchTerminal::Applied { .. }))));
+    assert!(client.poll_event().is_none(), "late exact evidence settles only the original intent");
+}
+
 #[derive(Debug, Clone, Copy)]
 enum ContextComponent {
     Cluster,

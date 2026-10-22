@@ -11,7 +11,7 @@ use std::num::{NonZeroU64, NonZeroU128};
 pub const MAX_BATCH_LIFETIME_MILLIS: u64 = 24 * 60 * 60 * 1000;
 
 pub const REPLY_OBSERVATION_BYTES: usize = 34;
-/// Complete v15 request framing and lineage context, before the canonical intent.
+/// Complete v16 request framing and lineage context, before the canonical intent.
 pub const REQUEST_PREFIX_BYTES: usize = 16 + 120;
 /// Complete fixed envelope, including framing, context, intent and observation.
 pub const REPLY_BASE_BYTES: usize =
@@ -192,6 +192,12 @@ pub enum BatchSubmitRefusal {
     /// This operation failed internally; not proof of non-commitment and not
     /// advice to retry unchanged input. Business rejection is an outcome.
     InternalFailure,
+    /// The requested Core is not resident. This attempt was refused before
+    /// proposal; no statement about an earlier uncertain send or retry advice.
+    CoreNotPrepared,
+    /// Local target acquisition failed before proposal. Keep the exact intent;
+    /// this is not a committed lifecycle rejection or automatic retry advice.
+    CoreRuntimeFailure,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

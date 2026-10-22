@@ -382,7 +382,7 @@ impl ByteTape {
             worktree_diff: worktree_diff.clone(),
             generator_version: 1,
             profile: format!(
-                "scripted-v15; single-slot; frame={FRAME_LIMIT}; commands={COMMAND_LIMIT}; outcome={OUTCOME_LIMIT}; retry={RETRY}; operation={OPERATION}; lifetime={LIFETIME}; unavailable={UNAVAILABLE_LIMIT}; starts={:?}; two-sockets-one-endpoint; virtual-ms-start={INITIAL_TIME}",
+                "scripted-v16; single-slot; frame={FRAME_LIMIT}; commands={COMMAND_LIMIT}; outcome={OUTCOME_LIMIT}; retry={RETRY}; operation={OPERATION}; lifetime={LIFETIME}; unavailable={UNAVAILABLE_LIMIT}; starts={:?}; two-sockets-one-endpoint; virtual-ms-start={INITIAL_TIME}",
                 idle_start()
             ),
             seed,
