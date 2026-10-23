@@ -25,3 +25,6 @@ pub mod recovery_mode {
     pub const CONTINUOUS_HISTORY: u32 = 1;
     pub const LATEST_STATE_ONLY: u32 = 2;
 }
+vocabulary!(query_key_tag { UNIQUE_KEY=0, SYS_ID=1 });
+vocabulary!(query_reply_tag { PENDING=0, READY=1, REJECTED=2, DISCONNECTED=3 });
+vocabulary!(query_rejection { UNKNOWN_KIND=1, UNKNOWN_UNIQUE_KEY=2, REPLY_TOO_LARGE=3, ENGINE_UNAVAILABLE=4 });

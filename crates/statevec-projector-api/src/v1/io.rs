@@ -42,6 +42,8 @@ pub(super) struct ScopeData {
     pub state: Mutex<Held>,
     pub abandoned: std::sync::atomic::AtomicBool,
     pub replies: Mutex<[ReplySlot; 4]>,
+    pub query: Option<SvEngineQueryHostV1>,
+    pub queries: Mutex<[ReplySlot; 4]>,
     completion: Mutex<SvProjectorCompletion>,
     observation: super::observation::WorkerObservation,
     pub startup: super::StartupPosition,
@@ -118,6 +120,20 @@ impl ScopeData {
         // SAFETY: one move-only reply owns this cookie, still covered by scope.
         let result = call(unsafe { self.table.release_reply.unwrap()(self.table.context, &mut returned) }, Op::ReleaseReply);
         if returned == 0 { self.replies.lock().unwrap_or_else(|e| e.into_inner())[index] = ReplySlot::Free; }
+        if let Err(failure) = result { self.record(ScopeFailureSlot::ReplyRelease, failure); }
+        else if returned != 0 { self.record(ScopeFailureSlot::ReplyRelease, A::InvalidHandle.into()); }
+    }
+    pub fn release_query(&self, cookie: u64) {
+        let Some(table) = self.query else { return };
+        let index = {
+            let mut held = self.queries.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(index) = held.iter().position(|item| matches!(item, ReplySlot::Held(item) if item.cookie == cookie && item.release == ReleaseDisposition::Available && cookie != 0)) else { return; };
+            held[index] = ReplySlot::Held(Held { cookie, release: ReleaseDisposition::Attempted }); index
+        };
+        let mut returned = cookie;
+        // SAFETY: one move-only query handle owns this cookie, still covered by scope.
+        let result = call(unsafe { table.release_query.unwrap()(self.table.context, &mut returned) }, Op::ReleaseEngineQuery);
+        if returned == 0 { self.queries.lock().unwrap_or_else(|e| e.into_inner())[index] = ReplySlot::Free; }
         if let Err(failure) = result { self.record(ScopeFailureSlot::ReplyRelease, failure); }
         else if returned != 0 { self.record(ScopeFailureSlot::ReplyRelease, A::InvalidHandle.into()); }
     }
@@ -221,13 +237,25 @@ pub unsafe fn with_host(
     table: &SvProjectorHostV2, startup: &SvProjectorStart,
     run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(), F>,
 ) -> Result<SvProjectorCompletion, A> {
-    let host = ScopeData::new(table, startup)?;
+    let host = ScopeData::new(table, None, startup)?;
+    Ok(host.run(run))
+}
+
+/// [`with_host`] for a host table that also provides engine queries.
+///
+/// # Safety
+/// As for [`with_host`]; the query callbacks follow the same rules.
+pub unsafe fn with_query_host(
+    table: &SvProjectorHostV2Query, startup: &SvProjectorStart,
+    run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(), F>,
+) -> Result<SvProjectorCompletion, A> {
+    let host = ScopeData::new(&table.base, Some(&table.query), startup)?;
     Ok(host.run(run))
 }
 
 impl ScopeData {
-pub(super) fn new(table: &SvProjectorHostV2, raw: &SvProjectorStart) -> Result<Self, A> {
-    validate_host(table)?;
+pub(super) fn new(table: &SvProjectorHostV2, query: Option<&SvEngineQueryHostV1>, raw: &SvProjectorStart) -> Result<Self, A> {
+    validate_host(table, query)?;
     let (startup, initialization) = super::inputs::startup(raw)?;
     let required = PROJECTOR_BASE_CAPABILITIES | match initialization {
         crate::StartInstruction::DeliverEntries => CONTINUOUS_HISTORY_CAPABILITY,
@@ -237,7 +265,7 @@ pub(super) fn new(table: &SvProjectorHostV2, raw: &SvProjectorStart) -> Result<S
         return Err(A::UnsupportedCapabilities { required });
     }
     let projector_id = crate::ProjectorId::new(raw.projector_id.decode()?).map_err(|_| A::InvalidHandle)?;
-    Ok(Self { table: *table, projector_id, frame: Mutex::new(Held::default()), state: Mutex::new(Held::default()), abandoned: std::sync::atomic::AtomicBool::new(false), replies: Mutex::new([ReplySlot::Free; 4]), completion: Mutex::new(SvProjectorCompletion::EMPTY), observation: super::observation::WorkerObservation::new(), startup, initialization })
+    Ok(Self { table: *table, projector_id, frame: Mutex::new(Held::default()), state: Mutex::new(Held::default()), abandoned: std::sync::atomic::AtomicBool::new(false), replies: Mutex::new([ReplySlot::Free; 4]), query: query.copied(), queries: Mutex::new([ReplySlot::Free; 4]), completion: Mutex::new(SvProjectorCompletion::EMPTY), observation: super::observation::WorkerObservation::new(), startup, initialization })
 }
 pub(super) fn poll(&self) -> (bool, SvProjectorFailureObservation) { self.observation.read() }
 pub(super) fn terminal(&self) -> SvProjectorCompletion { *self.completion.lock().unwrap_or_else(|e| e.into_inner()) }
@@ -258,6 +286,8 @@ pub(super) fn run(&self, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(
     host.release_frame();
     let cookies = host.replies.lock().unwrap_or_else(|e| e.into_inner()).map(|item| match item { ReplySlot::Held(item) => item.cookie, _ => 0 });
     for cookie in cookies { host.release_reply(cookie); }
+    let cookies = host.queries.lock().unwrap_or_else(|e| e.into_inner()).map(|item| match item { ReplySlot::Held(item) => item.cookie, _ => 0 });
+    for cookie in cookies { host.release_query(cookie); }
     if host.abandoned.load(std::sync::atomic::Ordering::Acquire) {
         let result = host.terminal();
         if [result.run_failure, result.frame_release_failure, result.state_release_failure,
@@ -273,7 +303,8 @@ pub(super) fn run(&self, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(
     if let Err(cause) = call(unsafe { host.table.notify.unwrap()(host.table.context, 2, &SvProjectorFailureObservation::NONE) }, Op::Notify) { host.record(ScopeFailureSlot::Notification, cause); }
     let joined = host.frame.lock().unwrap_or_else(|e| e.into_inner()).cookie == 0
         && host.state.lock().unwrap_or_else(|e| e.into_inner()).cookie == 0
-        && host.replies.lock().unwrap_or_else(|e| e.into_inner()).iter().all(|item| matches!(item, ReplySlot::Free));
+        && host.replies.lock().unwrap_or_else(|e| e.into_inner()).iter().all(|item| matches!(item, ReplySlot::Free))
+        && host.queries.lock().unwrap_or_else(|e| e.into_inner()).iter().all(|item| matches!(item, ReplySlot::Free));
     let mut completion = host.completion.lock().unwrap_or_else(|e| e.into_inner());
     completion.joined = u32::from(joined);
     let result = *completion;

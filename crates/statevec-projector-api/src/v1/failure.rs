@@ -22,6 +22,7 @@ scalar_enum!(ProjectorOperation {
     ReportDurableOffset=16, OfferStatus=17, PollReply=18, ReleaseReply=19,
     Stopping=20, Notify=21, SnapshotInfo=22, NextSnapshotRecord=23, FinishSnapshot=24,
     ReleaseSnapshot=25, OfferSnapshotConfirmation=26,
+    OfferEngineQuery=27, PollEngineQuery=28, EngineQueryRecord=29, ReleaseEngineQuery=30,
 });
 scalar_enum!(ProjectorIoStage {
     StoreOpen=1, StoreRead=2, StoreWrite=3, StoreSync=4, OffsetSave=5,

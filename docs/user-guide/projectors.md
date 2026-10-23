@@ -189,6 +189,25 @@ The unsafe `v1::host::with_host` entry is for an integration that already owns a
 host table, startup binding and callback resources that remain alive through all
 actual joins. Application authors normally use the generated exporter instead.
 
+### Engine queries
+
+A host can also answer lookups against the engine. It then passes the
+`SvProjectorHostV2Query` table and provides `ENGINE_QUERY_CAPABILITY`; otherwise
+`control.engine_query_supported()` is false and `offer_engine_query()` returns
+`Unsupported`. A query is a batch of up to `MAX_ENGINE_QUERY_KEYS` keys, each an
+`EngineQueryKey::UniqueKey { kind, uk_id, key }` or `EngineQueryKey::SysId { kind, sys_id }`.
+`key` is the encoded unique key, as `Registry::encode_unique_keys` produces it from
+a record with those fields set. A system-id lookup matches only a live record of
+that kind.
+
+The handle polls like a control reply. `Ready` gives the engine's Raft position and
+frontier and one optional `EngineRecordView` per key, in request order; the record
+bytes stay borrowed until the handle is dropped. The whole batch is read from one
+engine state between applied entries. That state may be ahead of the entries this
+projector has consumed, so compare `position()` with your own model before
+combining the two. `Rejected` refuses the whole batch (unknown kind or unique key,
+an oversized reply, or no usable engine); `Disconnected` means the host dropped it.
+
 For latest-state initialization, the first source delivery is a `SnapshotReader`.
 `info()` gives the exact frozen baseline and live-record count. `next_record()`
 lends one record, returns `Progress` for a bounded scan quantum, or returns `End`

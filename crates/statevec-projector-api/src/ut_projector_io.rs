@@ -7,6 +7,8 @@ use std::{ffi::c_void, sync::atomic::{AtomicBool, AtomicU64, Ordering}};
 mod state_tests;
 #[path = "ut_projector_semantics.rs"]
 mod semantics_tests;
+#[path = "ut_projector_query.rs"]
+mod query_tests;
 unsafe fn with_host(table: &SvProjectorHostV2, id: &str, run: impl for<'io> FnOnce(ProjectorIo<'io>) -> Result<(), ProjectorError>) -> Result<SvProjectorCompletion, ProjectorAbiError> {
     // Mechanical table input, never a native source/cut attestation.
     let start = SvProjectorStart { identity: SvProjectionIdentity { manifest: 1, ..Default::default() }, peer_id: 1,

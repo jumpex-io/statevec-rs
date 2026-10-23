@@ -34,12 +34,21 @@ pub(super) fn call(status: SvStatus, op: Op) -> Result<(), F> {
     }
 }
 
-pub(super) fn validate_host(table: &SvProjectorHostV2) -> Result<(), A> {
+/// Exact table size for a header: the query table iff it provides queries.
+pub(super) fn host_table_bytes(h: &SvHeader) -> u64 {
+    if h.provided_caps & ENGINE_QUERY_CAPABILITY != 0 { std::mem::size_of::<SvProjectorHostV2Query>() as u64 }
+    else { std::mem::size_of::<SvProjectorHostV2>() as u64 }
+}
+
+pub(super) fn validate_host(table: &SvProjectorHostV2, query: Option<&SvEngineQueryHostV1>) -> Result<(), A> {
     let h = table.h;
     if h.abi_major != PROJECTOR_ABI_MAJOR { return Err(A::Version { expected: PROJECTOR_ABI_MAJOR, actual: h.abi_major }); }
     if h.kind != PROJECTOR_HOST_KIND { return Err(A::Kind { expected: PROJECTOR_HOST_KIND, actual: h.kind }); }
-    if h.table_bytes != std::mem::size_of::<SvProjectorHostV2>() as u64 { return Err(A::TableSize { expected: std::mem::size_of::<SvProjectorHostV2>() as u64, actual: h.table_bytes }); }
-    if (h.provided_caps | h.required_caps) & !PROJECTOR_CAPABILITIES != 0
+    let expected = host_table_bytes(&h);
+    if h.table_bytes != expected || query.is_some() != (h.provided_caps & ENGINE_QUERY_CAPABILITY != 0) {
+        return Err(A::TableSize { expected, actual: h.table_bytes });
+    }
+    if (h.provided_caps & !PROJECTOR_HOST_CAPABILITIES) | (h.required_caps & !PROJECTOR_CAPABILITIES) != 0
         || h.provided_caps & h.required_caps != h.required_caps
         || ![PROJECTOR_BASE_CAPABILITIES | CONTINUOUS_HISTORY_CAPABILITY,
               PROJECTOR_BASE_CAPABILITIES | LATEST_STATE_CAPABILITY].contains(&h.required_caps) {
@@ -52,6 +61,10 @@ pub(super) fn validate_host(table: &SvProjectorHostV2) -> Result<(), A> {
         || table.poll_reply.is_none() || table.release_reply.is_none() || table.stopping.is_none()
         || table.notify.is_none() || table.state_info.is_none() || table.state_next.is_none()
         || table.finish_state.is_none() || table.release_state.is_none() || table.offer_rebuild.is_none() { return Err(A::NullPointer); }
+    if let Some(query) = query
+        && (query.offer_query.is_none() || query.poll_query.is_none() || query.query_record.is_none() || query.release_query.is_none()) {
+        return Err(A::NullPointer);
+    }
     Ok(())
 }
 

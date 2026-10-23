@@ -3,7 +3,8 @@
 use std::ffi::c_void;
 pub use statevec_api::v1::ffi::{SvBytes, SvDiscovery, SvHeader, SvKey, SvSchemaIdentity};
 pub use super::SvStatus;
-pub use super::wire::{receive_tag, offer_tag, state_tag, reply_tag, status_kind, rejection_reason, recovery_tag, recovery_mode};
+pub use super::wire::{receive_tag, offer_tag, state_tag, reply_tag, status_kind, rejection_reason, recovery_tag, recovery_mode,
+    query_key_tag, query_reply_tag, query_rejection};
 
 pub const PROJECTOR_ABI_MAJOR: u32 = 2;
 pub const PROJECTOR_KIND: u32 = 2;
@@ -12,6 +13,12 @@ pub const PROJECTOR_BASE_CAPABILITIES: u64 = 0x1f;
 pub const CONTINUOUS_HISTORY_CAPABILITY: u64 = 0x20;
 pub const LATEST_STATE_CAPABILITY: u64 = 0x40;
 pub const PROJECTOR_CAPABILITIES: u64 = 0x7f;
+/// Optional host-table capability: the table is `SvProjectorHostV2Query`.
+/// A host provides it only with that exact table size; it is never required.
+pub const ENGINE_QUERY_CAPABILITY: u64 = 0x80;
+pub const PROJECTOR_HOST_CAPABILITIES: u64 = PROJECTOR_CAPABILITIES | ENGINE_QUERY_CAPABILITY;
+pub const MAX_ENGINE_QUERY_KEYS: u64 = 4096;
+pub const MAX_ENGINE_QUERY_KEY_BYTES: u64 = 1024;
 pub const PROJECTOR_ENTRY_SYMBOL: &std::ffi::CStr = c"statevec_projector_plugin_entry_v2";
 pub type SvProjectorEntry = unsafe extern "C" fn(u64, *mut SvDiscovery) -> u32;
 
@@ -165,3 +172,37 @@ pub struct SvProjectorV2 {
     pub destroy_prepared: Option<unsafe extern "C" fn(*mut *mut c_void) -> SvStatus>,
     pub destroy_configured: Option<unsafe extern "C" fn(*mut *mut c_void) -> SvStatus>,
 }
+
+/// One lookup. `UNIQUE_KEY` uses kind, uk_id and the encoded key bytes;
+/// `SYS_ID` uses kind and sys_id with uk_id 0 and an empty key.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SvEngineQueryKey { pub tag: u32, pub kind: u16, pub uk_id: u8, pub reserved: u8, pub sys_id: u64, pub key: SvBytes }
+/// Borrowed only for the offer call; the host copies every key it accepts.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SvEngineQuery { pub keys: *const SvEngineQueryKey, pub count: u64 }
+/// Position fields are nonzero only for `READY`, `cause` only for `REJECTED`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SvEngineQueryInfo {
+    pub tag: u32, pub cause: u32, pub raft_index: u64, pub raft_term: u64,
+    pub applied_tx_seq: u64, pub tx_chain_hash: [u8; 32], pub count: u64,
+}
+/// `record` stays readable until the query handle is released.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SvEngineQueryRecord { pub found: u32, pub reserved: u32, pub key: SvKey, pub revision: u64, pub record: SvBytes }
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SvEngineQueryHostV1 {
+    pub offer_query: Option<unsafe extern "C" fn(*mut c_void, *const SvEngineQuery, *mut u32, *mut u64) -> SvStatus>,
+    pub poll_query: Option<unsafe extern "C" fn(*mut c_void, u64, *mut SvEngineQueryInfo) -> SvStatus>,
+    pub query_record: Option<unsafe extern "C" fn(*mut c_void, u64, u64, *mut SvEngineQueryRecord) -> SvStatus>,
+    pub release_query: Option<unsafe extern "C" fn(*mut c_void, *mut u64) -> SvStatus>,
+}
+/// The V2 host table followed by the engine query callbacks. `base.h`
+/// describes this whole table and provides `ENGINE_QUERY_CAPABILITY`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SvProjectorHostV2Query { pub base: SvProjectorHostV2, pub query: SvEngineQueryHostV1 }

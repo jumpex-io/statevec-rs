@@ -18,8 +18,11 @@ pub(super) unsafe extern "C" fn start<P: PreparedProjector>(prepared: *mut *mut 
         let header = unsafe { host.cast::<SvHeader>().read() };
         if header.abi_major != PROJECTOR_ABI_MAJOR { return (&A::Version { expected: PROJECTOR_ABI_MAJOR, actual: header.abi_major }).into(); }
         if header.kind != PROJECTOR_HOST_KIND { return (&A::Kind { expected: PROJECTOR_HOST_KIND, actual: header.kind }).into(); }
-        let expected = std::mem::size_of::<SvProjectorHostV2>() as u64;
+        let expected = crate::v1::borrow::host_table_bytes(&header);
         if header.table_bytes != expected { return (&A::TableSize { expected, actual: header.table_bytes }).into(); }
+        // SAFETY: the header declares and the size check admits the query table.
+        let query = (header.provided_caps & ENGINE_QUERY_CAPABILITY != 0)
+            .then(|| unsafe { &(*host.cast::<SvProjectorHostV2Query>()).query });
         // SAFETY: exact call-borrowed inputs and known live SDK Prepared handle.
         let holding = unsafe { &*raw };
         let context = unsafe { &*context };
@@ -28,7 +31,7 @@ pub(super) unsafe extern "C" fn start<P: PreparedProjector>(prepared: *mut *mut 
             || binding.projector_id != context.projector_id || binding.mode != context.recovery_mode {
             return (&A::BindingMismatch).into();
         }
-        let scope = match ScopeData::new(unsafe { &*host }, context) { Ok(value) => Arc::new(value), Err(cause) => return (&cause).into() };
+        let scope = match ScopeData::new(unsafe { &*host }, query, context) { Ok(value) => Arc::new(value), Err(cause) => return (&cause).into() };
         let mut worker = Box::new(Worker { scope: scope.clone(), join: None });
         let pending = holding.pending.clone();
         // Only an accepted thread can take P. Dropping the closure after a

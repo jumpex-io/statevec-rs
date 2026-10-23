@@ -15,6 +15,7 @@ mod io;
 mod views;
 mod state;
 mod control;
+mod query;
 mod pending;
 mod plugin;
 mod inputs;
@@ -32,6 +33,7 @@ pub use io::{Delivery, RaftEntryDelivery, ProjectorControlPort, ProjectorIo, Pro
 pub use views::{RaftEntryView, TxView, EventView, RecordDeltaView};
 pub use state::{SnapshotReader, SnapshotRead, SnapshotInfo, SnapshotRecordView};
 pub use control::{RaftEntryToken, DurableOffsetReport, NotContinuousHistory, ControlDecision, SnapshotToken, Offer, ReplyHandle, ReplyPoll};
+pub use query::{EngineQueryKey, EngineQueryRejection, QueryOffer, EngineQueryPosition, EngineRecordView, EngineQueryPoll, EngineQueryHandle, EngineQueryResult};
 pub use pending::{ControlProgress, PendingDurableOffset, PendingSnapshotConfirmation};
 
 pub use statevec_api::v1::{ConfigureError, HostError, ResourceError, SvStatus};
@@ -44,7 +46,7 @@ pub(crate) use transport::ControlReply;
 /// Host/export integration. These decoders and unsafe callback adapters are
 /// not needed by a plugin implementing the configured contracts above.
 pub mod host {
-    pub use super::io::with_host;
+    pub use super::io::{with_host, with_query_host};
     pub use super::status::{decode_call, decode_failure};
     pub use super::completion::{ProjectorCompletion, decode_observation};
     pub use super::transport::ControlReply;
