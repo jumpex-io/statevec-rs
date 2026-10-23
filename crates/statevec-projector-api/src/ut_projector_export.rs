@@ -4,7 +4,7 @@ use ffi::*;
 use std::{ffi::c_void, num::NonZeroUsize, sync::{Arc, Mutex}, time::{Duration, Instant}};
 
 #[derive(Clone, Copy, Debug)]
-enum Case { Normal, RunError, RunPanic, ServicePanic, WaitForStop, RecoveryPanic, InvalidRecovery, PrepareHostError, DropPanic }
+enum Case { Normal, ReportQuery, RunError, RunPanic, ServicePanic, WaitForStop, RecoveryPanic, InvalidRecovery, PrepareHostError, DropPanic }
 type Log = Arc<Mutex<Vec<(&'static str, std::thread::ThreadId)>>>;
 struct Module { log: Log, case: Case }
 struct Config { log: Log, case: Case }
@@ -59,6 +59,10 @@ impl PreparedProjector for Prepared {
         let parts = io.split();
         match self.case {
             Case::RunError => Err(ProjectorError::Application { code: 42 }),
+            Case::ReportQuery => {
+                note(&self.log, if parts.control.engine_query_supported() { "query" } else { "no_query" });
+                Ok(())
+            }
             Case::RunPanic => std::panic::panic_any(PanicPayload),
             Case::ServicePanic => {
                 parts.services.spawn(|_| std::panic::panic_any(PanicPayload))?;
@@ -375,4 +379,56 @@ fn physical_worker_spawn_refusal_returns_prepared_to_the_bootstrap_thread() {
     let log = log.lock().unwrap();
     assert_eq!(log.iter().map(|(event, _)| *event).collect::<Vec<_>>(), ["configure", "prepare", "prepared_drop", "configured_drop"]);
     assert!(log.iter().all(|(_, thread)| *thread == std::thread::current().id()));
+}
+
+unsafe extern "C" fn no_offer(_: *mut c_void, _: *const SvEngineQuery, _: *mut u32, _: *mut u64) -> SvStatus { (&ProjectorAbiError::InvalidHandle).into() }
+unsafe extern "C" fn no_poll(_: *mut c_void, _: u64, _: *mut SvEngineQueryInfo) -> SvStatus { (&ProjectorAbiError::InvalidHandle).into() }
+unsafe extern "C" fn no_record(_: *mut c_void, _: u64, _: u64, _: *mut SvEngineQueryRecord) -> SvStatus { (&ProjectorAbiError::InvalidHandle).into() }
+unsafe extern "C" fn no_release(_: *mut c_void, _: *mut u64) -> SvStatus { (&ProjectorAbiError::InvalidHandle).into() }
+fn query_host(fixture: &io_tests::Fixture) -> SvProjectorHostV2Query {
+    let mut base = fixture.table();
+    base.h.provided_caps |= ENGINE_QUERY_CAPABILITY;
+    base.h.table_bytes = std::mem::size_of::<SvProjectorHostV2Query>() as u64;
+    SvProjectorHostV2Query { base, query: SvEngineQueryHostV1 { offer_query: Some(no_offer), poll_query: Some(no_poll), query_record: Some(no_record), release_query: Some(no_release) } }
+}
+
+#[test_case::test_case(true; "query_table")]
+#[test_case::test_case(false; "v2_table")]
+fn exported_start_reads_the_query_callbacks_only_from_a_query_table(query: bool) {
+    let fixture = io_tests::Fixture::new();
+    let (mut config, log) = configured(Case::ReportQuery);
+    let mut prepared = prepared(config);
+    let mut running = Running { worker: std::ptr::null_mut(), _host: &fixture };
+    let extended = query_host(&fixture);
+    let plain = fixture.table();
+    let host = if query { std::ptr::from_ref(&extended).cast::<SvProjectorHostV2>() } else { &plain };
+    assert_eq!(unsafe { table().start.unwrap()(&mut prepared, host, &startup(), &mut running.worker) }, SvStatus::SUCCESS);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let expected = if query { "query" } else { "no_query" };
+    while !log.lock().unwrap().iter().any(|(event, _)| *event == expected) {
+        assert!(Instant::now() < deadline, "run must report what the exported start admitted");
+        std::thread::yield_now();
+    }
+    drop(running);
+    assert_eq!(unsafe { table().destroy_configured.unwrap()(&mut config) }, SvStatus::SUCCESS);
+}
+
+#[test]
+fn exported_start_refuses_a_query_capability_without_the_query_table() {
+    let fixture = io_tests::Fixture::new();
+    let (mut config, log) = configured(Case::ReportQuery);
+    let mut prepared = prepared(config);
+    let original = prepared;
+    let mut host = fixture.table();
+    host.h.provided_caps |= ENGINE_QUERY_CAPABILITY;
+    let mut worker = std::ptr::dangling_mut::<c_void>();
+    let result = unsafe { table().start.unwrap()(&mut prepared, &host, &startup(), &mut worker) };
+    let expected = std::mem::size_of::<SvProjectorHostV2Query>() as u64;
+    let actual = std::mem::size_of::<SvProjectorHostV2>() as u64;
+    assert_eq!(result, SvStatus::from(&ProjectorAbiError::TableSize { expected, actual }));
+    assert_eq!(prepared, original);
+    assert!(worker.is_null());
+    assert!(!log.lock().unwrap().iter().any(|(event, _)| *event == "run"));
+    assert_eq!(unsafe { table().destroy_prepared.unwrap()(&mut prepared) }, SvStatus::SUCCESS);
+    assert_eq!(unsafe { table().destroy_configured.unwrap()(&mut config) }, SvStatus::SUCCESS);
 }
