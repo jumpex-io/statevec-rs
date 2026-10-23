@@ -4,12 +4,14 @@ use super::*;
 use std::sync::Mutex;
 
 const RECORD: [u8; 4] = [1, 2, 3, 4];
+// (tag, kind, uk_id, sys_id, key bytes) as the host received them.
+type OfferedKey = (u32, u16, u8, u64, Vec<u8>);
 
 #[repr(C)]
 struct QueryFixture {
     base: Fixture,
     info: Mutex<SvEngineQueryInfo>,
-    offered: Mutex<Vec<(u32, u16, u8, u64, Vec<u8>)>>,
+    offered: Mutex<Vec<OfferedKey>>,
     record_kind: u16,
     query_releases: AtomicU64,
 }
@@ -52,7 +54,7 @@ unsafe extern "C" fn poll_query(raw: *mut c_void, cookie: u64, out: *mut SvEngin
 unsafe extern "C" fn query_record(raw: *mut c_void, cookie: u64, index: u64, out: *mut SvEngineQueryRecord) -> SvStatus {
     if cookie != 77 { return (&ProjectorAbiError::InvalidHandle).into(); }
     let kind = unsafe { query_fixture(raw) }.record_kind;
-    let found = index % 2 == 0;
+    let found = index.is_multiple_of(2);
     unsafe { out.write(SvEngineQueryRecord {
         found: u32::from(found), reserved: 0,
         key: SvKey { kind: if found { kind } else { 0 }, reserved16: 0, reserved32: 0, sys_id: if found { 100 + index } else { 0 } },
