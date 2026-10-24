@@ -30,7 +30,7 @@ pub struct PluginTx<'call> {
 impl<'call> PluginTx<'call> {
     /// # Safety
     /// Host table, context and callback storage are live for 'call, have their
-    /// V4 C signatures and never unwind, retain loans or run callbacks in
+    /// current Core C ABI signatures and never unwind, retain loans or run callbacks in
     /// parallel. The table header must be readable even when incompatible.
     pub(super) unsafe fn from_raw(raw: *const SvTxV5) -> Result<Self, CoreAbiError> {
         // SAFETY: forwarding the caller's header/table lifetime obligation.

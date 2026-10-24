@@ -429,7 +429,7 @@ macro_rules! export_core_plugin_v5 {
                 config: $crate::v1::ffi::SvBytes,
                 out: *mut *mut ::std::ffi::c_void,
             ) -> $crate::v1::SvStatus {
-                // SAFETY: forwarding the host's scoped V3 input/output contract.
+                // SAFETY: forwarding the host's scoped Core input/output contract.
                 unsafe { $crate::v1::__export::configure(&MODULE, config, out) }
             }
             static TABLE: $crate::v1::__export::CoreExportTable =

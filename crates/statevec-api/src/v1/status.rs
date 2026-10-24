@@ -6,7 +6,7 @@ const BUSINESS: u32 = 1;
 const SCHEMA: u32 = 2;
 const ACCESS: u32 = 3;
 
-/// C V3 status record. Every bit is initialized; no pointer, enum discriminant,
+/// Core C ABI status record. Every bit is initialized; no pointer, enum discriminant,
 /// allocator-owned value or implicit padding crosses this boundary.
 ///
 /// Public fields deliberately permit receiving arbitrary C integers. Decode

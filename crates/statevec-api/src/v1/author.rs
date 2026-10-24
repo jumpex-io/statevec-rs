@@ -38,10 +38,15 @@ pub trait CoreRuntime: Sized + 'static {
     /// external side effects; use only input and the deterministic host views,
     /// never wall-clock time, randomness, process state or external I/O.
     fn initialize_core(&self, tx: &mut PluginTx<'_>, input: &[u8]) -> Result<(), CoreTxError>;
-    /// Construct the complete target record set from source-layout records.
-    /// Omission deletes a record. Trials are discarded and committed apply
-    /// recomputes this callback; the same deterministic/no-side-effects contract
-    /// as initialization applies. The host owns version, history and position.
+    /// Transform source-layout records into the target schema. Untouched rows
+    /// with compatible layouts retain their IDs, bytes and revisions without
+    /// record deltas; delete explicitly with
+    /// [`TargetRecords::delete_record`](super::TargetRecords::delete_record).
+    /// Every row with an incompatible layout must be replaced or deleted, or
+    /// the host rejects the migration (system code 5, reason 8).
+    /// Trials are discarded and committed apply recomputes this callback; the
+    /// same deterministic/no-side-effects contract as initialization applies.
+    /// The host owns version, history, schema metadata and position.
     fn migrate(
         &self,
         tx: &mut MigrationTx<'_>,
