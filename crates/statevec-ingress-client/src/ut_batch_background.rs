@@ -808,6 +808,9 @@ fn accept_os_peer(listener: &std::net::TcpListener) -> std::net::TcpStream {
     loop {
         match listener.accept() {
             Ok((peer, _)) => {
+                // macOS inherits the listener's nonblocking mode; this peer
+                // uses blocking reads/writes bounded by the fixture timeouts.
+                peer.set_nonblocking(false).unwrap();
                 peer.set_read_timeout(Some(HARNESS_TIMEOUT)).unwrap();
                 peer.set_write_timeout(Some(HARNESS_TIMEOUT)).unwrap();
                 return peer;
