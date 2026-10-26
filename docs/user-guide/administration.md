@@ -146,7 +146,7 @@ must check both the exit status and complete JSON.
 | `succeeded` | 0 | Applied, and every member's system and business codes are zero. |
 | `rejected` | 4 | A committed callback rejection, with the member codes. |
 | `conflict` | 4 | Another intent holds this sequence. |
-| `not_admitted` | 4 | No record at this read and the sequence is still next. A Submit the owner still holds before admission may yet be admitted (after an unknown Submit in the same command this never settles); submit the same file again, never a different intent. |
+| `not_admitted` | 4 | No record at this read and the sequence is still next. This does not prove that an earlier Submit of the file will not run: the owner may still hold one, sent by this command, an earlier one or a caller before its restart. Submit the same file again, never a different intent. After an unknown Submit, `submit-lifecycle` keeps reading instead. |
 | `stream_gap` | 4 | The Submit is beyond the stream's next sequence. |
 | `refused` | 4 | The Submit was refused before proposal, for example `core_not_prepared`. A refused Reconcile read never settles; reading continues. |
 | `not_sent` | 3 / 4 | The Submit never reached the owner: 3 when nothing was sent (connect/setup), 4 when the node refused it first (full or closed queue, typed rejection such as `not_leader`). |
@@ -202,8 +202,14 @@ never replaced. A second caller, or a file already present, is adopted. Every
 use reads the stored bytes back and syncs the file and its directory before
 any send; a path that is not a regular file is refused without waiting on it.
 The file is client recovery input, not a transaction-status record.
-Keep it until `lifecycle_outcome` settles, keep at most one unresolved intent
-per caller, and resume with `reconcile-lifecycle`, never with a new intent.
+Only `succeeded`, `rejected`, `conflict`, `result_unavailable` and
+`processed_result_unavailable` resolve it. Every other outcome leaves it
+unresolved, in later commands and after a caller restart too, because a
+Submit of it sent earlier may still be admitted; exit 4 is no reason to
+discard it. Keep an unresolved file, keep at most one unresolved intent per
+caller, and resume with `reconcile-lifecycle` or by submitting that same
+file, never with other content or another sequence. Never replace a saved
+file: each use reads it and then syncs it by reopening the path.
 
 `collect` and `combine` replace a network admin surface. Run `collect` on every
 voter and learner, keep each JSON file, then run `combine` against the
