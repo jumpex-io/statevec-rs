@@ -124,9 +124,9 @@ must check both the exit status and complete JSON.
 | 0/4/5 | `required_core_checked` | `check_level`, `frontier`, `complete` (true only when every required V passed at an unchanged frontier), counts, up to 16 failing `rows` |
 | 0 | `pending_lifecycle` | leader-only operator-stream batches beyond applied, each `proposed` or `committed_awaiting_apply`; empty means none pending |
 | 0/4 | `lifecycle_intent` | `publication` (`created` or `adopted`), `matches_request` (exit 4 when false), `intent` summary; nothing was sent |
-| 0/4/5 | `lifecycle_outcome` | `outcome`, `submitted`, `submission` and last `observation`, `intent` summary. Only `outcome: "succeeded"` is a successful lifecycle operation. |
+| 0/4/5 | `lifecycle_outcome` | `outcome`, `submitted`, `submission` and last `observation`, `known` (the furthest admission/commit/apply evidence this command saw, never lowered by a later read), `intent` summary. Only `outcome: "succeeded"` is a successful lifecycle operation. |
 | 3 | `intent_unavailable` | the saved intent could not be read, checked or synced; nothing was sent |
-| 0/4/5 | `collection` | echoed `target` beside the actual `observation` (`null` when the node did not answer) and per-step categories |
+| 0/4/5 | `collection` | echoed `target` beside the actual `observation` (`null` when the node did not answer, `contradictions` between its replies) and per-step categories |
 | 0/4/5 | `collection_summary` | offline: `complete`, per-member state, `foreign` files, `membership_agrees`, `frontiers_differ`, `prepared`, `checkpoint_covered`, same-version/different-package rows |
 | 4 | `owner_refusal` | `admission: "not_admitted"` for intents only, exact `request`, typed `reason` |
 | 4 | `queue_full` / `queue_closed` | as above, without `reason` |
@@ -194,14 +194,17 @@ A saved intent file holds one complete SVI0 Submit frame. It is published once,
 by linking a synced private temporary file to the operator-named path, and is
 never replaced. A second caller, or a file already present, is adopted. Every
 use reads the stored bytes back and syncs the file and its directory before
-any send. The file is client recovery input, not a transaction-status record.
+any send; a path that is not a regular file is refused without waiting on it.
+The file is client recovery input, not a transaction-status record.
 Keep it until `lifecycle_outcome` settles, keep at most one unresolved intent
 per caller, and resume with `reconcile-lifecycle`, never with a new intent.
 
 `collect` and `combine` replace a network admin surface. Run `collect` on every
 voter and learner, keep each JSON file, then run `combine` against the
 reference membership. A file whose collection, target, identity, lineage or
-peer does not match is reported as foreign and never fills a gap. A member
+peer does not match is reported as foreign and never fills a gap, as is a
+file whose replies contradict its own identity or process instance
+(`inconsistent_observation`). A member
 without an actual observation in this batch leaves it incomplete (exit 5). The
 summary certifies that batch only, not current liveness.
 
