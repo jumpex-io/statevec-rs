@@ -27,7 +27,7 @@ object.
 | Checkpoint | `request-checkpoint`, `query-selected-checkpoint` |
 | Local material | `query-core-residency [--cursor INSTANCE:GENERATION:START] [--limit 1..=8]`, `prepare-core --core-version HEX --package-digest HEX --target TRIPLE`, `query-provisioned-core [--after V_HEX:PACKAGE_HEX] [--limit 1..=8]`, `check-core-presence --core-version HEX --target TRIPLE`, `verify-core-material --core-version HEX --target TRIPLE` |
 | Lifecycle views | `query-active-core`, `query-core-activations [--after TX_SEQ] [--frontier FRONTIER] [--limit 1..=24]`, `query-required-core [--after V_HEX] [--frontier FRONTIER] [--limit 1..=24]`, `check-required-core --target TRIPLE [--stored-bytes]`, `query-pending-lifecycle` |
-| Saved intent | `create-lifecycle-intent --intent ABSOLUTE_PATH (--initialize-core \| --source-version HEX --target-version HEX) [--input-hex HEX]`, `submit-lifecycle --intent ABSOLUTE_PATH [--wait-ms 1..=600000]`, `reconcile-lifecycle --intent ABSOLUTE_PATH [--wait-ms 1..=600000]` |
+| Saved intent | `create-lifecycle-intent --intent ABSOLUTE_PATH (--initialize-core \| --source-version HEX --target-version HEX) [--input-hex HEX]`, `submit-lifecycle --intent ABSOLUTE_PATH [--wait-ms 1..=600000]` (the wait bounds the whole reconciliation, including a read in flight), `reconcile-lifecycle --intent ABSOLUTE_PATH [--wait-ms 1..=600000]` |
 | Collection | `collect --collection ID --cluster-identity HEX --genesis-identity HEX --peer-id DECIMAL_U64`, `combine --collection ID --cluster-identity HEX --genesis-identity HEX --members PEER[,PEER...] [--core-version HEX --package-digest HEX] --file PATH...` (offline, no `--socket`) |
 
 `TRIPLE` is `x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu`.
@@ -69,7 +69,9 @@ published in the SDK.
 **Node replies carry `peer_id`**: the answering node's peer ID from its local
 configuration, not an owner sample, so saved outputs from several nodes stay
 attributable. Every single-request command has it at the top level, and so
-does `check-required-core` (all of its replies must come from that one node).
+does `check-required-core` (all of its replies must come from that one node,
+and every lifecycle page must name the first page's cluster, genesis and
+lineage).
 `collect` records it as `observation.peer_id` beside the operator's echoed
 `target.peer_id`. Outputs produced before any reply (input, connect and setup
 failures), the intent commands and the offline `combine` have no top-level
@@ -121,12 +123,12 @@ must check both the exit status and complete JSON.
 | 0 | `core_activations` / `required_core` | `lifecycle` with `rows`, nullable `next_after`. A required row has `initial`, `activated_at` and `rejected`. |
 | 4 | `core_lifecycle_stale` | the continuation's frontier changed; `observed_frontier`; restart the traversal |
 | 4 | `core_lifecycle_busy` / `core_lifecycle_refused` | typed `reason` |
-| 0/4/5 | `required_core_checked` | `check_level`, `frontier`, `complete` (true only when every required V passed at an unchanged frontier), counts, up to 16 failing `rows` |
+| 0/4/5 | `required_core_checked` | `check_level`, the checked `cluster_identity`/`genesis_identity`/`execution_lineage`, `frontier`, `complete` (true only when every required V passed at an unchanged frontier), counts, up to 16 failing `rows` |
 | 0 | `pending_lifecycle` | leader-only operator-stream batches beyond applied, each `proposed` or `committed_awaiting_apply`; empty means none pending |
 | 0/4 | `lifecycle_intent` | `publication` (`created` or `adopted`), `matches_request` (exit 4 when false), `intent` summary; nothing was sent |
 | 0/4/5 | `lifecycle_outcome` | `outcome`, `submitted`, `submission` and last `observation`, `known` (the furthest admission/commit/apply evidence this command saw, never lowered by a later read), `intent` summary. Only `outcome: "succeeded"` is a successful lifecycle operation. |
 | 3 | `intent_unavailable` | the saved intent could not be read, checked or synced; nothing was sent |
-| 0/4/5 | `collection` | echoed `target` beside the actual `observation` (`null` when the node did not answer, `contradictions` between its replies) and per-step categories |
+| 0/4/5 | `collection` | echoed `target` beside the actual `observation` (`null` when the node did not answer; `contradictions` between its replies; `missing` required reads: membership, active view, residency, and a leader's operator frontier) and per-step categories |
 | 0/4/5 | `collection_summary` | offline: `complete`, per-member state, `foreign` files, `membership_agrees`, `frontiers_differ`, `prepared`, `checkpoint_covered`, same-version/different-package rows |
 | 4 | `owner_refusal` | `admission: "not_admitted"` for intents only, exact `request`, typed `reason` |
 | 4 | `queue_full` / `queue_closed` | as above, without `reason` |
@@ -205,7 +207,8 @@ reference membership. A file whose collection, target, identity, lineage or
 peer does not match is reported as foreign and never fills a gap, as is a
 file whose replies contradict its own identity or process instance
 (`inconsistent_observation`). A member
-without an actual observation in this batch leaves it incomplete (exit 5). The
+without an actual observation in this batch leaves it incomplete (exit 5); so
+does a file missing a required read, whose member is `partial`. The
 summary certifies that batch only, not current liveness.
 
 The public usage-example phase is optional/skipped. Full public-only application
