@@ -27,7 +27,7 @@ object.
 | Checkpoint | `request-checkpoint`, `query-selected-checkpoint` |
 | Local material | `query-core-residency [--cursor INSTANCE:GENERATION:START] [--limit 1..=8]`, `prepare-core --core-version HEX --package-digest HEX --target TRIPLE`, `query-provisioned-core [--after V_HEX:PACKAGE_HEX] [--limit 1..=8]`, `check-core-presence --core-version HEX --target TRIPLE`, `verify-core-material --core-version HEX --target TRIPLE` |
 | Lifecycle views | `query-active-core`, `query-core-activations [--after TX_SEQ] [--frontier FRONTIER] [--limit 1..=24]`, `query-required-core [--after V_HEX] [--frontier FRONTIER] [--limit 1..=24]`, `check-required-core --target TRIPLE [--stored-bytes]`, `query-pending-lifecycle` |
-| Saved intent | `create-lifecycle-intent --intent ABSOLUTE_PATH (--initialize-core \| --source-version HEX --target-version HEX) [--input-hex HEX]`, `submit-lifecycle --intent ABSOLUTE_PATH [--wait-ms 1..=600000]` (the wait bounds the whole reconciliation, including a read in flight), `reconcile-lifecycle --intent ABSOLUTE_PATH [--wait-ms 1..=600000]` |
+| Saved intent | `create-lifecycle-intent --intent ABSOLUTE_PATH (--initialize-core \| --source-version HEX --target-version HEX) [--input-hex HEX]`, `submit-lifecycle --intent ABSOLUTE_PATH [--wait-ms 1..=600000]` (default 30000; the wait bounds the whole reconciliation, including a read in flight), `reconcile-lifecycle --intent ABSOLUTE_PATH [--wait-ms 1..=600000]` |
 | Collection | `collect --collection ID --cluster-identity HEX --genesis-identity HEX --peer-id DECIMAL_U64`, `combine --collection ID --cluster-identity HEX --genesis-identity HEX --members PEER[,PEER...] [--core-version HEX --package-digest HEX] --file PATH...` (offline, no `--socket`) |
 
 `TRIPLE` is `x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu`.
@@ -75,7 +75,8 @@ lineage).
 `collect` records it as `observation.peer_id` beside the operator's echoed
 `target.peer_id`. Outputs produced before any reply (input, connect and setup
 failures), the intent commands and the offline `combine` have no top-level
-`peer_id`.
+`peer_id`, with one exception: when `create-lifecycle-intent`'s frontier read
+fails, its output is that node reply, with its `peer_id`.
 
 | Exit | Meaning |
 | --- | --- |
@@ -110,7 +111,7 @@ must check both the exit status and complete JSON.
 | 0/4/5 | `operator_observation` | One exact SDK reply, staged as separate `admission`/`commit`/`apply`/`execution` fields plus `disposition` and `reply_hex` |
 | 0 | `checkpoint_requested` | one capture made due on this node, with the unchanged selection sampled in the same owner turn; acceptance is not selection |
 | 4 | `checkpoint_request_busy` / `checkpoint_request_refused` | typed `reason` |
-| 0 | `selected_checkpoint` | identities, role, applied frontier, root generation, nullable `selected` base (Raft index/term, V, `tx_seq`, evidence, operator `last_applied`), `capture_requested`, `progress` |
+| 0 | `selected_checkpoint` | identities, role, applied frontier, root generation, nullable `selected` base (`raft_index`/`raft_term`, `core_version`, `engine_tx_seq`, `engine_applied_evidence`, `operator_next_sequence`, `operator_last_applied`), `capture_requested`, `progress` |
 | 0 | `core_residency` | `instance`, `generation`, limits, retained/reserved/remaining charges, nullable `in_flight` job, `rows`, nullable `next_cursor` |
 | 0 | `core_prepared` | `instance`, `generation`, exact `material` |
 | 4 / 5 | `core_preparation_refused` / `core_preparation_unknown` | the accepted job is not cancelled on unknown |
@@ -122,14 +123,14 @@ must check both the exit status and complete JSON.
 | 0 | `active_core` | `lifecycle` (identities, role, `frontier`, `active_version`, `initialized`, counts) and `local` (`resident`, `not_resident` or `not_configured`) |
 | 0 | `core_activations` / `required_core` | `lifecycle` with `rows`, nullable `next_after`. A required row has `initial`, `activated_at` and `rejected`. |
 | 4 | `core_lifecycle_stale` | the continuation's frontier changed; `observed_frontier`; restart the traversal |
-| 4 | `core_lifecycle_busy` / `core_lifecycle_refused` | typed `reason` |
+| 4 | `core_lifecycle_busy` / `core_lifecycle_refused` | typed `reason`; busy is another held view or a snapshot install |
 | 0/4/5 | `required_core_checked` | `check_level`, the checked `cluster_identity`/`genesis_identity`/`execution_lineage`, `frontier`, `complete` (true only when every required V passed at an unchanged frontier), counts, up to 16 failing `rows` |
-| 0 | `pending_lifecycle` | leader-only operator-stream batches beyond applied, each `proposed` or `committed_awaiting_apply`; empty means none pending |
+| 0 | `pending_lifecycle` | leader-only operator-stream batches in the log beyond applied, each `proposed` or `committed_awaiting_apply`; empty means none in the log. A Submit the owner still holds before admission is not listed yet. |
 | 0/4 | `lifecycle_intent` | `publication` (`created` or `adopted`), `matches_request` (exit 4 when false), `intent` summary; nothing was sent |
 | 0/4/5 | `lifecycle_outcome` | `outcome`, `submitted`, `submission` and last `observation`, `known` (the furthest admission/commit/apply evidence this command saw, never lowered by a later read), `intent` summary. Only `outcome: "succeeded"` is a successful lifecycle operation. |
 | 3 | `intent_unavailable` | the saved intent could not be read, checked or synced; nothing was sent |
 | 0/4/5 | `collection` | echoed `target` beside the actual `observation` (`null` when the node did not answer; `contradictions` between its replies; `missing` required reads: membership, active view, residency, and a leader's operator frontier) and per-step categories |
-| 0/4/5 | `collection_summary` | offline: `complete`, per-member state, `foreign` files, `membership_agrees`, `frontiers_differ`, `prepared`, `checkpoint_covered`, same-version/different-package rows |
+| 0/4/5 | `collection_summary` | offline: `complete`, per-member state (`observed`, `partial` with `missing`, `unreachable`, `missing`), `foreign` files with `reason`, `membership_agrees`, `frontiers_differ`, `prepared`, `checkpoint_covered`, same-version/different-package rows. Exit 0 needs a complete batch with no negative answer and a known previous attempt; a known disagreement is 4; incomplete or `null` coverage is 5. |
 | 4 | `owner_refusal` | `admission: "not_admitted"` for intents only, exact `request`, typed `reason` |
 | 4 | `queue_full` / `queue_closed` | as above, without `reason` |
 | 5 | `owner_reply_unknown` | see above |
@@ -145,9 +146,10 @@ must check both the exit status and complete JSON.
 | `succeeded` | 0 | Applied, and every member's system and business codes are zero. |
 | `rejected` | 4 | A committed callback rejection, with the member codes. |
 | `conflict` | 4 | Another intent holds this sequence. |
-| `not_admitted` | 4 | The server has no record and the sequence is still next. |
-| `refused` | 4 | Refused before proposal, for example `core_not_prepared`. |
-| `not_sent` | 4 | The node refused before reaching the owner. |
+| `not_admitted` | 4 | No record at this read and the sequence is still next. A Submit the owner still holds before admission may yet be admitted (after an unknown Submit in the same command this never settles); submit the same file again, never a different intent. |
+| `stream_gap` | 4 | The Submit is beyond the stream's next sequence. |
+| `refused` | 4 | The Submit was refused before proposal, for example `core_not_prepared`. A refused Reconcile read never settles; reading continues. |
+| `not_sent` | 3 / 4 | The Submit never reached the owner: 3 when nothing was sent (connect/setup), 4 when the node refused it first (full or closed queue, typed rejection such as `not_leader`). |
 | `result_unavailable` / `processed_result_unavailable` | 5 | Applied or covered, but the result is gone. This is not success. |
 | `unsettled` | 5 | The wait ended first; the saved intent is unchanged. |
 
@@ -164,7 +166,9 @@ Input causes are `too_many_arguments`, `unknown_argument`, `duplicate_argument`,
 `frame_required`, `unexpected_frame`, `invalid_frame`, `invalid_material`,
 `unexpected_material`, `invalid_page`, `unexpected_page`, `intent_required`,
 `unexpected_intent`, `invalid_intent`, `invalid_collection` and
-`unexpected_collection`.
+`unexpected_collection`. Building a fresh intent can also refuse with
+`session_entropy`, `lifecycle_command` or `intent_too_large`; nothing is
+created or sent.
 
 Owner `reason.kind` preserves the closed native categories: `ready_pending`,
 `apply_pending`, `recovery_pending`, `operator_frontier_missing`,
@@ -206,7 +210,10 @@ voter and learner, keep each JSON file, then run `combine` against the
 reference membership. A file whose collection, target, identity, lineage or
 peer does not match is reported as foreign and never fills a gap, as is a
 file whose replies contradict its own identity or process instance
-(`inconsistent_observation`). A member
+(`inconsistent_observation`), one that is not a readable v1 collection of at
+most 64 KiB (`unreadable`), one with no target peer (`no_target_peer`) and one
+for a peer outside the reference (`not_a_reference_member`). A second file for
+an observed member (`duplicate_peer`) makes the batch incomplete. A member
 without an actual observation in this batch leaves it incomplete (exit 5); so
 does a file missing a required read, whose member is `partial`. The
 summary certifies that batch only, not current liveness.
