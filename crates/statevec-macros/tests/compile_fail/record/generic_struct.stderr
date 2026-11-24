@@ -1,0 +1,5 @@
+error: #[record] does not support generics in v1
+ --> tests/compile_fail/record/generic_struct.rs:7:15
+  |
+7 | pub struct Bad<T> {
+  |               ^

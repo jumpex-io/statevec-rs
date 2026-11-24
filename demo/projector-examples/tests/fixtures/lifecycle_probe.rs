@@ -1,0 +1,153 @@
+//! Linux qualification only. The real generated exporter owns every worker,
+//! borrow and service. This physical interposer forwards the actual native host
+//! and substitutes only declared release/notification outcomes. It neither
+//! constructs Raft entries/cuts nor fabricates completion reports.
+#[allow(dead_code, unused_imports)]
+#[path = "../../../../crates/statevec/examples/core_bank/schema.rs"]
+mod bank_decoder;
+use statevec_projector_api::plugin::ffi::*;
+use statevec_projector_api::plugin::{StartRequest, *};
+use std::ffi::c_void;
+use std::io::{Read, Write};
+use std::num::NonZeroUsize;
+use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+#[path = "lifecycle_probe_callbacks.rs"]
+mod callbacks;
+#[path = "lifecycle_probe_export.rs"]
+mod export;
+
+#[derive(Clone, Copy, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum Case { FrameError, FrameRetained, ReplyError, ReplyRetained, ServiceFrame, HeldService, StateError, StateRetained }
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Config { case: Case, report: PathBuf, control: PathBuf, lease: PathBuf }
+struct Harness {
+    config: Config, report: Mutex<std::fs::File>, release_observed: AtomicBool,
+    polls: AtomicUsize, allocations: AtomicUsize, releases: AtomicUsize,
+    author_calls: AtomicUsize,
+}
+impl Harness {
+    fn event(&self, line: impl std::fmt::Display) { writeln!(self.report.lock().unwrap(), "{line}").unwrap(); }
+}
+struct Module(Arc<Harness>);
+struct Configured(Arc<Harness>);
+struct Prepared { harness: Arc<Harness>, control: UnixStream }
+impl ProjectorModule for Module {
+    fn decoder_idl() -> &'static [u8] { bank_decoder::decoder_idl() }
+    const SUPPORTED_HISTORY_MODES: SupportedHistoryModes = SupportedHistoryModes::Both;
+    type Configured = Configured;
+    fn configure(&self, _: ProjectorConfig<'_>) -> Result<Configured, ConfigureError> { Ok(Configured(self.0.clone())) }
+}
+impl ConfiguredProjector for Configured {
+    type Prepared = Prepared;
+    fn prepare(&self, _: ProjectorPrepare<'_>) -> Result<Prepared, ProjectorError> {
+        let control = UnixStream::connect(&self.0.config.control).unwrap();
+        control.set_read_timeout(Some(Duration::from_secs(8))).unwrap(); // harness safety bound
+        Ok(Prepared { harness: self.0.clone(), control })
+    }
+}
+impl PreparedProjector for Prepared {
+    fn start_request(&self) -> StartRequest {
+        if matches!(self.harness.config.case, Case::StateError | Case::StateRetained) { StartRequest::LatestState }
+        else { StartRequest::Continuous { offset: None } }
+    }
+    fn delivery_limits(&self) -> DeliveryLimits { DeliveryLimits::new(
+        NonZeroUsize::new(2).unwrap(),
+        NonZeroUsize::new(1024 * 1024).unwrap(),
+    ) }
+    fn run(self, io: ProjectorIo<'_>) -> Result<(), ProjectorError> {
+        let Self { harness, control: mut channel } = self;
+        harness.author_calls.fetch_add(1, Ordering::Relaxed);
+        let ProjectorIoParts { mut source, control, services, stop, .. } = io.split();
+        match harness.config.case {
+            Case::StateError | Case::StateRetained => {
+                let Delivery::Snapshot(mut loan) = source.next_timeout(Duration::from_secs(5))? else { panic!("actual source required"); };
+                // Read the real source (including EOF for genesis), then let a
+                // model-installation error unwind the SDK's actual SnapshotReader.
+                loop {
+                    match loan.next_record()? {
+                        SnapshotRead::Progress => (),
+                        SnapshotRead::Record(_) | SnapshotRead::End => break,
+                        SnapshotRead::Stop => panic!("source stopped before the model failure cut"),
+                    }
+                }
+                harness.event("state-held-and-read");
+                Err(ProjectorError::Application { code: 301 })
+            }
+            Case::HeldService => {
+                let held = harness.clone();
+                services.spawn(move |_| {
+                    held.author_calls.fetch_add(1, Ordering::Relaxed);
+                    held.event("service-held");
+                    let mut command = [0];
+                    channel.read_exact(&mut command).unwrap();
+                    match command[0] { b'F' => Err(ProjectorError::Application { code: 301 }), b'Q' => Ok(()), _ => panic!("held service failure") }
+                })?;
+                Ok(()) // SDK now really joins the still-held service.
+            }
+            Case::ReplyError | Case::ReplyRetained => {
+                let mut held = Vec::new();
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while held.len() != 4 {
+                    match control.offer_status()? {
+                        Offer::Queued(reply) => held.push(reply),
+                        Offer::OwnerQueueFull if Instant::now() < deadline => std::thread::yield_now(),
+                        _ => panic!("four real native replies must be acquired"),
+                    }
+                }
+                harness.event("four-replies-held");
+                let last = held.pop().unwrap();
+                // Return with one real ReplyHandle Drop; SDK cleanup must still
+                // attempt the other three, whose facades have been forgotten.
+                for reply in held { std::mem::forget(reply); }
+                let _last = last;
+                Err(ProjectorError::Application { code: 301 })
+            }
+            Case::FrameError | Case::FrameRetained | Case::ServiceFrame => {
+                let loan = loop {
+                    match source.next_timeout(Duration::from_secs(5))? {
+                        Delivery::RaftEntry(loan) if loan.view().tx_count() != 0 => break loan,
+                        Delivery::RaftEntry(_) => continue, // real Raft-only prefix, no business output
+                        _ => panic!("test must deliver one actual committed frame"),
+                    }
+                };
+                let position = loan.view().position();
+                harness.event(format_args!("frame-held {} {}", position.raft_term, position.raft_index));
+                if harness.config.case == Case::ServiceFrame {
+                    let held = harness.clone();
+                    services.spawn(move |_| {
+                        held.author_calls.fetch_add(1, Ordering::Relaxed);
+                        held.event("service-held");
+                        let mut command = [0];
+                        channel.read_exact(&mut command).unwrap();
+                        panic!("scoped service while a real frame is held")
+                    })?;
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    while !stop.is_stopping()? {
+                        assert!(Instant::now() < deadline, "service panic must stop source");
+                        std::thread::yield_now();
+                    }
+                    drop(loan);
+                    Ok(())
+                } else {
+                    let _held_until_return = loan;
+                    Err(ProjectorError::Application { code: 301 })
+                }
+            }
+        }
+    }
+}
+impl Drop for Configured {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        let lease = std::fs::OpenOptions::new().read(true).write(true).open(&self.0.config.lease).unwrap();
+        assert_eq!(unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) }, 0, "native must retire before configured destruction");
+        self.0.event("configured-destroyed-after-native");
+    }
+}

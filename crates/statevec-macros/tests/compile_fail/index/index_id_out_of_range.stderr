@@ -1,0 +1,7 @@
+error: index id 2 is out of range; valid range is [0, 2)
+ --> tests/compile_fail/index/index_id_out_of_range.rs:3:1
+  |
+3 | #[record(kind = 1, record_len = 64, index(id = 2, name = "by_a", fields = [a]))]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `record` (in Nightly builds, run with -Z macro-backtrace for more info)

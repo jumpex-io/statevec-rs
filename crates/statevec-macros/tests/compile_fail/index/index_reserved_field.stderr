@@ -1,0 +1,5 @@
+error: index field '_reserved' cannot be reserved
+ --> tests/compile_fail/index/index_reserved_field.rs:3:83
+  |
+3 | #[record(kind = 1, record_len = 64, index(id = 0, name = "by_reserved", fields = [_reserved]))]
+  |                                                                                   ^^^^^^^^^

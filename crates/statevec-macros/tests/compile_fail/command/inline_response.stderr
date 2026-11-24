@@ -1,0 +1,5 @@
+error: inline_response is only supported in #[event(...)]
+ --> tests/compile_fail/command/inline_response.rs:4:1
+  |
+4 | struct BadCommandInlineFlag {
+  | ^^^^^^

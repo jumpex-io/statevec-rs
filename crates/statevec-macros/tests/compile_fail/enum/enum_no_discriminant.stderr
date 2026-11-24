@@ -1,0 +1,5 @@
+error: EnumU8 requires every variant to have an explicit discriminant
+  --> tests/compile_fail/enum/enum_no_discriminant.rs:10:5
+   |
+10 |     B,
+   |     ^

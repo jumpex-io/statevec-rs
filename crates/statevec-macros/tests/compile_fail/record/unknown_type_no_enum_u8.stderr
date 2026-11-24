@@ -1,0 +1,5 @@
+error: unknown field type; use #[field(enum_u8)] for enum types
+  --> tests/compile_fail/record/unknown_type_no_enum_u8.rs:11:12
+   |
+11 |     pub a: MyType,
+   |            ^^^^^^

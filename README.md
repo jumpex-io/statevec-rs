@@ -1,0 +1,120 @@
+# StateVec
+
+StateVec runs deterministic business logic over schema-defined records. You
+define commands, data schemas and handlers; the production cluster replicates
+commands and checks their execution.
+
+This repository provides the Rust SDK, guides, examples and an in-memory
+engine for testing business logic. The [user guide](docs/user-guide/README.md)
+lists the supported Linux distributions for ARM64 and x86-64 nodes.
+
+## Development compatibility
+
+Core authors import from `statevec_api::plugin` and use `statevec_api::export_core_plugin!`.
+Projector authors import from `statevec_projector_api::plugin` and use
+`statevec_projector_api::export_projector_plugin!`. Every Projector declares
+its decoder IDL. The documented RC1 imports, types and macros remain supported
+through 1.x on its supported Rust toolchain. Pin all StateVec dependencies to
+the same revision and retain the lockfile for reproducible builds.
+
+## Start here
+
+Read the [user guide](docs/user-guide/README.md), then run the examples:
+
+```sh
+cargo nextest run -p bank -p flight-booking
+```
+
+The Bank example covers deposits, withdrawals, transfers, events and refusal.
+The flight-booking example covers inventory and reservations.
+
+## Libraries
+
+| Crate | Purpose |
+| --- | --- |
+| `statevec` | Common imports for application code |
+| `statevec-model` | Records, commands, events, schemas, keys and schema identity |
+| `statevec-macros` | Schema declarations, accessors, builders and checked payloads; use them through `statevec` |
+| `statevec-api` | Business transaction interfaces and the plugin ABI |
+| `statevec-package` | Canonical Core `.svtar` codec, static ELF checks and the SDK-only `sv-package pack` command |
+| `statevec-test` | A small memory engine and helpers for local tests |
+| `statevec-ingress-client` | Bounded cluster client with manual, background and async driving |
+| `ingress-api` | Request/reply codecs and incremental frame readers |
+| `statevec-frame` | Client inputs, intent identity and application-result bindings |
+| `statevec-projector-api` | Applied Raft entries, Tx outputs, consistent Snapshots and durable offset reports |
+
+Application crates usually depend on `statevec`, with `statevec-test` as a
+development dependency. Use the same StateVec release or Git revision for all
+these crates. Cluster client usage is covered in the
+[client guide](docs/user-guide/cluster-client.md).
+For application read models, see the [projector guide](docs/user-guide/projectors.md).
+
+```rust
+use statevec::prelude::*;
+
+#[schema_module(version = "1.0")]
+pub mod ledger {
+    use super::*;
+
+    #[record(kind = 1, record_len = 64, unique_key(id = 0, fields = [account_id]))]
+    pub struct Account {
+        #[field(index = 1, immutable)]
+        pub account_id: u64,
+        #[field(index = 2)]
+        pub balance: u64,
+    }
+
+    #[command(kind = 1)]
+    pub struct Deposit {
+        #[field(index = 1)]
+        pub account_id: u64,
+        #[field(index = 2)]
+        pub amount: u64,
+    }
+}
+```
+
+The current schema uses 16-bit kinds, immutable unique keys, optional ordered
+indexes, checked command payloads and fixed-point decimal fields. Payload
+builders return `Result`. Older examples using `pk(...)` and unchecked
+builders need to be updated.
+
+## Local execution and production
+
+The test engine stores records and keys in Rust collections and captures
+events in memory. It can execute typed handlers, discard a failed transaction
+and check the resulting records and events. Production uses its own engine,
+cluster binding and persistence.
+
+The two engines share the schema and business transaction interfaces. The
+local engine helps develop business logic; cluster durability, recovery,
+replication and performance are verified by the production platform.
+
+Production deployment uses the platform's node binaries. The public
+[local launcher](tools/sv-local/README.md) standardizes artifact selection,
+configuration and foreground multi-process startup without private Rust
+dependencies. Applications provide their plugins and business configuration.
+The actual engine/Node executables still come from the matching host distribution;
+the launcher is not a replacement engine or a claim of release availability.
+
+Configured hosts discover the Core or Projector entry point and check the
+binary ABI major in the table header.
+
+## Development
+
+The workspace uses Rust 2024 with a minimum declared Rust version of 1.91.
+The external consumer fixture builds a Core library, a Projector library and
+a client executable against the public crates on that toolchain.
+
+```sh
+cargo check --workspace --all-targets
+cargo nextest run --workspace --all-targets
+cargo test --workspace --doc
+cargo +1.91.0 build --manifest-path tests/source-compat/Cargo.toml --locked --bins --examples
+```
+
+The macro suite includes compile-fail cases through `trybuild`.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).

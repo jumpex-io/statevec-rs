@@ -1,0 +1,5 @@
+error: kind must be in [1, 61439]
+ --> tests/compile_fail/event/kind_61440.rs:6:16
+  |
+6 | #[event(kind = 61440)]
+  |                ^^^^^

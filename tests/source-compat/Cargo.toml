@@ -1,0 +1,29 @@
+[package]
+name = "sdk-source-consumer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+publish = false
+
+# Resolve as an application outside the SDK workspace.
+[workspace]
+
+[dependencies]
+statevec = { path = "../../crates/statevec" }
+statevec-api = { path = "../../crates/statevec-api" }
+statevec-ingress-client = { path = "../../crates/statevec-ingress-client" }
+statevec-projector-api = { path = "../../crates/statevec-projector-api" }
+
+[[example]]
+name = "example_core"
+path = "core.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "example_projector"
+path = "projector.rs"
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "example_client"
+path = "client.rs"

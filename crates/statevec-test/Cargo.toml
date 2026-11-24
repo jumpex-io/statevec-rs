@@ -1,0 +1,20 @@
+[package]
+name = "statevec-test"
+version.workspace = true
+edition = "2024"
+rust-version = "1.91"
+description = "Simplified in-memory execution engine for StateVec business tests."
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+statevec_api.workspace = true
+statevec_model.workspace = true
+
+[dev-dependencies]
+statevec.workspace = true
+statevec_macros.workspace = true
+test-case.workspace = true

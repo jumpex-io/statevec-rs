@@ -1,0 +1,55 @@
+[workspace]
+members = [
+    "crates/statevec",
+    "crates/statevec-model",
+    "crates/statevec-macros",
+    "crates/statevec-api",
+    "crates/statevec-test",
+    "crates/statevec-frame",
+    "crates/statevec-package",
+    "crates/ingress-api",
+    "crates/statevec-ingress-client",
+    "crates/statevec-projector-api",
+    "demo/bank",
+    "demo/flight-booking",
+    "demo/projector-examples",
+]
+resolver = "3"
+
+[workspace.package]
+version = "1.0.0-rc.1"
+license = "Apache-2.0"
+repository = "https://github.com/jumpex-io/statevec-rs"
+readme = "README.md"
+keywords = ["statevec", "schema", "runtime", "deterministic", "state-machine"]
+categories = ["data-structures", "development-tools"]
+
+[workspace.dependencies]
+# Internal
+statevec = { version = "1.0.0-rc.1", path = "crates/statevec" }
+statevec_model = { package = "statevec-model", version = "1.0.0-rc.1", path = "crates/statevec-model" }
+statevec_macros = { package = "statevec-macros", version = "1.0.0-rc.1", path = "crates/statevec-macros" }
+statevec_api = { package = "statevec-api", version = "1.0.0-rc.1", path = "crates/statevec-api" }
+statevec_test = { package = "statevec-test", version = "1.0.0-rc.1", path = "crates/statevec-test" }
+
+statevec_frame = { package = "statevec-frame", version = "1.0.0-rc.1", path = "crates/statevec-frame" }
+statevec_package = { package = "statevec-package", version = "1.0.0-rc.1", path = "crates/statevec-package" }
+ingress_api = { package = "ingress-api", version = "1.0.0-rc.1", path = "crates/ingress-api" }
+statevec_ingress_client = { package = "statevec-ingress-client", version = "1.0.0-rc.1", path = "crates/statevec-ingress-client" }
+statevec_projector_api = { package = "statevec-projector-api", version = "1.0.0-rc.1", path = "crates/statevec-projector-api" }
+
+# External
+proc-macro2 = "1"
+quote = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+smallvec = "1"
+syn = { version = "2.0.117", features = ["full"] }
+test-case = "3.3.1"
+libc = "0.2"
+socket2 = "0.6.3"
+polling = "3.11"
+tempfile = "3"
+raft_rand = { package = "rand", version = "0.9.3" }
+trybuild = "1"

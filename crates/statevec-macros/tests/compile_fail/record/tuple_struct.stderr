@@ -1,0 +1,5 @@
+error: #[record] only supports named-field structs
+ --> tests/compile_fail/record/tuple_struct.rs:7:1
+  |
+7 | pub struct Bad(u64, u64);
+  | ^^^

@@ -1,0 +1,5 @@
+error: record_len must be a multiple of 16 from 32 to 32768; got 100
+ --> tests/compile_fail/record/invalid_record_len.rs:7:12
+  |
+7 | pub struct Bad {
+  |            ^^^

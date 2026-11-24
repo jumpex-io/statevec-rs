@@ -1,0 +1,103 @@
+[package]
+name = "statevec-projector-examples"
+version.workspace = true
+edition = "2024"
+rust-version = "1.91"
+description = "Projector example plugins and qualification fixtures for the StateVec SDK; not published."
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dev-dependencies]
+statevec_projector_api.workspace = true
+statevec_model.workspace = true
+statevec_api.workspace = true
+statevec_frame.workspace = true
+sha2.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+test-case.workspace = true
+tempfile.workspace = true
+statevec.workspace = true
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+
+[[example]]
+name = "projector_delivery"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "projector_observer"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "projector_history"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "projector_latest"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "projector_latest_exchange"
+crate-type = ["cdylib"]
+
+# Real latest plugin paused at a physical read or before the native rebuild offer.
+[[example]]
+name = "projector_latest_probe"
+path = "tests/fixtures/latest_probe.rs"
+crate-type = ["cdylib"]
+
+# Physical queue/reply faults around the same public history plugin.
+[[example]]
+name = "projector_history_probe"
+path = "tests/fixtures/history_probe.rs"
+crate-type = ["cdylib"]
+
+# Qualification fixture, not an application/durability example.
+[[example]]
+name = "projector_lifecycle_probe"
+path = "tests/fixtures/lifecycle_probe.rs"
+crate-type = ["cdylib"]
+
+# Public generated worker reading its learner's records through the query table.
+[[example]]
+name = "projector_query_probe"
+path = "tests/fixtures/query_probe.rs"
+crate-type = ["cdylib"]
+
+# Additive qualification uses the exported SDK worker and the existing stores.
+[[example]]
+name = "projector_bank_source"
+path = "tests/fixtures/additive_bank_source.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "projector_bank_target"
+path = "tests/fixtures/additive_bank_target.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "projector_bank_exact"
+path = "tests/fixtures/additive_bank_exact.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "projector_bank_exact_source"
+path = "tests/fixtures/additive_bank_exact_source.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "projector_bank_revert_record"
+path = "tests/fixtures/revert_bank_record.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "projector_bank_revert_command"
+path = "tests/fixtures/revert_bank_command.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "projector_bank_revert_event"
+path = "tests/fixtures/revert_bank_event.rs"
+crate-type = ["cdylib"]

@@ -1,0 +1,5 @@
+error: duplicate field index 1
+  --> tests/compile_fail/record/duplicate_index.rs:12:9
+   |
+12 |     pub b: u64,
+   |         ^

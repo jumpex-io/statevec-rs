@@ -1,0 +1,72 @@
+#[allow(dead_code)]
+#[path = "../examples/projector_latest/plugin.rs"]
+mod plugin;
+use plugin::model::Model;
+use statevec_model::RecordKey;
+use statevec_projector_api::plugin::*;
+use statevec_projector_api::{Digest32, ProjectionManifest};
+
+#[test]
+fn rebuild_then_deltas_preserve_record_kinds_and_before_images() {
+    let mut model = Model::default();
+    for kind in [1, 2, u16::MAX] { model.insert(kind, 1, 4, &[kind as u8]).unwrap(); }
+    let key = RecordKey { kind: 2, sys_id: 1 };
+    let delta = model.change(RecordDeltaView::Update { key, revision: 5, before: &[2], after: &[10] }).unwrap();
+    assert_eq!(delta["before"], serde_json::json!([2]));
+    assert_eq!(delta["after"], serde_json::json!([10]));
+    model.change(RecordDeltaView::Delete { key, revision: 6, before: &[10] }).unwrap();
+    model.change(RecordDeltaView::Insert { key: RecordKey { kind: 2, sys_id: 2 }, revision: 1, after: &[20] }).unwrap();
+    assert!(!model.records.contains_key(&(2, 1)));
+    assert_eq!(model.records[&(2, 2)], (1, vec![20]));
+    assert_eq!(model.records[&(1, 1)], (4, vec![1]));
+    assert_eq!(model.records[&(u16::MAX, 1)], (4, vec![255]));
+    assert_eq!(model.reset(u64::MAX)["raft_index"], u64::MAX.to_string());
+}
+#[test]
+fn duplicate_and_inconsistent_delta_leave_the_model_unchanged() {
+    let mut model = Model::default();
+    model.insert(2, 1, 4, b"original").unwrap();
+    assert!(model.insert(2, 1, 5, b"wrong").is_err());
+    let key = RecordKey { kind: 2, sys_id: 1 };
+    assert!(model.change(RecordDeltaView::Update { key, revision: 5, before: b"wrong", after: b"next" }).is_err());
+    assert!(model.change(RecordDeltaView::Delete { key, revision: 4, before: b"original" }).is_err());
+    assert_eq!(model.records[&(2, 1)], (4, b"original".to_vec()));
+}
+#[test]
+fn configuration_is_strict_and_never_opens_the_report() {
+    let directory = tempfile::tempdir().unwrap();
+    let configure = |bytes| plugin::Latest.configure(ProjectorConfig::new(bytes, directory.path()));
+    let configured = configure(br#"{"report_path":"output"}"#).unwrap();
+    for bytes in [br#"["output"]"#.as_slice(), br#"{"report_path":""}"#, br#"{"report_path":"x","offset_path":"y"}"#, br#"{"report_path":"x","report_path":"y"}"#] {
+        assert!(configure(bytes).is_err(), "{bytes:?}");
+    }
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+
+    let identity = SourceIdentity {
+        cluster_identity: Digest32::new([1; 32]),
+        genesis_identity: Digest32::new([2; 32]),
+        execution_lineage_identity: Digest32::new([3; 32]),
+        manifest: ProjectionManifest::AllRegisteredSchema,
+    };
+    let prepared = configured
+        .prepare(ProjectorPrepare::new(identity, 1, &"01".repeat(32), "latest", b"{}", None, HistoryMode::LatestState))
+        .unwrap();
+    assert_eq!(prepared.start_request(), StartRequest::LatestState);
+    assert!(directory.path().join("output").is_file());
+}
+
+#[test]
+fn reset_starts_a_new_output_row_without_reading_or_replacing_old_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("report");
+    let partial = b"{\"type\":\"delta\",\"changes\":";
+    std::fs::write(&path, partial).unwrap();
+    // A write-only append descriptor cannot load the previous model or offset.
+    let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+    plugin::write_reset(&mut file, &Model::default(), 9).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(&bytes[..partial.len()], partial, "old output is not a cache to delete");
+    assert_eq!(bytes[partial.len()], b'\n', "partial previous output cannot swallow the new reset");
+    let reset: serde_json::Value = serde_json::from_slice(&bytes[partial.len() + 1..]).unwrap();
+    assert_eq!(reset, serde_json::json!({"type":"reset","raft_index":"9","records":[]}));
+}

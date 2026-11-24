@@ -1,0 +1,333 @@
+// Copyright 2026 Jumpex Technology.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Simple bank demo: deposit, withdraw, and in-bank transfer with double-entry bookkeeping.
+
+use statevec::command_dispatch;
+use statevec::event::GeneratedEventAccess;
+use statevec::record::RecordSchema;
+use statevec::{
+    BusinessInvariantReadContext, InvariantReadContextExt, RuntimeCommandEnvelope, RuntimeHostContext,
+    RuntimePlugin, RuntimePluginError, RuntimePluginUnloadError, TypedTxContext,
+};
+
+mod schema;
+pub use schema::*;
+
+const PLATFORM_ACCOUNT_ID: u64 = 0;
+const ENTRY_TYPE_DEPOSIT: u8 = 1;
+const ENTRY_TYPE_WITHDRAW: u8 = 2;
+const ENTRY_TYPE_TRANSFER: u8 = 3;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BankError {
+    Host(statevec::RuntimeHostError),
+    InvalidInput(statevec::model::CommandSchemaError),
+    UnsupportedCommand(statevec::CommandKind),
+    InsufficientFunds,
+    InvalidAmount,
+    PlatformAccount,
+    SelfTransfer,
+    AmountOverflow,
+}
+
+impl BankError {
+    pub fn rejection_code(&self) -> Option<statevec::BusinessRejectCode> {
+        let code = match self {
+            Self::InsufficientFunds => 1,
+            Self::InvalidAmount => 2,
+            Self::PlatformAccount => 3,
+            Self::SelfTransfer => 4,
+            Self::AmountOverflow => 5,
+            Self::Host(_) | Self::InvalidInput(_) | Self::UnsupportedCommand(_) => return None,
+        };
+        statevec::BusinessRejectCode::new(code)
+    }
+}
+
+impl From<statevec::RuntimeHostError> for BankError {
+    fn from(source: statevec::RuntimeHostError) -> Self { Self::Host(source) }
+}
+
+impl From<statevec::model::CommandSchemaError> for BankError {
+    fn from(source: statevec::model::CommandSchemaError) -> Self {
+        match source {
+            statevec::model::CommandSchemaError::UnsupportedKind { kind } => Self::UnsupportedCommand(kind),
+            other => Self::InvalidInput(other),
+        }
+    }
+}
+
+impl std::fmt::Display for BankError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Host(source) => write!(f, "{source}"),
+            Self::InvalidInput(source) => write!(f, "invalid command payload: {source:?}"),
+            Self::UnsupportedCommand(kind) => write!(f, "unknown command kind {kind}"),
+            Self::InsufficientFunds => f.write_str("insufficient balance"),
+            Self::InvalidAmount => f.write_str("amount must be positive"),
+            Self::PlatformAccount => f.write_str("platform account cannot be addressed by this command"),
+            Self::SelfTransfer => f.write_str("cannot transfer to self"),
+            Self::AmountOverflow => f.write_str("amount overflow"),
+        }
+    }
+}
+impl std::error::Error for BankError {}
+
+pub struct BankRuntime;
+
+impl BankRuntime {
+    pub const EXECUTION_REVISION: &'static str = "bank-example-execution-v2";
+
+    /// Executes the same typed handlers on a local test context or a platform
+    /// adapter. The caller supplies the transaction boundary.
+    pub fn dispatch<Tx: TypedTxContext + ?Sized>(
+        &self, tx: &mut Tx, command: &dyn RuntimeCommandEnvelope,
+    ) -> Result<(), BankError>
+    where BankError: From<Tx::Error> {
+        self.preflight_try_dispatch_bank(command.command_kind(), command.payload())?;
+        if self.try_dispatch_bank(tx, command)? { Ok(()) }
+        else { Err(BankError::UnsupportedCommand(command.command_kind())) }
+    }
+
+    fn adjust_account<Tx: TypedTxContext<Error: Into<BankError>> + ?Sized>(
+        account_id: u64,
+        tx: &mut Tx,
+        credit_delta: u64,
+        debit_delta: u64,
+        check_nonneg: bool,
+    ) -> Result<(u64, u64), BankError> {
+        tx.update_or_create_typed_by_unique_key::<Account, _, _, _, _>(
+            Account::unique_key(account_id),
+            |r| -> Result<(u64, u64), BankError> {
+                let new_credit = r
+                    .total_credit()
+                    .checked_add(credit_delta)
+                    .ok_or_else(|| BankError::AmountOverflow)?;
+                let new_debit = r
+                    .total_debit()
+                    .checked_add(debit_delta)
+                    .ok_or_else(|| BankError::AmountOverflow)?;
+                if check_nonneg && new_credit < new_debit {
+                    return Err(BankError::InsufficientFunds);
+                }
+                r.set_total_credit(new_credit);
+                r.set_total_debit(new_debit);
+                Ok((new_credit, new_debit))
+            },
+            |r| -> Result<(u64, u64), BankError> {
+                if check_nonneg && credit_delta < debit_delta {
+                    return Err(BankError::InsufficientFunds);
+                }
+                r.init_account_id(account_id);
+                r.set_total_credit(credit_delta);
+                r.set_total_debit(debit_delta);
+                Ok((credit_delta, debit_delta))
+            },
+        )
+        .map_err(Into::into)?
+    }
+
+    fn emit_balance_changed<Tx: TypedTxContext + ?Sized>(
+        tx: &mut Tx,
+        account_id: u64,
+        new_credit: u64,
+        new_debit: u64,
+        entry_type: u8,
+    ) {
+        tx.emit_typed_event::<BalanceChanged>(
+            BalanceChanged::builder()
+                .set_account_id(account_id)
+                .set_new_credit(new_credit)
+                .set_new_debit(new_debit)
+                .set_entry_type(entry_type)
+                .build().expect("fixed-width payload"),
+        );
+    }
+
+    fn handle_deposit<Tx: TypedTxContext<Error: Into<BankError>> + ?Sized>(
+        &self,
+        tx: &mut Tx,
+        command: DepositAccess<'_>,
+    ) -> Result<(), BankError> {
+        let account_id = command.account_id();
+        let amount = command.amount();
+        if account_id == PLATFORM_ACCOUNT_ID {
+            return Err(BankError::PlatformAccount);
+        }
+        if amount == 0 {
+            return Err(BankError::InvalidAmount);
+        }
+
+        let (uc, ud) = Self::adjust_account(account_id, tx, amount, 0, true)?;
+        let (pc, pd) = Self::adjust_account(PLATFORM_ACCOUNT_ID, tx, 0, amount, false)?;
+        Self::emit_balance_changed(tx, account_id, uc, ud, ENTRY_TYPE_DEPOSIT);
+        Self::emit_balance_changed(tx, PLATFORM_ACCOUNT_ID, pc, pd, ENTRY_TYPE_DEPOSIT);
+        Ok(())
+    }
+
+    fn handle_withdraw<Tx: TypedTxContext<Error: Into<BankError>> + ?Sized>(
+        &self,
+        tx: &mut Tx,
+        command: WithdrawAccess<'_>,
+    ) -> Result<(), BankError> {
+        let account_id = command.account_id();
+        let amount = command.amount();
+        if account_id == PLATFORM_ACCOUNT_ID {
+            return Err(BankError::PlatformAccount);
+        }
+        if amount == 0 {
+            return Err(BankError::InvalidAmount);
+        }
+
+        let (uc, ud) = Self::adjust_account(account_id, tx, 0, amount, true)?;
+        let (pc, pd) = Self::adjust_account(PLATFORM_ACCOUNT_ID, tx, amount, 0, false)?;
+        Self::emit_balance_changed(tx, account_id, uc, ud, ENTRY_TYPE_WITHDRAW);
+        Self::emit_balance_changed(tx, PLATFORM_ACCOUNT_ID, pc, pd, ENTRY_TYPE_WITHDRAW);
+        Ok(())
+    }
+
+    fn handle_transfer<Tx: TypedTxContext<Error: Into<BankError>> + ?Sized>(
+        &self,
+        tx: &mut Tx,
+        command: TransferAccess<'_>,
+    ) -> Result<(), BankError> {
+        let from = command.from_account_id();
+        let to = command.to_account_id();
+        let amount = command.amount();
+        if from == PLATFORM_ACCOUNT_ID || to == PLATFORM_ACCOUNT_ID {
+            return Err(BankError::PlatformAccount);
+        }
+        if from == to {
+            return Err(BankError::SelfTransfer);
+        }
+        if amount == 0 {
+            return Err(BankError::InvalidAmount);
+        }
+
+        let (fc, fd) = Self::adjust_account(from, tx, 0, amount, true)?;
+        let (tc, td) = Self::adjust_account(to, tx, amount, 0, true)?;
+        Self::emit_balance_changed(tx, from, fc, fd, ENTRY_TYPE_TRANSFER);
+        Self::emit_balance_changed(tx, to, tc, td, ENTRY_TYPE_TRANSFER);
+        Ok(())
+    }
+}
+
+command_dispatch! {
+    fn try_dispatch_bank;
+    runtime = BankRuntime;
+    error = BankError;
+    Deposit => Self::handle_deposit,
+    Withdraw => Self::handle_withdraw,
+    Transfer => Self::handle_transfer,
+}
+
+impl RuntimePlugin for BankRuntime {
+    fn name(&self) -> &'static str {
+        "bank"
+    }
+
+    fn schema_registry(&self) -> statevec::SchemaRegistry {
+        registry()
+    }
+
+    fn run_tx(
+        &self,
+        tx: &mut dyn RuntimeHostContext,
+        command: &dyn RuntimeCommandEnvelope,
+    ) -> Result<(), RuntimePluginError> {
+        self.dispatch(tx, command).map_err(|error| RuntimePluginError::new(error.to_string()))
+    }
+
+    fn validate_business_invariants(&self, ctx: &dyn BusinessInvariantReadContext) -> Result<(), String> {
+        let mut keys = Vec::new();
+        ctx.for_each_record_key_raw(Account::KIND, &mut |key| keys.push(key))
+            .map_err(|e| e.to_string())?;
+
+        let mut total_balance: i128 = 0;
+        for key in keys {
+            let Some((account_id, credit, debit)) = ctx
+                .with_read_typed::<Account, _, _>(key.sys_id, |acc| {
+                    (acc.account_id(), acc.total_credit(), acc.total_debit())
+                })
+                .map_err(|e| e.to_string())?
+            else {
+                continue;
+            };
+
+            if account_id != PLATFORM_ACCOUNT_ID && credit < debit {
+                return Err(format!(
+                    "account {account_id} has negative balance: credit={credit} debit={debit}"
+                ));
+            }
+            total_balance += i128::from(credit) - i128::from(debit);
+        }
+
+        if total_balance != 0 {
+            return Err(format!(
+                "total balance across all accounts is not zero: {total_balance}"
+            ));
+        }
+        Ok(())
+    }
+
+    fn on_unload(&mut self) -> Result<(), RuntimePluginUnloadError> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use statevec::GeneratedCommandAccess;
+    use statevec_test::TestHost;
+
+    fn new_host() -> statevec_test::PluginTestHost<BankRuntime> {
+        TestHost::for_plugin(BankRuntime)
+    }
+
+    #[test]
+    fn deposit_updates_user_and_platform_accounts() {
+        let mut host = new_host();
+
+        host.run::<Deposit>(Deposit::builder().set_account_id(1).set_amount(100).build().expect("fixed-width payload"))
+            .unwrap();
+
+        assert_eq!(
+            host.expect::<Account, _>(Account::unique_key(1), |account| account.total_credit()),
+            100
+        );
+        assert_eq!(
+            host.expect::<Account, _>(Account::unique_key(PLATFORM_ACCOUNT_ID), |account| {
+                account.total_debit()
+            }),
+            100
+        );
+        assert_eq!(host.count_events_of::<BalanceChanged>(), 2);
+        host.expect_event::<BalanceChanged, _>(|event| {
+            event.account_id() == 1
+                && event.new_credit() == 100
+                && event.new_debit() == 0
+                && event.entry_type() == ENTRY_TYPE_DEPOSIT
+        });
+        host.validate_invariants().unwrap();
+    }
+
+    #[test]
+    fn withdraw_without_balance_is_plugin_error() {
+        let mut host = new_host();
+
+        let err = host
+            .run::<Withdraw>(
+                Withdraw::builder()
+                    .set_account_id(1)
+                    .set_amount(100)
+                    .build().expect("fixed-width payload"),
+            )
+            .expect_err("withdraw should fail");
+
+        assert_eq!(err.to_string(), "insufficient balance");
+        assert_eq!(host.count::<Account>(), 0);
+        assert_eq!(host.count_events_of::<BalanceChanged>(), 0);
+    }
+}

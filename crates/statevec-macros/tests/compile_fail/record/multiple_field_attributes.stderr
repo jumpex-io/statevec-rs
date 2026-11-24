@@ -1,0 +1,5 @@
+error: multiple #[field(...)] attributes are not allowed
+ --> tests/compile_fail/record/multiple_field_attributes.rs:9:5
+  |
+9 |     #[field(immutable = true)]
+  |     ^

@@ -1,0 +1,5 @@
+error: field 'big' type is not supported in canonical indexes v1
+ --> tests/compile_fail/index/index_unsupported_type.rs:3:78
+  |
+3 | #[record(kind = 1, record_len = 64, index(id = 0, name = "by_big", fields = [big]))]
+  |                                                                              ^^^

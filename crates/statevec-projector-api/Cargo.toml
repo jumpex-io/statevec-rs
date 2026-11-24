@@ -1,0 +1,25 @@
+[package]
+name = "statevec-projector-api"
+version.workspace = true
+edition = "2024"
+rust-version = "1.91"
+description = "Applied Raft entries, consistent snapshots and durable offsets for StateVec projectors."
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+statevec_model.workspace = true
+statevec_frame.workspace = true
+statevec_api.workspace = true
+sha2.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+test-case.workspace = true
+libc.workspace = true
+tempfile.workspace = true

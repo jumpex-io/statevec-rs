@@ -1,0 +1,5 @@
+error: record kind 61440 is reserved for StateVec system metadata; valid range is [1,61439]
+ --> tests/compile_fail/record/record_kind_61440.rs:7:12
+  |
+7 | pub struct Bad {
+  |            ^^^

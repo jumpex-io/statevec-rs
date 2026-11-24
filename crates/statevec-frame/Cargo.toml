@@ -1,0 +1,17 @@
+[package]
+name = "statevec-frame"
+version.workspace = true
+edition = "2024"
+rust-version = "1.91"
+description = "StateVec client intent, protocol values and application evidence."
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+crc32fast = "1.5.2"
+statevec_model.workspace = true
+serde.workspace = true
+sha2 = "0.11.0"
+
+[dev-dependencies]
+test-case = "3.3.1"

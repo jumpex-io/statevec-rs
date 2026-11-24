@@ -1,0 +1,26 @@
+[package]
+name = "statevec-macros"
+version.workspace = true
+edition = "2024"
+rust-version = "1.91"
+description = "Procedural macros for schema-first StateVec domain definitions."
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+statevec_model.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+
+[dev-dependencies]
+statevec.workspace = true
+statevec_api.workspace = true
+test-case = "3.3.1"
+trybuild.workspace = true
+
+[lib]
+proc-macro = true

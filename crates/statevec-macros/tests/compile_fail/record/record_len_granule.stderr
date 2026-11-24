@@ -1,0 +1,11 @@
+error: record_len must be a multiple of 16 from 32 to 32768; got 72
+ --> tests/compile_fail/record/record_len_granule.rs:8:12
+  |
+8 | pub struct NotAGranuleMultiple {
+  |            ^^^^^^^^^^^^^^^^^^^
+
+error: record_len must be a multiple of 16 from 32 to 32768; got 16
+  --> tests/compile_fail/record/record_len_granule.rs:15:12
+   |
+15 | pub struct BelowMinimum {
+   |            ^^^^^^^^^^^^

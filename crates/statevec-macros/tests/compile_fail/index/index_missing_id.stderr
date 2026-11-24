@@ -1,0 +1,5 @@
+error: index(...) requires id = N
+ --> tests/compile_fail/index/index_missing_id.rs:3:37
+  |
+3 | #[record(kind = 1, record_len = 64, index(name = "by_value", fields = [a]))]
+  |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

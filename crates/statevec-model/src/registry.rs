@@ -1,0 +1,1005 @@
+// Copyright 2026 Jumpex Technology.
+// SPDX-License-Identifier: Apache-2.0
+
+use crate::idl::SchemaIdlError;
+use crate::model::{
+    CanonicalIndexDefinition, CommandDefinition, CommandKind, CommandSchemaError, EnumDefinition, EventDefinition,
+    EventKind, FieldDefinition, FieldType, GeneratedCommandAccess, KeyBuilder, KeyBytes, MAX_CANONICAL_INDEX_KEY_BYTES,
+    MAX_CANONICAL_INDEXES_PER_RECORD, MAX_UNIQUE_KEYS_PER_RECORD, PayloadFieldDefinition, RecordDefinition, RecordKind,
+    SYSTEM_KIND_MIN, USER_KIND_MAX, UniqueKeyBytes, UniqueKeyDefinition, Version, read_bool, read_i32_le, read_i64_le,
+    read_i128_le, read_u8, read_u16_le, read_u32_le, read_u64_le, validate_decimal_scale_compat,
+    validate_repeated_payload_compat, validate_semantic_compat,
+};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+/// Compact stable fingerprint for one schema section.
+///
+/// Fingerprints are deterministic drift detectors for schema compatibility.
+/// They are not cryptographic hashes and should not be used as an
+/// adversarial-collision defense.
+pub type SchemaFingerprint = [u8; 16];
+
+/// Failure to validate record field values before generated accessors or indexes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecordValueError {
+    /// The record cannot contain its declared schema payload.
+    PayloadTooShort { kind: RecordKind, required: usize, actual: usize },
+    /// A checked field does not fit its type's encoding in the declared record layout.
+    FieldLayout { kind: RecordKind, field_index: u32, offset: u32, len: u32 },
+    /// An enum field has no matching type definition in this registry.
+    MissingDefinition { kind: RecordKind, field_index: u32 },
+    /// A byte does not name a declared variant; discriminants need not be contiguous.
+    InvalidValue { kind: RecordKind, field_index: u32, value: u8 },
+    /// A FixedBytes length prefix exceeds the field's declared capacity.
+    FixedBytesLength { kind: RecordKind, field_index: u32, len: u16, capacity: u32 },
+}
+
+/// Complete schema identity for compatibility checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SchemaIdentity {
+    /// Schema module version.
+    pub schema_version: Version,
+    /// Fingerprint of named enum/type definitions.
+    pub types_schema_fingerprint: SchemaFingerprint,
+    /// Fingerprint of record definitions.
+    pub record_schema_fingerprint: SchemaFingerprint,
+    /// Fingerprint of command definitions.
+    pub command_schema_fingerprint: SchemaFingerprint,
+    /// Fingerprint of event definitions.
+    pub event_schema_fingerprint: SchemaFingerprint,
+}
+
+/// Record kinds below this bound are found by direct index.
+const DENSE_RECORD_KINDS: usize = 1024;
+
+/// A generated command's complete payload check: every field and exact
+/// consumption, as [`GeneratedCommandAccess::validate_payload`] defines it.
+#[doc(hidden)]
+pub type CommandPayloadValidator = fn(&[u8]) -> Result<(), CommandSchemaError>;
+
+/// Registry of all schema definitions exported by one domain schema module.
+#[derive(Debug, Clone)]
+pub struct SchemaRegistry {
+    schema_version: Version,
+    record_defs: BTreeMap<RecordKind, RecordDefinition>,
+    /// Immutable lookup copy, sized by the largest registered low kind.
+    /// Ordered iteration, fingerprints and IDL use `record_defs`.
+    dense_record_defs: Box<[Option<RecordDefinition>]>,
+    record_zero_spans: BTreeMap<RecordKind, Box<[crate::reserved_bytes::ZeroSpan]>>,
+    command_defs: BTreeMap<CommandKind, CommandDefinition>,
+    event_defs: BTreeMap<EventKind, EventDefinition>,
+    enum_defs: BTreeMap<&'static str, EnumDefinition>,
+    /// Generated payload validators of registered commands. Process-local
+    /// code: not part of the IDL, the fingerprints or the schema identity.
+    command_validators: BTreeMap<CommandKind, CommandPayloadValidator>,
+    record_schema_fingerprint: SchemaFingerprint,
+    command_schema_fingerprint: SchemaFingerprint,
+    event_schema_fingerprint: SchemaFingerprint,
+    types_schema_fingerprint: SchemaFingerprint,
+}
+
+impl SchemaRegistry {
+    /// Builds a schema registry from static definitions.
+    pub fn new(
+        schema_version: Version,
+        record_defs: &[RecordDefinition],
+        command_defs: &[CommandDefinition],
+        event_defs: &[EventDefinition],
+        enum_defs: &[EnumDefinition],
+    ) -> Self {
+        Self::try_new(schema_version, record_defs, command_defs, event_defs, enum_defs)
+            .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    // Static definitions keep their programmer-error panic contract; decoded
+    // IDL uses these same guards without turning invalid input into an unwind.
+    pub(crate) fn try_new(
+        schema_version: Version,
+        record_defs: &[RecordDefinition],
+        command_defs: &[CommandDefinition],
+        event_defs: &[EventDefinition],
+        enum_defs: &[EnumDefinition],
+    ) -> Result<Self, SchemaIdlError> {
+        let record_defs = build_record_map(record_defs)?;
+        let record_zero_spans = record_defs
+            .values()
+            .map(|definition| {
+                crate::reserved_bytes::zero_spans(definition)
+                    .map(|spans| (definition.kind, spans))
+                    .map_err(SchemaIdlError::RecordLayout)
+            })
+            .collect::<Result<_, _>>()?;
+        let command_defs = build_command_map(command_defs)?;
+        let event_defs = build_event_map(event_defs)?;
+        let enum_defs = build_enum_map(enum_defs)?;
+
+        let record_schema_fingerprint = fingerprint_record_defs(record_defs.values().copied());
+        let command_schema_fingerprint = fingerprint_command_defs(command_defs.values().copied());
+        let event_schema_fingerprint = fingerprint_event_defs(event_defs.values().copied());
+        let types_schema_fingerprint = fingerprint_enum_defs(enum_defs.values().copied());
+
+        let dense_len = record_defs
+            .keys()
+            .filter(|kind| usize::from(**kind) < DENSE_RECORD_KINDS)
+            .map(|kind| usize::from(*kind) + 1)
+            .max()
+            .unwrap_or(0);
+        let mut dense_record_defs = vec![None; dense_len].into_boxed_slice();
+        for (kind, definition) in record_defs.range(..DENSE_RECORD_KINDS as RecordKind) {
+            dense_record_defs[usize::from(*kind)] = Some(*definition);
+        }
+
+        Ok(Self {
+            schema_version,
+            record_defs,
+            dense_record_defs,
+            record_zero_spans,
+            command_defs,
+            event_defs,
+            enum_defs,
+            command_validators: BTreeMap::new(),
+            record_schema_fingerprint,
+            command_schema_fingerprint,
+            event_schema_fingerprint,
+            types_schema_fingerprint,
+        })
+    }
+
+    /// Attaches the generated payload validator of `C` to its registered kind.
+    ///
+    /// `schema_module!` registries attach one for every command. A registry
+    /// built by hand or decoded from IDL has none; one that crosses the Core
+    /// export must attach one per registered command, or configuration
+    /// refuses it. Display metadata such as a semantic tag may differ from
+    /// `C`'s declaration; the payload layout may not.
+    ///
+    /// # Panics
+    ///
+    /// If `C::KIND` is not registered, if its registered definition has a
+    /// different payload layout than `C`, or if an enum field of `C` decodes
+    /// another set of values than the enum this registry exports under that
+    /// name. Like an invalid static definition, each is a programmer error.
+    #[track_caller]
+    pub fn with_command_validator<C: GeneratedCommandAccess>(mut self) -> Self {
+        let declared = C::definition();
+        let Some(registered) = self.command_defs.get(&C::KIND) else {
+            panic!("command kind {} ({}) is not registered in this schema", C::KIND, declared.name);
+        };
+        if !same_payload_layout(registered, declared) {
+            panic!("registered command kind {} does not have the payload layout of {}", C::KIND, declared.name);
+        }
+        // The validator decodes each enum field with C's own enum, listed in
+        // field order; the IDL exports this registry's enum of that name.
+        // Both must accept the same values. Variant names and order are
+        // display metadata.
+        let names = declared.fields.iter().filter_map(|field| field.enum_type_name);
+        let decoded = C::enum_definitions();
+        if names.clone().count() != decoded.len() {
+            panic!("command {} lists {} enum definitions for its enum fields", declared.name, decoded.len());
+        }
+        for (name, decoded) in names.zip(decoded) {
+            let exported = self.enum_defs.get(name);
+            if decoded.name != name || !exported.is_some_and(|exported| same_enum_values(decoded, exported)) {
+                panic!("command {} decodes enum {name} with values this schema does not export", declared.name);
+            }
+        }
+        self.command_validators.insert(C::KIND, C::validate_payload);
+        self
+    }
+
+    /// The generated payload validator attached to a registered command kind.
+    #[doc(hidden)]
+    pub fn command_payload_validator(&self, kind: CommandKind) -> Option<CommandPayloadValidator> {
+        self.command_validators.get(&kind).copied()
+    }
+
+    /// Builds a schema registry containing only record definitions.
+    pub fn with_records(schema_version: Version, record_defs: &[RecordDefinition]) -> Self {
+        Self::new(schema_version, record_defs, &[], &[], &[])
+    }
+
+    /// Returns the schema module version.
+    #[inline(always)]
+    pub fn schema_version(&self) -> Version {
+        self.schema_version
+    }
+
+    /// Returns the record schema fingerprint.
+    #[inline(always)]
+    pub fn record_schema_fingerprint(&self) -> SchemaFingerprint {
+        self.record_schema_fingerprint
+    }
+
+    /// Returns the command schema fingerprint.
+    #[inline(always)]
+    pub fn command_schema_fingerprint(&self) -> SchemaFingerprint {
+        self.command_schema_fingerprint
+    }
+
+    /// Returns the event schema fingerprint.
+    #[inline(always)]
+    pub fn event_schema_fingerprint(&self) -> SchemaFingerprint {
+        self.event_schema_fingerprint
+    }
+
+    /// Returns the enum/type schema fingerprint.
+    #[inline(always)]
+    pub fn types_schema_fingerprint(&self) -> SchemaFingerprint {
+        self.types_schema_fingerprint
+    }
+
+    /// Returns the complete schema identity.
+    #[inline(always)]
+    pub fn identity(&self) -> SchemaIdentity {
+        SchemaIdentity {
+            schema_version: self.schema_version,
+            types_schema_fingerprint: self.types_schema_fingerprint,
+            record_schema_fingerprint: self.record_schema_fingerprint,
+            command_schema_fingerprint: self.command_schema_fingerprint,
+            event_schema_fingerprint: self.event_schema_fingerprint,
+        }
+    }
+
+    /// Returns a record definition by kind.
+    #[inline]
+    pub fn try_get(&self, kind: RecordKind) -> Option<&RecordDefinition> {
+        let index = usize::from(kind);
+        if index < DENSE_RECORD_KINDS {
+            return self.dense_record_defs.get(index).and_then(Option::as_ref);
+        }
+        self.record_defs.get(&kind)
+    }
+
+    /// Iterates record definitions in stable kind order.
+    #[inline]
+    pub fn record_defs(&self) -> impl Iterator<Item = &RecordDefinition> + '_ {
+        self.record_defs.values()
+    }
+
+    /// Checked zero intervals in stable offset order, computed once at registration.
+    #[doc(hidden)]
+    pub fn record_zero_spans(&self, kind: RecordKind) -> Option<&[crate::reserved_bytes::ZeroSpan]> {
+        self.record_zero_spans.get(&kind).map(Box::as_ref)
+    }
+
+    /// V3 validation against this registry's checked definition. An unknown
+    /// kind returns None. No allocation or sorting occurs on the write path.
+    #[doc(hidden)]
+    pub fn validate_record_unused_bytes(
+        &self,
+        kind: RecordKind,
+        data: &[u8],
+    ) -> Option<Result<(), crate::ReservedBytesZeroError>> {
+        let definition = self.try_get(kind)?;
+        let spans = self.record_zero_spans(kind)?;
+        Some((|| {
+            crate::reserved_bytes::validate_record_padding_zero(definition, data)?;
+            for span in spans {
+                if data[span.offset as usize..(span.offset + span.len) as usize]
+                    .iter()
+                    .any(|byte| *byte != 0)
+                {
+                    return Err(crate::ReservedBytesZeroError::UnusedSpanNonZero {
+                        kind,
+                        offset: span.offset,
+                        len: span.len,
+                    });
+                }
+            }
+            Ok(())
+        })())
+    }
+
+    /// Returns a command definition by kind.
+    pub fn try_get_command(&self, kind: CommandKind) -> Option<&CommandDefinition> {
+        self.command_defs.get(&kind)
+    }
+
+    /// Iterates command definitions in stable kind order.
+    #[inline]
+    pub fn command_defs(&self) -> impl Iterator<Item = &CommandDefinition> + '_ {
+        self.command_defs.values()
+    }
+
+    /// Returns an event definition by kind.
+    pub fn try_get_event(&self, kind: EventKind) -> Option<&EventDefinition> {
+        self.event_defs.get(&kind)
+    }
+
+    /// Iterates event definitions in stable kind order.
+    #[inline]
+    pub fn event_defs(&self) -> impl Iterator<Item = &EventDefinition> + '_ {
+        self.event_defs.values()
+    }
+
+    /// Iterates enum definitions in stable name order.
+    #[inline]
+    pub fn enum_defs(&self) -> impl Iterator<Item = &EnumDefinition> + '_ {
+        self.enum_defs.values()
+    }
+
+    /// Checks the field values generated infallible getters require: declared
+    /// EnumU8 discriminants and FixedBytes lengths within capacity.
+    ///
+    /// Reserved fields are opaque retired storage and are not value-checked.
+    /// FixedBytes padding after the logical length is not checked here. This
+    /// does not call user encoders or establish arbitrary callback safety.
+    #[doc(hidden)]
+    pub fn validate_record_values(&self, definition: &RecordDefinition, data: &[u8]) -> Result<(), RecordValueError> {
+        let kind = definition.kind;
+        if data.len() < definition.data_size as usize {
+            return Err(RecordValueError::PayloadTooShort {
+                kind,
+                required: definition.data_size as usize,
+                actual: data.len(),
+            });
+        }
+        for field in definition.fields {
+            let field_index = field.field_index;
+            let layout = RecordValueError::FieldLayout { kind, field_index, offset: field.offset, len: field.len };
+            match field.ty {
+                FieldType::EnumU8 => {
+                    if field.len != 1 || field.offset >= definition.data_size {
+                        return Err(layout);
+                    }
+                    let enum_def = field
+                        .enum_type_name
+                        .and_then(|name| self.enum_defs.get(name))
+                        .ok_or(RecordValueError::MissingDefinition { kind, field_index })?;
+                    let value = data[field.offset as usize];
+                    if !enum_def.variants.iter().any(|variant| variant.discriminant == value) {
+                        return Err(RecordValueError::InvalidValue { kind, field_index, value });
+                    }
+                }
+                FieldType::FixedBytes => {
+                    // Encoded as a little-endian u16 length followed by the capacity.
+                    let Some(capacity) = field.len.checked_sub(2) else { return Err(layout) };
+                    if field.offset.checked_add(field.len).is_none_or(|end| end > definition.data_size) {
+                        return Err(layout);
+                    }
+                    let offset = field.offset as usize;
+                    let len = u16::from_le_bytes([data[offset], data[offset + 1]]);
+                    if u32::from(len) > capacity {
+                        return Err(RecordValueError::FixedBytesLength { kind, field_index, len, capacity });
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Encodes a unique key for a record buffer when the record supports it.
+    #[inline]
+    pub fn encode_unique_key(&self, kind: RecordKind, data: &[u8]) -> Option<KeyBytes> {
+        let def = self.try_get(kind)?;
+        encode_unique_key(def, 0, data)
+    }
+
+    /// Encodes one unique key of a record buffer, selected by its id.
+    #[inline]
+    pub fn encode_unique_key_by_id(&self, kind: RecordKind, uk_id: u8, data: &[u8]) -> Option<KeyBytes> {
+        let def = self.try_get(kind)?;
+        encode_unique_key(def, uk_id, data)
+    }
+
+    /// Encodes all unique keys for a record buffer when the record supports them.
+    #[inline]
+    pub fn encode_unique_keys(&self, kind: RecordKind, data: &[u8]) -> Option<smallvec::SmallVec<[UniqueKeyBytes; 3]>> {
+        let def = self.try_get(kind)?;
+        if def.unique_keys.is_empty() {
+            return None;
+        }
+        let mut out = smallvec::SmallVec::with_capacity(def.unique_keys.len());
+        for uk in normalized_unique_keys(def) {
+            out.push(UniqueKeyBytes::new(uk.id, encode_unique_key_def(def, uk, data)?));
+        }
+        Some(out)
+    }
+
+    /// Returns the source-level name for a unique key id.
+    #[inline]
+    pub fn unique_key_name(&self, kind: RecordKind, uk_id: u8) -> Option<&'static str> {
+        let def = self.try_get(kind)?;
+        normalized_unique_keys(def).find(|uk| uk.id == uk_id).map(|uk| uk.name)
+    }
+
+    /// Returns whether the record kind has enough metadata for unique-key encoding.
+    #[inline]
+    pub fn supports_unique_key_encoding(&self, kind: RecordKind) -> bool {
+        let Some(def) = self.try_get(kind) else {
+            return false;
+        };
+        if def.unique_keys.is_empty() {
+            return false;
+        }
+        normalized_unique_keys(def).all(|uk| uk.encode.is_some() || can_encode_uk_generic(def, &uk))
+    }
+
+    /// Encodes a canonical index key for a record buffer when metadata is available.
+    #[inline]
+    pub fn encode_canonical_index(&self, kind: RecordKind, index_id: u8, data: &[u8]) -> Option<KeyBytes> {
+        let def = self.try_get(kind)?;
+        let index = def.canonical_indexes.iter().copied().find(|index| index.id == index_id)?;
+        encode_canonical_index_def(def, index, data)
+    }
+}
+
+fn normalized_unique_keys(def: &RecordDefinition) -> impl Iterator<Item = UniqueKeyDefinition> + '_ {
+    def.unique_keys.iter().copied()
+}
+
+fn encode_unique_key(def: &RecordDefinition, uk_id: u8, data: &[u8]) -> Option<KeyBytes> {
+    let uk = normalized_unique_keys(def).find(|uk| uk.id == uk_id)?;
+    encode_unique_key_def(def, uk, data)
+}
+
+fn encode_unique_key_def(def: &RecordDefinition, uk: UniqueKeyDefinition, data: &[u8]) -> Option<KeyBytes> {
+    if let Some(encode) = uk.encode {
+        return Some(encode(data));
+    }
+    encode_uk_generic(def, uk, data)
+}
+
+fn encode_canonical_index_def(
+    def: &RecordDefinition,
+    index: CanonicalIndexDefinition,
+    data: &[u8],
+) -> Option<KeyBytes> {
+    if let Some(encode) = index.encode {
+        return Some(encode(data));
+    }
+    encode_key_fields_generic(def, index.fields, data)
+}
+
+fn encode_uk_generic(def: &RecordDefinition, uk_def: UniqueKeyDefinition, data: &[u8]) -> Option<KeyBytes> {
+    if !can_encode_key_fields_generic(def, uk_def.fields) {
+        return None;
+    }
+
+    encode_key_fields_generic(def, uk_def.fields, data)
+}
+
+fn encode_key_fields_generic(def: &RecordDefinition, fields: &[&'static str], data: &[u8]) -> Option<KeyBytes> {
+    let mut builder = KeyBuilder::new();
+    for field_name in fields {
+        let field = def.field_by_name(field_name)?;
+        push_uk_field_bytes(&mut builder, field, data)?;
+    }
+    Some(builder.finish())
+}
+
+fn can_encode_uk_generic(def: &RecordDefinition, uk: &UniqueKeyDefinition) -> bool {
+    can_encode_key_fields_generic(def, uk.fields)
+}
+
+fn can_encode_canonical_index_generic(def: &RecordDefinition, index: &CanonicalIndexDefinition) -> bool {
+    can_encode_key_fields_generic(def, index.fields)
+        && encoded_key_fields_len(def, index.fields).is_some_and(|len| len <= MAX_CANONICAL_INDEX_KEY_BYTES)
+}
+
+fn can_encode_key_fields_generic(def: &RecordDefinition, fields: &[&'static str]) -> bool {
+    if fields.is_empty() {
+        return false;
+    }
+
+    for field_name in fields {
+        let Some(field) = def.field_by_name(field_name) else {
+            return false;
+        };
+        let Some(encoded_len) = encoded_key_field_len(field) else {
+            return false;
+        };
+        // Scalar reads must stay within the declared field. FixedBytes has
+        // an inline length prefix which is intentionally absent from its key.
+        if field.ty != FieldType::FixedBytes && usize::try_from(field.len).ok() != Some(encoded_len) {
+            return false;
+        }
+    }
+    true
+}
+
+fn encoded_key_fields_len(def: &RecordDefinition, fields: &[&'static str]) -> Option<usize> {
+    let mut len = 0usize;
+    for field_name in fields {
+        let field = def.field_by_name(field_name)?;
+        len = len.checked_add(encoded_key_field_len(field)?)?;
+    }
+    Some(len)
+}
+
+fn encoded_key_field_len(field: &FieldDefinition) -> Option<usize> {
+    match field.ty {
+        FieldType::Bool | FieldType::U8 | FieldType::EnumU8 => Some(1),
+        FieldType::U16 => Some(2),
+        FieldType::U32 | FieldType::I32 => Some(4),
+        FieldType::U64 | FieldType::I64 => Some(8),
+        FieldType::Decimal => (field.len == 16).then_some(16),
+        // FixedBytes key encoding uses the padded payload bytes, not the inline u16 length prefix.
+        FieldType::FixedBytes => usize::try_from(field.len).ok()?.checked_sub(2),
+        FieldType::U128 | FieldType::VarBytes => None,
+    }
+}
+
+fn push_uk_field_bytes(builder: &mut KeyBuilder, field: &FieldDefinition, data: &[u8]) -> Option<()> {
+    let offset = field.offset as usize;
+    match field.ty {
+        FieldType::Bool => builder.push_u8(u8::from(read_bool(data, offset).ok()?)),
+        FieldType::U8 | FieldType::EnumU8 => builder.push_u8(read_u8(data, offset).ok()?),
+        FieldType::U16 => builder.push_u16(read_u16_le(data, offset).ok()?),
+        FieldType::U32 => builder.push_u32(read_u32_le(data, offset).ok()?),
+        FieldType::U64 => builder.push_u64(read_u64_le(data, offset).ok()?),
+        FieldType::I32 => builder.push_i32(read_i32_le(data, offset).ok()?),
+        FieldType::I64 => builder.push_i64(read_i64_le(data, offset).ok()?),
+        FieldType::Decimal => builder.push_i128(read_i128_le(data, offset).ok()?),
+        FieldType::FixedBytes => {
+            let padded_len = usize::try_from(field.len).ok()?;
+            if padded_len < 2 {
+                return None;
+            }
+            let start = offset.checked_add(2)?;
+            let end = offset.checked_add(padded_len)?;
+            let bytes = data.get(start..end)?;
+            builder.push_bytes(bytes);
+        }
+        FieldType::U128 | FieldType::VarBytes => return None,
+    }
+    Some(())
+}
+
+fn build_record_map(defs: &[RecordDefinition]) -> Result<BTreeMap<RecordKind, RecordDefinition>, SchemaIdlError> {
+    let mut map = BTreeMap::new();
+    for def in defs {
+        if def.kind == 0 {
+            return Err(SchemaIdlError::InvalidSchema(format!(
+                "record kind 0 is reserved and cannot be registered: {}",
+                def.name
+            )));
+        }
+        if def.kind >= SYSTEM_KIND_MIN {
+            return Err(SchemaIdlError::InvalidSchema(format!(
+                "record kind {} is reserved for StateVec system metadata and cannot be registered: {}",
+                def.kind, def.name
+            )));
+        }
+        if map.insert(def.kind, *def).is_some() {
+            return Err(SchemaIdlError::InvalidSchema(format!(
+                "duplicate record kind registered: kind={}, name={}",
+                def.kind, def.name
+            )));
+        }
+        for field in def.fields {
+            validate_decimal_scale_compat(field.ty, field.decimal_scale).map_err(|error| {
+                SchemaIdlError::InvalidSchema(format!("record field decimal scale/type mismatch: {error}"))
+            })?;
+            validate_semantic_compat(field.ty, Some(field.len), field.semantic).map_err(|error| {
+                SchemaIdlError::InvalidSchema(format!("record field semantic/type mismatch: {error}"))
+            })?;
+        }
+        for field in def.reserved_fields {
+            validate_decimal_scale_compat(field.ty, field.decimal_scale).map_err(|error| {
+                SchemaIdlError::InvalidSchema(format!("reserved record field decimal scale/type mismatch: {error}"))
+            })?;
+            validate_semantic_compat(field.ty, Some(field.len), field.semantic).map_err(|error| {
+                SchemaIdlError::InvalidSchema(format!("reserved record field semantic/type mismatch: {error}"))
+            })?;
+        }
+        let unique_key_count = normalized_unique_keys(def).count();
+        if unique_key_count > MAX_UNIQUE_KEYS_PER_RECORD {
+            return Err(SchemaIdlError::InvalidSchema(format!(
+                "record {} defines {} unique keys; max is {}",
+                def.name, unique_key_count, MAX_UNIQUE_KEYS_PER_RECORD
+            )));
+        }
+        let mut seen_ids = BTreeMap::new();
+        let mut seen_names = BTreeMap::new();
+        for uk in normalized_unique_keys(def) {
+            // Native encoders may omit a field list. Any declared dependency,
+            // however, must name an active field, including for loaded IDL.
+            for &field in uk.fields {
+                if def.field_by_name(field).is_none() {
+                    return Err(SchemaIdlError::UniqueKeyFieldNotActive {
+                        kind: def.kind,
+                        key_id: uk.id,
+                        field: field.to_string(),
+                    });
+                }
+            }
+            if uk.encode.is_none() && !can_encode_uk_generic(def, &uk) {
+                return Err(SchemaIdlError::UniqueKeyEncodingUnsupported { kind: def.kind, key_id: uk.id });
+            }
+            if (uk.id as usize) >= MAX_UNIQUE_KEYS_PER_RECORD {
+                return Err(SchemaIdlError::InvalidSchema(format!(
+                    "record {} unique key id {} is out of range; max exclusive is {}",
+                    def.name, uk.id, MAX_UNIQUE_KEYS_PER_RECORD
+                )));
+            }
+            if seen_ids.insert(uk.id, uk.name).is_some() {
+                return Err(SchemaIdlError::InvalidSchema(format!(
+                    "duplicate unique key id registered: record={}, uk_id={}",
+                    def.name, uk.id
+                )));
+            }
+            if !uk.name.is_empty() && seen_names.insert(uk.name, uk.id).is_some() {
+                return Err(SchemaIdlError::InvalidSchema(format!(
+                    "duplicate unique key name registered: record={}, uk={}",
+                    def.name, uk.name
+                )));
+            }
+        }
+        for expected in 0..unique_key_count {
+            if !seen_ids.contains_key(&(expected as u8)) {
+                return Err(SchemaIdlError::InvalidSchema(format!(
+                    "record {} unique key ids must be contiguous from 0; missing id {}",
+                    def.name, expected
+                )));
+            }
+        }
+        if def.canonical_indexes.len() > MAX_CANONICAL_INDEXES_PER_RECORD {
+            return Err(SchemaIdlError::InvalidSchema(format!(
+                "record {} defines {} canonical indexes; max is {}",
+                def.name,
+                def.canonical_indexes.len(),
+                MAX_CANONICAL_INDEXES_PER_RECORD
+            )));
+        }
+        let mut seen_index_ids = BTreeMap::new();
+        let mut seen_index_names = BTreeMap::new();
+        for index in def.canonical_indexes {
+            if (index.id as usize) >= MAX_CANONICAL_INDEXES_PER_RECORD {
+                return Err(SchemaIdlError::InvalidSchema(format!(
+                    "record {} canonical index id {} is out of range; max exclusive is {}",
+                    def.name, index.id, MAX_CANONICAL_INDEXES_PER_RECORD
+                )));
+            }
+            if seen_index_ids.insert(index.id, index.name).is_some() {
+                return Err(SchemaIdlError::InvalidSchema(format!(
+                    "duplicate canonical index id registered: record={}, index_id={}",
+                    def.name, index.id
+                )));
+            }
+            if index.name.is_empty() {
+                return Err(SchemaIdlError::InvalidSchema(format!(
+                    "record {} canonical index name cannot be empty",
+                    def.name
+                )));
+            }
+            if seen_index_names.insert(index.name, index.id).is_some() {
+                return Err(SchemaIdlError::InvalidSchema(format!(
+                    "duplicate canonical index name registered: record={}, index={}",
+                    def.name, index.name
+                )));
+            }
+            if !can_encode_canonical_index_generic(def, index) {
+                return Err(SchemaIdlError::InvalidSchema(format!(
+                    "record {} canonical index {} has unsupported or oversized key fields",
+                    def.name, index.name
+                )));
+            }
+        }
+        for expected in 0..def.canonical_indexes.len() {
+            if !seen_index_ids.contains_key(&(expected as u8)) {
+                return Err(SchemaIdlError::InvalidSchema(format!(
+                    "record {} canonical index ids must be contiguous from 0; missing id {}",
+                    def.name, expected
+                )));
+            }
+        }
+    }
+    Ok(map)
+}
+
+/// Fields that decide a payload's encoding; names and display metadata do not.
+fn same_enum_values(left: &EnumDefinition, right: &EnumDefinition) -> bool {
+    let values = |definition: &EnumDefinition| {
+        let mut values = [false; 256];
+        for variant in definition.variants {
+            values[usize::from(variant.discriminant)] = true;
+        }
+        values
+    };
+    values(left) == values(right)
+}
+
+fn same_payload_layout(left: &CommandDefinition, right: &CommandDefinition) -> bool {
+    left.version == right.version
+        && left.fields.len() == right.fields.len()
+        && left.fields.iter().zip(right.fields).all(|(left, right)| {
+            (left.field_index, left.ty, left.enum_type_name, left.decimal_scale)
+                == (right.field_index, right.ty, right.enum_type_name, right.decimal_scale)
+                && (left.repeated, left.element_count_max, left.fixed_size)
+                    == (right.repeated, right.element_count_max, right.fixed_size)
+        })
+}
+
+fn build_command_map(defs: &[CommandDefinition]) -> Result<BTreeMap<CommandKind, CommandDefinition>, SchemaIdlError> {
+    let mut map = BTreeMap::new();
+    for def in defs {
+        if def.kind == 0 {
+            return Err(SchemaIdlError::InvalidSchema(format!(
+                "command kind 0 is reserved and cannot be registered: {}",
+                def.name
+            )));
+        }
+        if def.kind > USER_KIND_MAX {
+            return Err(SchemaIdlError::InvalidSchema(format!(
+                "command kind {} is reserved for StateVec system commands and cannot be registered: {}",
+                def.kind, def.name
+            )));
+        }
+        if map.insert(def.kind, *def).is_some() {
+            return Err(SchemaIdlError::InvalidSchema(format!(
+                "duplicate command kind registered: kind={}, name={}",
+                def.kind, def.name
+            )));
+        }
+        for field in def.fields {
+            validate_decimal_scale_compat(field.ty, field.decimal_scale).map_err(|error| {
+                SchemaIdlError::InvalidSchema(format!("command field decimal scale/type mismatch: {error}"))
+            })?;
+            validate_semantic_compat(field.ty, field.fixed_size, field.semantic).map_err(|error| {
+                SchemaIdlError::InvalidSchema(format!("command field semantic/type mismatch: {error}"))
+            })?;
+            validate_repeated_payload_compat(field.ty, field.repeated, field.element_count_max, true).map_err(
+                |error| SchemaIdlError::InvalidSchema(format!("command field repeated metadata mismatch: {error}")),
+            )?;
+        }
+    }
+    Ok(map)
+}
+
+fn build_event_map(defs: &[EventDefinition]) -> Result<BTreeMap<EventKind, EventDefinition>, SchemaIdlError> {
+    let mut map = BTreeMap::new();
+    for def in defs {
+        if def.kind == 0 {
+            return Err(SchemaIdlError::InvalidSchema(format!(
+                "event kind 0 is reserved and cannot be registered: {}",
+                def.name
+            )));
+        }
+        if def.kind > USER_KIND_MAX {
+            return Err(SchemaIdlError::InvalidSchema(format!(
+                "event kind {} is reserved for StateVec system events and cannot be registered: {}",
+                def.kind, def.name
+            )));
+        }
+        if map.insert(def.kind, *def).is_some() {
+            return Err(SchemaIdlError::InvalidSchema(format!(
+                "duplicate event kind registered: kind={}, name={}",
+                def.kind, def.name
+            )));
+        }
+        for field in def.fields {
+            validate_decimal_scale_compat(field.ty, field.decimal_scale).map_err(|error| {
+                SchemaIdlError::InvalidSchema(format!("event field decimal scale/type mismatch: {error}"))
+            })?;
+            validate_semantic_compat(field.ty, field.fixed_size, field.semantic).map_err(|error| {
+                SchemaIdlError::InvalidSchema(format!("event field semantic/type mismatch: {error}"))
+            })?;
+            validate_repeated_payload_compat(field.ty, field.repeated, field.element_count_max, false).map_err(
+                |error| SchemaIdlError::InvalidSchema(format!("event field repeated metadata mismatch: {error}")),
+            )?;
+        }
+    }
+    Ok(map)
+}
+
+fn build_enum_map(defs: &[EnumDefinition]) -> Result<BTreeMap<&'static str, EnumDefinition>, SchemaIdlError> {
+    let mut map = BTreeMap::new();
+    for def in defs {
+        if map.insert(def.name, *def).is_some() {
+            return Err(SchemaIdlError::InvalidSchema(format!(
+                "duplicate enum definition registered: name={}",
+                def.name
+            )));
+        }
+    }
+    Ok(map)
+}
+
+#[derive(Clone, Copy)]
+struct Fingerprinter {
+    lo: u64,
+    hi: u64,
+}
+
+impl Fingerprinter {
+    const LO_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const HI_OFFSET: u64 = 0x8422_2325_cbf2_9ce4;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    fn new() -> Self {
+        Self { lo: Self::LO_OFFSET, hi: Self::HI_OFFSET }
+    }
+
+    fn write_u8(&mut self, value: u8) {
+        self.lo ^= value as u64;
+        self.lo = self.lo.wrapping_mul(Self::PRIME);
+        self.hi ^= (value as u64).wrapping_add(0x9e37_79b9);
+        self.hi = self.hi.wrapping_mul(Self::PRIME);
+    }
+
+    fn write_bool(&mut self, value: bool) {
+        self.write_u8(u8::from(value));
+    }
+
+    fn write_u16(&mut self, value: u16) {
+        self.write_bytes(&value.to_le_bytes());
+    }
+
+    fn write_u32(&mut self, value: u32) {
+        self.write_bytes(&value.to_le_bytes());
+    }
+
+    fn write_str(&mut self, value: &str) {
+        self.write_u32(value.len() as u32);
+        self.write_bytes(value.as_bytes());
+    }
+
+    fn write_opt_str(&mut self, value: Option<&str>) {
+        match value {
+            Some(value) => {
+                self.write_u8(1);
+                self.write_str(value);
+            }
+            None => self.write_u8(0),
+        }
+    }
+
+    fn write_opt_u32(&mut self, value: Option<u32>) {
+        match value {
+            Some(value) => {
+                self.write_u8(1);
+                self.write_u32(value);
+            }
+            None => self.write_u8(0),
+        }
+    }
+
+    fn write_opt_u8(&mut self, value: Option<u8>) {
+        match value {
+            Some(value) => {
+                self.write_u8(1);
+                self.write_u8(value);
+            }
+            None => self.write_u8(0),
+        }
+    }
+
+    fn write_bytes(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.write_u8(byte);
+        }
+    }
+
+    fn finish(self) -> SchemaFingerprint {
+        let mut out = [0u8; 16];
+        out[..8].copy_from_slice(&self.lo.to_le_bytes());
+        out[8..].copy_from_slice(&self.hi.to_le_bytes());
+        out
+    }
+}
+
+fn fingerprint_record_defs(defs: impl IntoIterator<Item = RecordDefinition>) -> SchemaFingerprint {
+    let mut fp = Fingerprinter::new();
+    for def in defs {
+        fp.write_u16(def.kind);
+        fp.write_str(def.name);
+        fp.write_u32(def.data_size);
+        fp.write_u16(def.version);
+        let mut unique_keys: Vec<_> = normalized_unique_keys(&def).collect();
+        unique_keys.sort_by_key(|uk| uk.id);
+        fp.write_u32(unique_keys.len() as u32);
+        for uk in unique_keys {
+            fp.write_u8(uk.id);
+            fp.write_str(uk.name);
+            fp.write_u32(uk.fields.len() as u32);
+            for uk_field in uk.fields {
+                fp.write_str(uk_field);
+            }
+        }
+        fp.write_u32(def.canonical_indexes.len() as u32);
+        let mut canonical_indexes: Vec<_> = def.canonical_indexes.iter().copied().collect();
+        canonical_indexes.sort_by_key(|index| index.id);
+        for index in canonical_indexes {
+            fp.write_u8(index.id);
+            fp.write_str(index.name);
+            fp.write_u32(index.fields.len() as u32);
+            for field in index.fields {
+                fp.write_str(field);
+            }
+        }
+        fp.write_u32(def.fields.len() as u32);
+        for field in def.fields {
+            write_record_field(&mut fp, field);
+        }
+        fp.write_u32(def.reserved_fields.len() as u32);
+        for field in def.reserved_fields {
+            write_record_field(&mut fp, field);
+        }
+    }
+    fp.finish()
+}
+
+fn fingerprint_command_defs(defs: impl IntoIterator<Item = CommandDefinition>) -> SchemaFingerprint {
+    let mut fp = Fingerprinter::new();
+    for def in defs {
+        fp.write_u16(def.kind);
+        fp.write_str(def.name);
+        fp.write_u16(def.version);
+        fp.write_u32(def.fields.len() as u32);
+        for field in def.fields {
+            write_payload_field(&mut fp, field);
+        }
+    }
+    fp.finish()
+}
+
+fn fingerprint_event_defs(defs: impl IntoIterator<Item = EventDefinition>) -> SchemaFingerprint {
+    let mut fp = Fingerprinter::new();
+    for def in defs {
+        fp.write_u16(def.kind);
+        fp.write_str(def.name);
+        fp.write_u16(def.version);
+        fp.write_u32(def.fields.len() as u32);
+        for field in def.fields {
+            write_payload_field(&mut fp, field);
+        }
+    }
+    fp.finish()
+}
+
+fn fingerprint_enum_defs(defs: impl IntoIterator<Item = EnumDefinition>) -> SchemaFingerprint {
+    let mut fp = Fingerprinter::new();
+    for def in defs {
+        fp.write_str(def.name);
+        fp.write_u32(def.variants.len() as u32);
+        let mut variants: Vec<_> = def.variants.iter().collect();
+        variants.sort_by_key(|variant| variant.discriminant);
+        for variant in variants {
+            fp.write_str(variant.name);
+            fp.write_u8(variant.discriminant);
+        }
+    }
+    fp.finish()
+}
+
+fn write_record_field(fp: &mut Fingerprinter, field: &FieldDefinition) {
+    fp.write_str(field.name);
+    fp.write_u32(field.field_index);
+    fp.write_u32(field.offset);
+    fp.write_u8(field_type_tag(field.ty));
+    fp.write_u32(field.len);
+    fp.write_opt_str(field.enum_type_name);
+    fp.write_opt_u8(field.decimal_scale);
+    fp.write_bool(field.immutable);
+}
+
+fn write_payload_field(fp: &mut Fingerprinter, field: &PayloadFieldDefinition) {
+    fp.write_str(field.name);
+    fp.write_u32(field.field_index);
+    fp.write_u8(field_type_tag(field.ty));
+    fp.write_opt_str(field.enum_type_name);
+    fp.write_opt_u8(field.decimal_scale);
+    fp.write_bool(field.repeated);
+    fp.write_u16(field.element_count_max);
+    fp.write_opt_u32(field.fixed_size);
+}
+
+pub(crate) fn field_type_tag(ty: FieldType) -> u8 {
+    match ty {
+        FieldType::Bool => 1,
+        FieldType::U8 => 2,
+        FieldType::U16 => 3,
+        FieldType::U32 => 4,
+        FieldType::U64 => 5,
+        FieldType::I32 => 6,
+        FieldType::I64 => 7,
+        FieldType::U128 => 8,
+        FieldType::FixedBytes => 9,
+        FieldType::VarBytes => 10,
+        FieldType::EnumU8 => 11,
+        FieldType::Decimal => 12,
+    }
+}

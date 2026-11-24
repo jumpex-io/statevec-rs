@@ -1,0 +1,20 @@
+[package]
+name = "statevec-model"
+version.workspace = true
+edition = "2024"
+rust-version = "1.91"
+description = "Core schema, record, command, event, IDL, and registry types for StateVec."
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+smallvec.workspace = true
+
+[dev-dependencies]
+test-case = "3.3.1"

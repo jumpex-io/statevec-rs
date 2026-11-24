@@ -1,0 +1,7 @@
+error: index name 'by-value' must be a valid Rust identifier
+ --> tests/compile_fail/index/index_non_identifier_name.rs:3:1
+  |
+3 | #[record(kind = 1, record_len = 64, index(id = 0, name = "by-value", fields = [a]))]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `record` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,0 +1,27 @@
+name: Rust
+
+on:
+  # Releases are exported from the internal repository by release-cut.
+  push:
+    branches: ["release/**"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.132
+      - run: cargo check --workspace --all-targets --locked
+      - run: cargo nextest run --workspace --all-targets --locked --no-tests fail
+      - run: cargo test --workspace --doc --locked
+      - run: rustup toolchain install 1.91.0 --profile minimal
+      - run: cargo +1.91.0 build --manifest-path tests/source-compat/Cargo.toml --locked --bins --examples
+      - run: PYTHONPATH=tools/sv-local python3 -m unittest discover -s tools/sv-local/tests -v

@@ -1,0 +1,5 @@
+error: index(...) requires name = "..."
+ --> tests/compile_fail/index/index_missing_name.rs:3:37
+  |
+3 | #[record(kind = 1, record_len = 64, index(id = 0, fields = [a]))]
+  |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^

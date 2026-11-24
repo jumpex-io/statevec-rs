@@ -1,0 +1,112 @@
+// Copyright 2026 Jumpex Technology.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Core schema and wire-model types for StateVec.
+//!
+//! This crate contains the stable schema model shared by domain plugins and
+//! runtime hosts: record layouts, command and event payload definitions,
+//! generated accessor traits, schema registries, schema fingerprints, and IDL
+//! JSON conversion.
+
+mod core_version;
+/// Schema IDL JSON generation and parsing.
+pub mod idl;
+mod idl_limits;
+pub use core_version::{CoreVersion, Digest32};
+/// Core record, command, event, field, and accessor model types.
+pub mod model;
+/// Schema registry and stable schema fingerprint calculation.
+pub mod registry;
+/// Canonical validation of reserved record spans.
+#[doc(hidden)]
+pub mod reserved_bytes;
+/// Immutable core-runtime release identity.
+#[doc(hidden)]
+pub mod runtime_release;
+/// Engine-owned system schema metadata framing.
+#[doc(hidden)]
+pub mod system_schema_metadata;
+#[cfg(test)]
+mod ut_idl;
+#[cfg(test)]
+mod ut_idl_limits;
+#[cfg(test)]
+mod ut_model;
+#[cfg(test)]
+mod ut_registry;
+
+/// Public record types grouped by domain.
+pub mod record {
+    pub use crate::model::{
+        AccessError, CanonicalIndexDefinition, Decimal, DecimalParseError, DecimalRounding, EnumDecodeError,
+        EnumDefinition, EnumU8, EnumVariantDefinition, FieldDefinition, FieldType, FixedBytes,
+        GeneratedRecordAccess, KeyBuilder, KeyBytes, KeyEncodeFn, MAX_CANONICAL_INDEX_FIELDS,
+        MAX_CANONICAL_INDEX_KEY_BYTES, MAX_CANONICAL_INDEXES_PER_RECORD, MAX_DECIMAL_SCALE,
+        MAX_UNIQUE_KEYS_PER_RECORD, RECORD_HEADER_SIZE, RecordDefinition, RecordKey, RecordKind, RecordSchema,
+        SemanticTag, SemanticTagParseError, SysId, TxSeq, UniqueKeyBytes, UniqueKeyCodec, UniqueKeyDefinition,
+        Version,
+    };
+    #[doc(hidden)]
+    pub use crate::model::{
+        DecimalScaleCompatibilityError, INVALID_KIND, SYSTEM_KIND_MAX, SYSTEM_KIND_MIN,
+        SYSTEM_RUNTIME_MANIFEST_RECORD_KIND, SYSTEM_SCHEMA_RECORD_KIND, SemanticCompatibilityError, USER_KIND_MAX,
+        USER_KIND_MIN, read_bool, read_decimal_le, read_fixed_bytes, read_i32_le, read_i64_le, read_u8,
+        read_u16_le, read_u32_le, read_u64_le, read_u128_le, validate_decimal_scale_compat,
+        validate_semantic_compat, write_bool, write_decimal_le, write_fixed_bytes, write_i32_le, write_i64_le,
+        write_u8, write_u16_le, write_u32_le, write_u64_le, write_u128_le,
+    };
+}
+
+/// Public command types grouped by domain.
+pub mod command {
+    pub use crate::model::{
+        Command, CommandDefinition, CommandKind, CommandSchema, GeneratedCommandAccess, PayloadBuildError,
+        PayloadFieldDefinition, RepeatedElement, RepeatedScalar, SemanticTag, SemanticTagParseError,
+        StatevecCommandPayloadBuilder, Version,
+    };
+    #[doc(hidden)]
+    pub use crate::model::{
+        INVALID_KIND, RepeatedCompatibilityError, SYSTEM_KIND_MAX, SYSTEM_KIND_MIN, SYSTEM_LIFECYCLE_COMMAND_KIND,
+        SYSTEM_RUNTIME_MANIFEST_CUTOVER_COMMAND_KIND, SYSTEM_SCHEMA_CUTOVER_COMMAND_KIND,
+        SemanticCompatibilityError, USER_KIND_MAX, USER_KIND_MIN, read_repeated_scalar, read_var_bytes,
+        validate_repeated_payload_compat, validate_repeated_scalar, validate_semantic_compat,
+        write_repeated_scalar, write_var_bytes,
+    };
+}
+
+/// Public event types grouped by domain.
+pub mod event {
+    pub use crate::model::{
+        Event, EventDefinition, EventFrame, EventKind, EventSchema, GeneratedEventAccess, PayloadBuildError,
+        PayloadFieldDefinition, RepeatedElement, RepeatedScalar, SemanticTag, SemanticTagParseError, TxSeq,
+        Version,
+    };
+    #[doc(hidden)]
+    pub use crate::model::{
+        INVALID_KIND, RepeatedCompatibilityError, SYSTEM_KIND_MAX, SYSTEM_KIND_MIN,
+        SYSTEM_RUNTIME_MANIFEST_CUTOVER_EVENT_KIND, SYSTEM_SCHEMA_CUTOVER_EVENT_KIND, SemanticCompatibilityError,
+        USER_KIND_MAX, USER_KIND_MIN, read_repeated_scalar, validate_repeated_payload_compat,
+        validate_repeated_scalar, validate_semantic_compat, write_repeated_scalar,
+    };
+}
+
+pub use model::*;
+
+/// Stable schema identity and registry types.
+pub use registry::{RecordValueError, SchemaFingerprint, SchemaIdentity, SchemaRegistry};
+#[doc(hidden)]
+pub use registry::CommandPayloadValidator;
+#[doc(inline)]
+pub use reserved_bytes::{EngineSchemaInvariantProfile, RecordLayoutError, ReservedBytesZeroError};
+#[doc(hidden)]
+pub use reserved_bytes::{ZeroSpan, validate_reserved_bytes_zero};
+#[cfg(test)]
+mod ut_unused_bytes;
+#[doc(hidden)]
+pub use runtime_release::CoreRuntimeReleaseId;
+#[doc(hidden)]
+pub use system_schema_metadata::{
+    SYSTEM_SCHEMA_ENCODING_CANONICAL_JSON, SYSTEM_SCHEMA_ENCODING_CANONICAL_JSON_NAME, SYSTEM_SCHEMA_METADATA_MAGIC,
+    SystemSchemaMetadata, SystemSchemaMetadataError, encode_system_schema_metadata,
+    encode_system_schema_metadata_with_runtime_manifest, parse_system_schema_metadata,
+};

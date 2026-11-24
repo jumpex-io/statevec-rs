@@ -1,0 +1,11 @@
+error: duplicate command type `AddAsset` in command_dispatch!
+  --> tests/compile_fail/command_dispatch/duplicate_command_type.rs:33:9
+   |
+33 |         AddAsset => Self::handle_add_asset_again
+   |         ^^^^^^^^
+
+error: first registered here
+  --> tests/compile_fail/command_dispatch/duplicate_command_type.rs:32:9
+   |
+32 |         AddAsset => Self::handle_add_asset,
+   |         ^^^^^^^^

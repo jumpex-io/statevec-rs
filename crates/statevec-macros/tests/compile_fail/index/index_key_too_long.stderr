@@ -1,0 +1,5 @@
+error: canonical index 'by_large' encoded key is 80 bytes; max is 64
+ --> tests/compile_fail/index/index_key_too_long.rs:4:12
+  |
+4 | pub struct IndexKeyTooLong {
+  |            ^^^^^^^^^^^^^^^

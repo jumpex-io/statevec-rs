@@ -1,0 +1,54 @@
+[package]
+name = "statevec"
+version.workspace = true
+edition = "2024"
+rust-version = "1.91"
+description = "Facade crate for building schema-first deterministic StateVec domain plugins."
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+statevec_api.workspace = true
+statevec_macros.workspace = true
+statevec_model.workspace = true
+
+[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true
+statevec_package = { package = "statevec-package", path = "../statevec-package", version = "1.0.0-rc.1" }
+
+[[example]]
+name = "core_bank"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "core_gaps"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "core_bank_migration"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "core_bank_additive"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "core_bank_revert"
+path = "tests/fixtures/core_bank_revert.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "core_faults"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "core_exchange"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "core_exchange_no_rules"
+crate-type = ["cdylib"]

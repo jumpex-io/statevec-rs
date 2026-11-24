@@ -1,0 +1,7 @@
+error: FixedBytes must be FixedBytes<N>
+ --> tests/compile_fail/record/fixed_bytes_no_param.rs:8:1
+  |
+8 | #[record(kind = 1, record_len = 64)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `record` (in Nightly builds, run with -Z macro-backtrace for more info)

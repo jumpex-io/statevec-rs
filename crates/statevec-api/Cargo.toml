@@ -1,0 +1,22 @@
+[package]
+name = "statevec-api"
+version.workspace = true
+edition = "2024"
+rust-version = "1.91"
+description = "Runtime host APIs and plugin ABI types for StateVec domain plugins."
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+statevec_model.workspace = true
+
+[dev-dependencies]
+smallvec.workspace = true
+test-case = "3.3.1"
+
+[[example]]
+name = "core_minimal"
+crate-type = ["cdylib"]

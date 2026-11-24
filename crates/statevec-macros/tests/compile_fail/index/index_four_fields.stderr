@@ -1,0 +1,5 @@
+error: canonical index 'by_four' supports at most 3 fields
+ --> tests/compile_fail/index/index_four_fields.rs:4:12
+  |
+4 | pub struct FourIndexFields {
+  |            ^^^^^^^^^^^^^^^
